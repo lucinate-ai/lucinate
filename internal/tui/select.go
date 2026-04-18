@@ -117,6 +117,11 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 			items[i] = agentItem{agent: a, sessionKey: sessionKey}
 		}
 		m.list.SetItems(items)
+
+		// Auto-select if there's only one agent.
+		if len(msg.result.Agents) == 1 {
+			m.selected = true
+		}
 		return m, nil
 
 	case tea.KeyMsg:
