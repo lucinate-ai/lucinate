@@ -254,6 +254,12 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				return m, nil
 			}
 			m.textarea.Reset()
+
+			// Handle slash commands locally.
+			if handled, cmd := m.handleSlashCommand(text); handled {
+				return m, cmd
+			}
+
 			m.messages = append(m.messages, chatMessage{role: "user", content: text})
 			m.sending = true
 			m.updateViewport()
@@ -287,9 +293,18 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
-	// Only pass non-key messages (e.g. window resize, mouse) to the viewport
-	// so that keystrokes don't cause it to scroll while the user is typing.
-	if _, isKey := msg.(tea.KeyMsg); !isKey {
+	// Pass non-key messages and scrolling keys to the viewport.
+	// Block regular typing keys to prevent the viewport jumping while typing.
+	passToViewport := true
+	if km, isKey := msg.(tea.KeyMsg); isKey {
+		switch km.Type {
+		case tea.KeyPgUp, tea.KeyPgDown, tea.KeyUp, tea.KeyDown:
+			// Allow scrolling keys through.
+		default:
+			passToViewport = false
+		}
+	}
+	if passToViewport {
 		m.viewport, cmd = m.viewport.Update(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
@@ -427,6 +442,48 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	return nil
 }
 
+// goBackMsg signals the AppModel to return to agent selection.
+type goBackMsg struct{}
+
+// handleSlashCommand processes local slash commands. Returns (true, cmd) if
+// the input was handled as a command, or (false, nil) if it should be sent
+// to the gateway.
+func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) {
+	command := strings.ToLower(strings.TrimSpace(text))
+	switch command {
+	case "/quit", "/exit":
+		return true, tea.Quit
+	case "/back":
+		return true, func() tea.Msg { return goBackMsg{} }
+	case "/clear":
+		m.messages = nil
+		m.updateViewport()
+		return true, nil
+	case "/help":
+		m.messages = append(m.messages, chatMessage{
+			role: "separator",
+		})
+		m.messages = append(m.messages, chatMessage{
+			role:    "assistant",
+			content: "/quit, /exit — quit repclaw\n/back — return to agent list\n/clear — clear chat display\n/help — show this help",
+		})
+		m.updateViewport()
+		return true, nil
+	}
+
+	// Unknown slash command.
+	if strings.HasPrefix(text, "/") {
+		m.messages = append(m.messages, chatMessage{
+			role:   "assistant",
+			errMsg: fmt.Sprintf("unknown command: %s (try /help)", command),
+		})
+		m.updateViewport()
+		return true, nil
+	}
+
+	return false, nil
+}
+
 // renderMarkdown applies glamour markdown rendering to a completed message.
 func (m *chatModel) renderMarkdown(msg *chatMessage) {
 	if m.renderer != nil && msg.content != "" {
@@ -466,15 +523,17 @@ func (m *chatModel) updateViewport() {
 			b.WriteString("\n")
 
 		case "assistant":
+			prefixLen := len(m.agentName) + 2 // "name: "
 			prefix := assistantPrefixStyle.Render(m.agentName + ": ")
 			b.WriteString(prefix)
+			wrapWidth := contentWidth - prefixLen
 			if msg.errMsg != "" {
-				b.WriteString(errorStyle.Render(msg.errMsg))
+				b.WriteString(wordWrap(msg.errMsg, wrapWidth))
 			} else if msg.streaming {
-				b.WriteString(msg.content)
+				b.WriteString(wordWrap(msg.content, wrapWidth))
 				b.WriteString(cursorStyle.Render("_"))
 			} else {
-				b.WriteString(msg.content)
+				b.WriteString(wordWrap(msg.content, wrapWidth))
 			}
 			b.WriteString("\n")
 		}
@@ -519,7 +578,7 @@ func (m chatModel) View() string {
 		Width(m.width - 4).
 		Render(m.textarea.View())
 
-	help := helpStyle.Render(" enter: send | shift+enter: newline | ctrl+w: delete word | esc: back | ctrl+c: quit")
+	help := helpStyle.Render(" enter: send | shift+enter: newline | ctrl+w: delete word | pgup/pgdn: scroll | /help: commands")
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
