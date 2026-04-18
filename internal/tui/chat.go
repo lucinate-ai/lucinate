@@ -36,6 +36,9 @@ func logEvent(format string, args ...any) {
 
 const inputHeight = 3
 
+// slashCommands is the list of available slash commands for autocomplete.
+var slashCommands = []string{"/back", "/clear", "/exit", "/help", "/quit"}
+
 // chatMessage represents a single message in the conversation.
 type chatMessage struct {
 	role      string // "user", "assistant", or "separator"
@@ -245,6 +248,17 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	case tea.KeyMsg:
 		logEvent("KEY type=%d alt=%v string=%q", msg.Type, msg.Alt, msg.String())
 		switch msg.String() {
+		case "tab":
+			text := m.textarea.Value()
+			if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") {
+				if match := completeSlashCommand(text); match != "" {
+					m.textarea.Reset()
+					m.textarea.SetValue(match)
+					// Move cursor to end.
+					m.textarea.CursorEnd()
+				}
+			}
+			return m, nil
 		case "enter":
 			if m.sending {
 				return m, nil
@@ -442,6 +456,32 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	return nil
 }
 
+// completeSlashCommand returns the first matching slash command for the given
+// prefix, or "" if no match.
+func completeSlashCommand(prefix string) string {
+	lower := strings.ToLower(prefix)
+	for _, cmd := range slashCommands {
+		if strings.HasPrefix(cmd, lower) {
+			return cmd
+		}
+	}
+	return ""
+}
+
+// slashCommandHint returns the completion hint to display after the current
+// input, or "" if no hint applies.
+func slashCommandHint(input string) string {
+	if !strings.HasPrefix(input, "/") || strings.Contains(input, " ") || input == "" {
+		return ""
+	}
+	match := completeSlashCommand(input)
+	if match == "" || match == strings.ToLower(input) {
+		return ""
+	}
+	// Return only the suffix that hasn't been typed yet.
+	return match[len(input):]
+}
+
 // goBackMsg signals the AppModel to return to agent selection.
 type goBackMsg struct{}
 
@@ -583,7 +623,14 @@ func (m chatModel) View() string {
 		Width(m.width - 4).
 		Render(m.textarea.View())
 
-	help := helpStyle.Render(" enter: send | shift+enter: newline | ctrl+w: delete word | pgup/pgdn: scroll | /help: commands")
+	// Show completion hint or default help.
+	hint := slashCommandHint(m.textarea.Value())
+	var help string
+	if hint != "" {
+		help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", m.textarea.Value(), hint))
+	} else {
+		help = helpStyle.Render(" enter: send | shift+enter: newline | ctrl+w: delete word | pgup/pgdn: scroll | /help: commands")
+	}
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,

@@ -10,6 +10,7 @@
 - Show sessions stats, such as context usage
 - Create new agent from agent selector
 - Auto select `main` agent if only single agent configured
+- 
 
 ## Bugs
 
