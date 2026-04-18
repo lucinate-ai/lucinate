@@ -1,10 +1,5 @@
 version: 2
 
-git:
-  # The release workflow checks out the openclaw-go SDK alongside the repo
-  # and rewrites go.mod to point at it, which makes the tree dirty.
-  allow_dirty: true
-
 builds:
   - main: .
     binary: repclaw
