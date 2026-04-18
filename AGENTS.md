@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents when working with code in this repository.
 
 ## Build & Development Commands
 
@@ -19,7 +19,7 @@ Run a single test: `go test ./internal/tui/ -run TestExtractContent`
 
 ## Architecture
 
-GoClaw is a TUI chat client for the OpenClaw gateway, built with bubbletea.
+repclaw is a TUI chat client for the OpenClaw gateway, built with bubbletea.
 
 ### Packages
 
