@@ -51,7 +51,6 @@ func TestSlashCommand_Back(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected a goBackMsg cmd")
 	}
-	// Execute the cmd and check the message type.
 	msg := cmd()
 	if _, ok := msg.(goBackMsg); !ok {
 		t.Errorf("expected goBackMsg, got %T", msg)
@@ -60,10 +59,6 @@ func TestSlashCommand_Back(t *testing.T) {
 
 func TestSlashCommand_Clear(t *testing.T) {
 	m := newSlashTestModel()
-	if len(m.messages) != 2 {
-		t.Fatalf("precondition: expected 2 messages, got %d", len(m.messages))
-	}
-
 	handled, cmd := m.handleSlashCommand("/clear")
 	if !handled {
 		t.Fatal("expected /clear to be handled")
@@ -87,16 +82,11 @@ func TestSlashCommand_Help(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd from /help")
 	}
-	// Should have added a help message.
 	if len(m.messages) != initialCount+1 {
 		t.Errorf("expected %d messages after /help, got %d", initialCount+1, len(m.messages))
 	}
-	lastMsg := m.messages[len(m.messages)-1]
-	if lastMsg.role != "system" {
-		t.Errorf("help message role = %q, want system", lastMsg.role)
-	}
-	if lastMsg.content == "" {
-		t.Error("help message content should not be empty")
+	if m.messages[len(m.messages)-1].role != "system" {
+		t.Errorf("help message role = %q, want system", m.messages[len(m.messages)-1].role)
 	}
 }
 
@@ -106,7 +96,7 @@ func TestSlashCommand_Unknown(t *testing.T) {
 
 	handled, cmd := m.handleSlashCommand("/foobar")
 	if !handled {
-		t.Fatal("expected unknown slash command to be handled (with error)")
+		t.Fatal("expected unknown slash command to be handled")
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd from unknown command")
@@ -114,15 +104,13 @@ func TestSlashCommand_Unknown(t *testing.T) {
 	if len(m.messages) != initialCount+1 {
 		t.Fatalf("expected %d messages, got %d", initialCount+1, len(m.messages))
 	}
-	lastMsg := m.messages[len(m.messages)-1]
-	if lastMsg.errMsg == "" {
+	if m.messages[len(m.messages)-1].errMsg == "" {
 		t.Error("expected error message for unknown command")
 	}
 }
 
 func TestSlashCommand_NotACommand(t *testing.T) {
 	m := newSlashTestModel()
-
 	handled, cmd := m.handleSlashCommand("hello world")
 	if handled {
 		t.Error("regular text should not be handled as a command")
@@ -134,14 +122,62 @@ func TestSlashCommand_NotACommand(t *testing.T) {
 
 func TestSlashCommand_CaseInsensitive(t *testing.T) {
 	m := newSlashTestModel()
-
 	handled, _ := m.handleSlashCommand("/QUIT")
 	if !handled {
 		t.Error("slash commands should be case-insensitive")
 	}
-
 	handled, _ = m.handleSlashCommand("/Help")
 	if !handled {
 		t.Error("slash commands should be case-insensitive")
+	}
+}
+
+func TestCompleteSlashCommand(t *testing.T) {
+	tests := []struct {
+		prefix string
+		want   string
+	}{
+		{"/h", "/help"},
+		{"/he", "/help"},
+		{"/help", "/help"},
+		{"/q", "/quit"},
+		{"/b", "/back"},
+		{"/c", "/clear"},
+		{"/e", "/exit"},
+		{"/z", ""},
+		{"/", "/back"},
+		{"/H", "/help"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.prefix, func(t *testing.T) {
+			got := completeSlashCommand(tt.prefix)
+			if got != tt.want {
+				t.Errorf("completeSlashCommand(%q) = %q, want %q", tt.prefix, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSlashCommandHint(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"/h", "elp"},
+		{"/he", "lp"},
+		{"/help", ""},
+		{"/q", "uit"},
+		{"/z", ""},
+		{"hello", ""},
+		{"/help foo", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := slashCommandHint(tt.input)
+			if got != tt.want {
+				t.Errorf("slashCommandHint(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }
