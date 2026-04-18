@@ -145,6 +145,22 @@ func (c *Client) SessionPatchModel(ctx context.Context, sessionKey, modelID stri
 	})
 }
 
+// ExecRequest submits a command for execution on the gateway host.
+func (c *Client) ExecRequest(ctx context.Context, command, sessionKey string) (*protocol.ExecApprovalRequestResult, error) {
+	return c.gw.ExecApprovalRequest(ctx, protocol.ExecApprovalRequestParams{
+		Command:    command,
+		SessionKey: &sessionKey,
+	})
+}
+
+// ExecResolve approves or denies a pending exec approval.
+func (c *Client) ExecResolve(ctx context.Context, id, decision string) (*protocol.ExecApprovalResolveResult, error) {
+	return c.gw.ExecApprovalResolve(ctx, protocol.ExecApprovalResolveParams{
+		ID:       id,
+		Decision: decision,
+	})
+}
+
 // GW returns the underlying gateway client (for direct RPC access).
 func (c *Client) GW() *gateway.Client { return c.gw }
 

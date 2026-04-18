@@ -8,6 +8,7 @@ var (
 	accent  = lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#AD8CFF"}
 	userClr = lipgloss.AdaptiveColor{Light: "#0077B6", Dark: "#48CAE4"}
 	errClr  = lipgloss.AdaptiveColor{Light: "#D00000", Dark: "#FF6B6B"}
+	execClr = lipgloss.AdaptiveColor{Light: "#E65100", Dark: "#FFB74D"}
 
 	// Header bar.
 	headerStyle = lipgloss.NewStyle().
@@ -45,6 +46,17 @@ var (
 	errorStyle = lipgloss.NewStyle().
 			Foreground(errClr).
 			Bold(true)
+
+	// Input area border for exec mode.
+	execBorderStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(execClr).
+			Padding(0, 1)
+
+	// Exec command prefix style.
+	execPrefixStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(execClr)
 
 	// Help text.
 	helpStyle = lipgloss.NewStyle().

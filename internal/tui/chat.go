@@ -383,12 +383,41 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				return m, cmd
 			}
 
+			// Handle remote command execution.
+			if strings.HasPrefix(text, "!") {
+				command := strings.TrimSpace(text[1:])
+				if command == "" {
+					return m, nil
+				}
+				m.messages = append(m.messages, chatMessage{role: "system", content: fmt.Sprintf("$ %s", command)})
+				m.messages = append(m.messages, chatMessage{role: "system", content: "running..."})
+				m.sending = true
+				m.updateViewport()
+				cmds = append(cmds, m.execCommand(command))
+				return m, tea.Batch(cmds...)
+			}
+
 			m.messages = append(m.messages, chatMessage{role: "user", content: text})
 			m.sending = true
 			m.updateViewport()
 			cmds = append(cmds, m.sendMessage(text))
 			return m, tea.Batch(cmds...)
 		}
+
+	case execSubmittedMsg:
+		if msg.err != nil {
+			m.sending = false
+			if len(m.messages) > 0 {
+				last := &m.messages[len(m.messages)-1]
+				if last.role == "system" && last.content == "running..." {
+					last.content = ""
+					last.errMsg = msg.err.Error()
+				}
+			}
+			m.updateViewport()
+		}
+		// If no error, exec.finished event will update the "running..." message.
+		return m, nil
 
 	case chatSentMsg:
 		if msg.err != nil {
@@ -478,6 +507,49 @@ func extractTextFromMessage(raw json.RawMessage) string {
 }
 
 func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
+	logEvent("RAW_EVENT name=%s payload_len=%d", ev.EventName, len(ev.Payload))
+
+	// Handle exec events.
+	switch ev.EventName {
+	case protocol.EventExecFinished:
+		var finished protocol.ExecFinished
+		if err := json.Unmarshal(ev.Payload, &finished); err != nil {
+			logEvent("EXEC_FINISH parse error: %v", err)
+			return nil
+		}
+		logEvent("EXEC_FINISHED cmd=%s exit=%v output_len=%d", finished.Command, finished.ExitCode, len(finished.Output))
+		m.sending = false
+		// Replace the "running..." message.
+		if len(m.messages) > 0 {
+			last := &m.messages[len(m.messages)-1]
+			if last.role == "system" && last.content == "running..." {
+				output := finished.Output
+				if output == "" {
+					output = "(no output)"
+				}
+				if finished.ExitCode != nil && *finished.ExitCode != 0 {
+					output += fmt.Sprintf("\nexit code: %d", *finished.ExitCode)
+				}
+				last.content = output
+			}
+		}
+		m.updateViewport()
+		return nil
+
+	case protocol.EventExecDenied:
+		logEvent("EXEC_DENIED")
+		m.sending = false
+		if len(m.messages) > 0 {
+			last := &m.messages[len(m.messages)-1]
+			if last.role == "system" && last.content == "running..." {
+				last.content = ""
+				last.errMsg = "command execution denied"
+			}
+		}
+		m.updateViewport()
+		return nil
+	}
+
 	if ev.EventName != protocol.EventChat {
 		return nil
 	}
@@ -670,7 +742,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	case "/help":
 		m.messages = append(m.messages, chatMessage{
 			role:    "system",
-			content: "/quit, /exit — quit repclaw\n/back — return to agent list\n/clear — clear chat display\n/model — list available models\n/model <name> — switch model\n/stats — show session statistics\n/help — show this help",
+			content: "/quit, /exit — quit repclaw\n/back — return to agent list\n/clear — clear chat display\n/model — list available models\n/model <name> — switch model\n/stats — show session statistics\n/help — show this help\n\n!<command> — run command on gateway host",
 		})
 		m.updateViewport()
 		return true, nil
@@ -709,6 +781,48 @@ func (m *chatModel) renderMarkdown(msg *chatMessage) {
 		if rendered, err := m.renderer.Render(msg.content); err == nil {
 			msg.content = strings.TrimSpace(rendered)
 		}
+	}
+}
+
+// execSubmittedMsg signals the exec request was submitted (output comes via events).
+type execSubmittedMsg struct {
+	err error
+}
+
+func (m *chatModel) execCommand(command string) tea.Cmd {
+	cl := m.client
+	sessionKey := m.sessionKey
+	return func() tea.Msg {
+		ctx := context.Background()
+
+		// Request execution.
+		result, err := cl.ExecRequest(ctx, command, sessionKey)
+		if err != nil {
+			return execSubmittedMsg{err: err}
+		}
+
+		decision := ""
+		if result.Decision != nil {
+			decision = *result.Decision
+		}
+		logEvent("EXEC request id=%s status=%s decision=%q", result.ID, result.Status, decision)
+
+		switch decision {
+		case "deny":
+			return execSubmittedMsg{err: fmt.Errorf("command execution denied by gateway")}
+		case "":
+			// No decision yet — auto-approve (user explicitly typed the command).
+			_, err := cl.ExecResolve(ctx, result.ID, "approve")
+			if err != nil {
+				return execSubmittedMsg{err: fmt.Errorf("approval failed: %w", err)}
+			}
+			logEvent("EXEC auto-approved id=%s", result.ID)
+		default:
+			logEvent("EXEC decision=%q — waiting for exec.finished event", decision)
+		}
+
+		// Output arrives via exec.finished event through the event pump.
+		return execSubmittedMsg{}
 	}
 }
 
@@ -825,17 +939,27 @@ func (m chatModel) View() string {
 		Width(m.width).
 		Render(title)
 
-	input := inputBorderStyle.
+	// Change input border colour when in exec mode.
+	borderStyle := inputBorderStyle
+	isExecMode := strings.HasPrefix(m.textarea.Value(), "!")
+	if isExecMode {
+		borderStyle = execBorderStyle
+	}
+	input := borderStyle.
 		Width(m.width - 4).
 		Render(m.textarea.View())
 
-	// Show completion hint or default help.
-	hint := slashCommandHint(m.textarea.Value())
+	// Show completion hint or contextual help.
 	var help string
-	if hint != "" {
-		help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", m.textarea.Value(), hint))
+	if isExecMode {
+		help = helpStyle.Render(execPrefixStyle.Render(" remote command") + " — runs on gateway host")
 	} else {
-		help = helpStyle.Render(" enter: send | shift+enter: newline | ctrl+w: delete word | pgup/pgdn: scroll | /help: commands")
+		hint := slashCommandHint(m.textarea.Value())
+		if hint != "" {
+			help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", m.textarea.Value(), hint))
+		} else {
+			help = helpStyle.Render(" enter: send | shift+enter: newline | ctrl+w: delete word | pgup/pgdn: scroll | /help: commands")
+		}
 	}
 
 	return lipgloss.JoinVertical(

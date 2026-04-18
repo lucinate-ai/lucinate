@@ -102,6 +102,18 @@ Type these in the chat input. Tab autocompletes partial commands.
 | `/back` | Return to agent list |
 | `/quit` | Quit repclaw |
 
+## Remote commands
+
+Prefix input with `!` to run a command on the gateway host. The input border turns amber to indicate remote execution mode.
+
+```
+!hostname
+!ls -la /tmp
+!uptime
+```
+
+The gateway's exec security policy controls which commands are allowed. If a command is denied, you'll see an error message. Configure exec permissions on the gateway host using `openclaw config`.
+
 ## How it works
 
 repclaw uses the [openclaw-go](https://github.com/a3tai/openclaw-go) SDK to communicate with the gateway. The TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lip Gloss](https://github.com/charmbracelet/lipgloss). Completed responses are rendered as markdown with [Glamour](https://github.com/charmbracelet/glamour).
