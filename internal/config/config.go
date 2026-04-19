@@ -12,7 +12,6 @@ import (
 type Config struct {
 	GatewayURL string
 	WSURL      string
-	Token      string
 }
 
 // Load reads configuration from environment variables (and .env file if present).
@@ -24,11 +23,6 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("OPENCLAW_GATEWAY_URL is required")
 	}
 
-	token := os.Getenv("OPENCLAW_GATEWAY_TOKEN")
-	if token == "" {
-		return nil, fmt.Errorf("OPENCLAW_GATEWAY_TOKEN is required")
-	}
-
 	wsURL, err := deriveWSURL(gatewayURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid OPENCLAW_GATEWAY_URL: %w", err)
@@ -37,7 +31,6 @@ func Load() (*Config, error) {
 	return &Config{
 		GatewayURL: gatewayURL,
 		WSURL:      wsURL,
-		Token:      token,
 	}, nil
 }
 
