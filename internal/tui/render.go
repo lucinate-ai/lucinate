@@ -19,30 +19,35 @@ func (m *chatModel) updateViewport() {
 		case "separator":
 			sep := strings.Repeat("─", contentWidth)
 			b.WriteString(statusStyle.Render(sep))
-			b.WriteString("\n")
 
 		case "user":
-			prefix := userPrefixStyle.Render(m.prefixLabel("You"))
+			label := m.prefixLabel("You")
+			prefix := userPrefixStyle.Render(label)
+			prefixIndent := strings.Repeat(" ", len(label))
 			b.WriteString(prefix)
-			b.WriteString(wordWrap(msg.content, contentWidth-m.prefixWidth()))
-			b.WriteString("\n")
+			body := wordWrap(msg.content, contentWidth-len(label))
+			b.WriteString(indentMultiline(body, prefixIndent))
 
 		case "assistant":
-			prefix := assistantPrefixStyle.Render(m.prefixLabel(m.agentName))
+			label := m.prefixLabel(m.agentName)
+			prefix := assistantPrefixStyle.Render(label)
+			prefixIndent := strings.Repeat(" ", len(label))
 			b.WriteString(prefix)
-			wrapWidth := contentWidth - m.prefixWidth()
+			wrapWidth := contentWidth - len(label)
 			if msg.errMsg != "" {
-				b.WriteString(errorStyle.Render(wordWrap(msg.errMsg, wrapWidth)))
+				body := wordWrap(msg.errMsg, wrapWidth)
+				b.WriteString(errorStyle.Render(indentMultiline(body, prefixIndent)))
 			} else if msg.streaming {
-				b.WriteString(wordWrap(msg.content, wrapWidth))
+				body := wordWrap(msg.content, wrapWidth)
+				b.WriteString(indentMultiline(body, prefixIndent))
 				b.WriteString(cursorStyle.Render("_"))
 			} else if msg.rendered {
 				// Glamour-rendered content is already wrapped and contains ANSI codes.
-				b.WriteString(msg.content)
+				b.WriteString(indentMultiline(msg.content, prefixIndent))
 			} else {
-				b.WriteString(wordWrap(msg.content, wrapWidth))
+				body := wordWrap(msg.content, wrapWidth)
+				b.WriteString(indentMultiline(body, prefixIndent))
 			}
-			b.WriteString("\n")
 
 		case "system":
 			if msg.errMsg != "" {
@@ -50,17 +55,18 @@ func (m *chatModel) updateViewport() {
 			} else {
 				b.WriteString(statusStyle.Render(wordWrap(msg.content, contentWidth)))
 			}
-			b.WriteString("\n")
 		}
 	}
 
 	// Render queued messages that haven't been sent yet.
 	for _, text := range m.pendingMessages {
 		b.WriteString("\n")
-		prefix := userPrefixStyle.Render(m.prefixLabel("You"))
+		label := m.prefixLabel("You")
+		prefix := userPrefixStyle.Render(label)
+		prefixIndent := strings.Repeat(" ", len(label))
 		b.WriteString(prefix)
-		b.WriteString(wordWrap(text, contentWidth-m.prefixWidth()))
-		b.WriteString("\n")
+		body := wordWrap(text, contentWidth-len(label))
+		b.WriteString(indentMultiline(body, prefixIndent))
 	}
 
 	content := b.String()
@@ -76,26 +82,9 @@ func (m *chatModel) updateViewport() {
 	m.viewport.GotoBottom()
 }
 
-// prefixWidth returns the column width used for message prefixes (e.g. "You: ",
-// "agentName: "). Both user and assistant prefixes are padded to the same width
-// so message content aligns vertically.
-func (m *chatModel) prefixWidth() int {
-	w := len("You") + 2 // "You: "
-	if aw := len(m.agentName) + 2; aw > w {
-		w = aw
-	}
-	return w
-}
-
-// prefixLabel returns a right-padded label for a message prefix, ensuring all
-// prefixes occupy the same column width.
+// prefixLabel returns the displayed label for a message prefix.
 func (m *chatModel) prefixLabel(name string) string {
-	w := m.prefixWidth()
-	label := name + ": "
-	for len(label) < w {
-		label += " "
-	}
-	return label
+	return name + ": "
 }
 
 // formatStatsTable renders session stats as a formatted table.
@@ -186,6 +175,26 @@ func wordWrap(s string, width int) string {
 			lineLen += len(w)
 		}
 		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// indentMultiline indents every line after the first by the given prefix.
+func indentMultiline(s, indent string) string {
+	if indent == "" || !strings.Contains(s, "\n") {
+		return s
+	}
+
+	lines := strings.Split(s, "\n")
+	var b strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteString("\n")
+			if i < len(lines)-1 || line != "" {
+				b.WriteString(indent)
+			}
+		}
+		b.WriteString(line)
 	}
 	return b.String()
 }

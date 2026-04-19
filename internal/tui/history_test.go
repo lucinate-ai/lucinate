@@ -2,6 +2,33 @@ package tui
 
 import "testing"
 
+func TestLooksLikeMarkdown(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "plain text", text: "pong 🦞", want: false},
+		{name: "plain multiline", text: "hello\nthere", want: false},
+		{name: "heading", text: "# Title", want: true},
+		{name: "bullet", text: "- item", want: true},
+		{name: "numbered list", text: "1. first", want: true},
+		{name: "blockquote", text: "> quote", want: true},
+		{name: "table", text: "| a | b |", want: true},
+		{name: "inline code", text: "use `rg`", want: true},
+		{name: "bold", text: "**important**", want: true},
+		{name: "fence", text: "```go\nfmt.Println()\n```", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := looksLikeMarkdown(tt.text); got != tt.want {
+				t.Errorf("looksLikeMarkdown(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStripSystemLines_OnlySystemLines(t *testing.T) {
 	input := "System: [2026-04-18] Node connected\nSystem: [2026-04-18] reason launch"
 	got := stripSystemLines(input)

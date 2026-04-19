@@ -75,7 +75,7 @@ func fetchHistory(cl *client.Client, sessionKey string, renderer *glamour.TermRe
 			}
 		}
 		rendered := false
-		if role == "assistant" && renderer != nil {
+		if role == "assistant" && renderer != nil && looksLikeMarkdown(text) {
 			if out, err := renderer.Render(text); err == nil {
 				text = strings.TrimSpace(out)
 				rendered = true
@@ -114,5 +114,37 @@ func isSystemLine(line string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+// looksLikeMarkdown returns true when assistant text likely benefits from
+// Glamour rendering. Plain single-line replies should stay unrendered so they
+// don't pick up paragraph indentation from the markdown renderer.
+func looksLikeMarkdown(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+
+	for _, marker := range []string{"```", "`", "**", "__", "* ", "- ", "> ", "|", "\n#"} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+
+	lines := strings.Split(s, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			return true
+		}
+		if len(line) >= 3 && line[0] >= '0' && line[0] <= '9' && line[1] == '.' && line[2] == ' ' {
+			return true
+		}
+	}
+
 	return false
 }
