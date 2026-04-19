@@ -80,7 +80,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 			}
 		}
 		m.updateViewport()
-		return m.drainQueue()
+		return m.drainQueueSkipRefresh()
 
 	case "exec.approval.resolved":
 		var resolved protocol.ExecApprovalResolvedEvent
@@ -98,7 +98,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 				}
 			}
 			m.updateViewport()
-			return m.drainQueue()
+			return m.drainQueueSkipRefresh()
 		}
 		// "allow-once" / "allow-always" → exec.finished will follow.
 		return nil
@@ -122,7 +122,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 			}
 		}
 		m.updateViewport()
-		return m.drainQueue()
+		return m.drainQueueSkipRefresh()
 	}
 
 	if ev.EventName != protocol.EventChat {

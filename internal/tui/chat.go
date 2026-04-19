@@ -239,7 +239,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				}
 			}
 			m.updateViewport()
-			cmd := m.drainQueue()
+			cmd := m.drainQueueSkipRefresh()
 			return m, cmd
 		}
 		return m, nil
@@ -302,10 +302,24 @@ func (m *chatModel) sendMessage(text string) tea.Cmd {
 // It should be called whenever m.sending would be set to false.
 // Returns a tea.Cmd if a queued message was sent, nil otherwise.
 func (m *chatModel) drainQueue() tea.Cmd {
+	return m.drainQueueOpt(true)
+}
+
+// drainQueueSkipRefresh drains the queue without refreshing history when
+// empty. Use this for command-execution paths where locally-added messages
+// (e.g. "$ cmd" and output) would be lost by a server-side history refresh.
+func (m *chatModel) drainQueueSkipRefresh() tea.Cmd {
+	return m.drainQueueOpt(false)
+}
+
+func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 	if len(m.pendingMessages) == 0 {
 		m.sending = false
-		// Queue fully drained — refresh history now that all messages have been sent.
-		return tea.Batch(m.refreshHistory(), m.loadStats())
+		if refresh {
+			// Queue fully drained — refresh history now that all messages have been sent.
+			return tea.Batch(m.refreshHistory(), m.loadStats())
+		}
+		return nil
 	}
 
 	text := m.pendingMessages[0]

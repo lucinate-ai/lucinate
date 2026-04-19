@@ -66,7 +66,7 @@ func (c *Client) Connect(ctx context.Context) error {
 			Mode:     protocol.ClientModeCLI,
 		}),
 		gateway.WithRole(protocol.RoleOperator),
-		gateway.WithScopes(protocol.ScopeOperatorRead, protocol.ScopeOperatorWrite, protocol.ScopeOperatorAdmin),
+		gateway.WithScopes(protocol.ScopeOperatorRead, protocol.ScopeOperatorWrite, protocol.ScopeOperatorAdmin, protocol.ScopeOperatorApprovals),
 		gateway.WithOnEvent(func(ev protocol.Event) {
 			select {
 			case c.events <- ev:
