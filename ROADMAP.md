@@ -8,6 +8,7 @@
 - ~~Message queueing - allow posting messages when waiting for a response~~
 - Need a way to amend pending message (including deleting it) by pressing 'up'
 - Improve stats table (could render using markdown renderer?)
+- Show session name as well as agent name
 
 ## Bugs
 
