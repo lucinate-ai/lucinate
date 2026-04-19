@@ -82,9 +82,23 @@ func (m *chatModel) updateViewport() {
 	m.viewport.GotoBottom()
 }
 
+// prefixWidth returns the shared width used for message prefixes so message
+// bodies start in the same column for both user and assistant rows.
+func (m *chatModel) prefixWidth() int {
+	w := len("You:")
+	if aw := len(m.agentName + ":"); aw > w {
+		w = aw
+	}
+	return w + 1
+}
+
 // prefixLabel returns the displayed label for a message prefix.
 func (m *chatModel) prefixLabel(name string) string {
-	return name + ": "
+	label := name + ":"
+	for len(label) < m.prefixWidth()-1 {
+		label += " "
+	}
+	return label + " "
 }
 
 // formatStatsTable renders session stats as a formatted table.

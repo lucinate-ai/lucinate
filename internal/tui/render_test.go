@@ -188,11 +188,33 @@ func TestIsTableLine(t *testing.T) {
 	}
 }
 
-func TestPrefixLabel_UsesSingleTrailingSpace(t *testing.T) {
+func TestPrefixWidth_AlignedBetweenUserAndAgent(t *testing.T) {
+	tests := []struct {
+		agentName string
+		wantWidth int
+	}{
+		{"ai", 5},
+		{"main", 6},
+		{"claude", 8},
+		{"You", 5},
+		{"longagent", 11},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.agentName, func(t *testing.T) {
+			m := &chatModel{agentName: tt.agentName}
+			if got := m.prefixWidth(); got != tt.wantWidth {
+				t.Errorf("prefixWidth() = %d, want %d", got, tt.wantWidth)
+			}
+		})
+	}
+}
+
+func TestPrefixLabel_UsesAlignedTrailingPadding(t *testing.T) {
 	m := &chatModel{agentName: "claude"}
 
-	if got := m.prefixLabel("You"); got != "You: " {
-		t.Errorf("prefixLabel(You) = %q, want %q", got, "You: ")
+	if got := m.prefixLabel("You"); got != "You:    " {
+		t.Errorf("prefixLabel(You) = %q, want %q", got, "You:    ")
 	}
 	if got := m.prefixLabel("claude"); got != "claude: " {
 		t.Errorf("prefixLabel(claude) = %q, want %q", got, "claude: ")
@@ -231,10 +253,10 @@ func TestUpdateViewport_IndentsWrappedContentAfterPrefix(t *testing.T) {
 	m.updateViewport()
 	view := m.viewport.View()
 
-	if !strings.Contains(view, "You: alpha beta") {
+	if !strings.Contains(view, "You:  alpha beta") {
 		t.Fatalf("expected first user line with prefix, got %q", view)
 	}
-	if !strings.Contains(view, "\n     gamma") {
+	if !strings.Contains(view, "\n      gamma") {
 		t.Fatalf("expected wrapped user continuation to be indented, got %q", view)
 	}
 	if !strings.Contains(view, "main: line one") {

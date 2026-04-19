@@ -372,7 +372,7 @@ func (m *chatModel) setSize(w, h int) {
 	m.height = h
 
 	// Recreate the glamour renderer with the new wrap width.
-	wrapWidth := w - 4 - len(m.prefixLabel(m.agentName)) // contentWidth minus assistant prefix
+	wrapWidth := w - 4 - m.prefixWidth() // contentWidth minus aligned prefix
 	if wrapWidth < 20 {
 		wrapWidth = 20
 	}
