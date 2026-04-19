@@ -133,6 +133,7 @@ func TestSlashCommand_CaseInsensitive(t *testing.T) {
 }
 
 func TestCompleteSlashCommand(t *testing.T) {
+	m := newSlashTestModel()
 	tests := []struct {
 		prefix string
 		want   string
@@ -150,7 +151,7 @@ func TestCompleteSlashCommand(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.prefix, func(t *testing.T) {
-			got := completeSlashCommand(tt.prefix)
+			got := m.completeSlashCommand(tt.prefix)
 			if got != tt.want {
 				t.Errorf("completeSlashCommand(%q) = %q, want %q", tt.prefix, got, tt.want)
 			}
@@ -159,6 +160,7 @@ func TestCompleteSlashCommand(t *testing.T) {
 }
 
 func TestSlashCommandHint(t *testing.T) {
+	m := newSlashTestModel()
 	tests := []struct {
 		input string
 		want  string
@@ -174,7 +176,7 @@ func TestSlashCommandHint(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := slashCommandHint(tt.input)
+			got := m.slashCommandHint(tt.input)
 			if got != tt.want {
 				t.Errorf("slashCommandHint(%q) = %q, want %q", tt.input, got, tt.want)
 			}

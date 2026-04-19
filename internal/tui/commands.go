@@ -10,13 +10,19 @@ import (
 )
 
 // slashCommands is the list of available slash commands for autocomplete.
-var slashCommands = []string{"/back", "/clear", "/exit", "/help", "/model", "/quit", "/stats"}
+var slashCommands = []string{"/back", "/clear", "/exit", "/help", "/model", "/quit", "/skills", "/stats"}
 
 // completeSlashCommand returns the first matching slash command for the given
-// prefix, or "" if no match.
-func completeSlashCommand(prefix string) string {
+// prefix, or "" if no match. Includes skill names as slash commands.
+func (m *chatModel) completeSlashCommand(prefix string) string {
 	lower := strings.ToLower(prefix)
 	for _, cmd := range slashCommands {
+		if strings.HasPrefix(cmd, lower) {
+			return cmd
+		}
+	}
+	for _, s := range m.skills {
+		cmd := "/" + strings.ToLower(s.Name)
 		if strings.HasPrefix(cmd, lower) {
 			return cmd
 		}
@@ -26,11 +32,11 @@ func completeSlashCommand(prefix string) string {
 
 // slashCommandHint returns the completion hint to display after the current
 // input, or "" if no hint applies.
-func slashCommandHint(input string) string {
+func (m *chatModel) slashCommandHint(input string) string {
 	if !strings.HasPrefix(input, "/") || strings.Contains(input, " ") || input == "" {
 		return ""
 	}
-	match := completeSlashCommand(input)
+	match := m.completeSlashCommand(input)
 	if match == "" || match == strings.ToLower(input) {
 		return ""
 	}
@@ -52,9 +58,13 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		m.updateViewport()
 		return true, nil
 	case "/help":
+		helpText := "/quit, /exit — quit repclaw\n/back — return to agent list\n/clear — clear chat display\n/model — list available models\n/model <name> — switch model\n/stats — show session statistics\n/skills — list available agent skills\n/help — show this help\n\n!<command> — run command on gateway host"
+		if len(m.skills) > 0 {
+			helpText += fmt.Sprintf("\n\n%d agent skill(s) available — type /skills to list", len(m.skills))
+		}
 		m.messages = append(m.messages, chatMessage{
 			role:    "system",
-			content: "/quit, /exit — quit repclaw\n/back — return to agent list\n/clear — clear chat display\n/model — list available models\n/model <name> — switch model\n/stats — show session statistics\n/help — show this help\n\n!<command> — run command on gateway host",
+			content: helpText,
 		})
 		m.updateViewport()
 		return true, nil
@@ -67,6 +77,21 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		m.messages = append(m.messages, chatMessage{role: "system", content: m.formatStatsTable()})
 		m.updateViewport()
 		return true, nil
+	case "/skills":
+		if len(m.skills) == 0 {
+			m.messages = append(m.messages, chatMessage{role: "system", content: "No agent skills found.\nPlace skills in <cwd>/.agents/skills/<name>/SKILL.md or ~/.agents/skills/<name>/SKILL.md"})
+		} else {
+			var lines []string
+			for _, s := range m.skills {
+				lines = append(lines, fmt.Sprintf("  /%s — %s", s.Name, s.Description))
+			}
+			m.messages = append(m.messages, chatMessage{
+				role:    "system",
+				content: "Available skills:\n" + strings.Join(lines, "\n"),
+			})
+		}
+		m.updateViewport()
+		return true, nil
 	}
 
 	// /model with optional argument.
@@ -74,8 +99,20 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return m.handleModelCommand(text)
 	}
 
-	// Unknown slash command.
-	if strings.HasPrefix(text, "/") {
+	// Skill activation: /skill-name sends the skill body as a System:-prefixed message.
+	if strings.HasPrefix(command, "/") {
+		skillName := strings.TrimPrefix(command, "/")
+		for _, s := range m.skills {
+			if strings.ToLower(s.Name) == skillName {
+				msg := fmt.Sprintf("System: [Skill: %s]\n%s", s.Name, s.Body)
+				m.messages = append(m.messages, chatMessage{role: "user", content: fmt.Sprintf("/%s", s.Name)})
+				m.sending = true
+				m.updateViewport()
+				return true, m.sendMessage(msg)
+			}
+		}
+
+		// Unknown slash command.
 		m.messages = append(m.messages, chatMessage{
 			role:   "system",
 			errMsg: fmt.Sprintf("unknown command: %s (try /help)", command),

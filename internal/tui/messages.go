@@ -73,3 +73,8 @@ type modelSwitchedMsg struct {
 type execSubmittedMsg struct {
 	err error
 }
+
+// skillsDiscoveredMsg is returned when skill discovery completes.
+type skillsDiscoveredMsg struct {
+	skills []agentSkill
+}

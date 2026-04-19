@@ -34,6 +34,8 @@ type chatModel struct {
 	renderer   *glamour.TermRenderer
 	stats      *sessionStats
 	modelID    string
+	skills          []agentSkill
+	skillCatalogSent bool
 }
 
 func newChatModel(c *client.Client, sessionKey, agentName, modelID string) chatModel {
@@ -70,6 +72,7 @@ func (m chatModel) Init() tea.Cmd {
 		textarea.Blink,
 		m.loadHistory(),
 		m.loadStats(),
+		func() tea.Msg { return skillsDiscoveredMsg{skills: discoverSkills()} },
 	)
 }
 
@@ -167,6 +170,17 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case skillsDiscoveredMsg:
+		m.skills = msg.skills
+		if len(m.skills) > 0 {
+			m.messages = append(m.messages, chatMessage{
+				role:    "system",
+				content: fmt.Sprintf("%d agent skill(s) loaded — type /skills to list", len(m.skills)),
+			})
+			m.updateViewport()
+		}
+		return m, nil
+
 	case historyRefreshMsg:
 		if msg.err == nil && len(msg.messages) > 0 {
 			m.messages = msg.messages
@@ -180,7 +194,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		case "tab":
 			text := m.textarea.Value()
 			if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") {
-				if match := completeSlashCommand(text); match != "" {
+				if match := m.completeSlashCommand(text); match != "" {
 					m.textarea.Reset()
 					m.textarea.SetValue(match)
 					m.textarea.CursorEnd()
@@ -225,7 +239,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{role: "user", content: text})
 			m.sending = true
 			m.updateViewport()
-			cmds = append(cmds, m.sendMessage(text))
+			cmds = append(cmds, m.sendMessage(m.withSkillCatalog(text)))
 			return m, tea.Batch(cmds...)
 		}
 
@@ -296,6 +310,17 @@ func (m *chatModel) sendMessage(text string) tea.Cmd {
 		_, err := m.client.ChatSend(context.Background(), sessionKey, text, idemKey)
 		return chatSentMsg{err: err}
 	}
+}
+
+// withSkillCatalog prepends the skill catalog to the message text on the first
+// send. The catalog uses "System:" prefixed lines which stripSystemLines removes
+// from display in history.
+func (m *chatModel) withSkillCatalog(text string) string {
+	if m.skillCatalogSent || len(m.skills) == 0 {
+		return text
+	}
+	m.skillCatalogSent = true
+	return skillCatalogBlock(m.skills) + "\n" + text
 }
 
 // drainQueue sends the next queued message if any are pending.
@@ -411,7 +436,7 @@ func (m chatModel) View() string {
 	if isExecMode {
 		help = helpStyle.Render(execPrefixStyle.Render(" remote command") + " — runs on gateway host")
 	} else {
-		hint := slashCommandHint(m.textarea.Value())
+		hint := m.slashCommandHint(m.textarea.Value())
 		if hint != "" {
 			help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", m.textarea.Value(), hint))
 		} else {

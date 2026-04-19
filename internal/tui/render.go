@@ -47,9 +47,9 @@ func (m *chatModel) updateViewport() {
 
 		case "system":
 			if msg.errMsg != "" {
-				b.WriteString(errorStyle.Render(msg.errMsg))
+				b.WriteString(errorStyle.Render(wordWrap(msg.errMsg, contentWidth)))
 			} else {
-				b.WriteString(statusStyle.Render(msg.content))
+				b.WriteString(statusStyle.Render(wordWrap(msg.content, contentWidth)))
 			}
 			b.WriteString("\n")
 		}
@@ -108,6 +108,10 @@ func (m *chatModel) formatStatsTable() string {
 	t2.Footer(nil)
 	t2.Render()
 
+	if n := len(m.skills); n > 0 {
+		buf.WriteString(fmt.Sprintf("\nAgent skills: %d loaded\n", n))
+	}
+
 	return buf.String()
 }
 
@@ -132,13 +136,15 @@ func formatTokens(n int) string {
 }
 
 // wordWrap wraps text to the given width, preserving existing newlines.
+// Lines that contain box-drawing characters (table output) are passed through
+// unchanged to preserve column alignment.
 func wordWrap(s string, width int) string {
 	if width <= 0 || len(s) <= width {
 		return s
 	}
 	var b strings.Builder
 	for _, line := range strings.Split(s, "\n") {
-		if len(line) <= width {
+		if len(line) <= width || isTableLine(line) {
 			if b.Len() > 0 {
 				b.WriteString("\n")
 			}
@@ -161,4 +167,11 @@ func wordWrap(s string, width int) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// isTableLine returns true if the line appears to be part of a rendered table.
+// These lines use box-drawing characters for borders and should not be
+// word-wrapped as it would destroy their alignment.
+func isTableLine(line string) bool {
+	return strings.ContainsRune(line, '│') || strings.ContainsRune(line, '─')
 }

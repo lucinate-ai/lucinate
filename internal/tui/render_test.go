@@ -124,6 +124,62 @@ func TestWordWrap_PreservesExistingNewlines(t *testing.T) {
 	}
 }
 
+func TestWordWrap_PreservesTableLines(t *testing.T) {
+	tableLine := "│ Input  │ 1.2K │ $0.01 │"
+	got := wordWrap(tableLine, 10) // width much smaller than line
+	if got != tableLine {
+		t.Errorf("table line should pass through unchanged, got %q", got)
+	}
+}
+
+func TestWordWrap_PreservesTableBorders(t *testing.T) {
+	border := "┌────────┬────────┬────────┐"
+	got := wordWrap(border, 10)
+	if got != border {
+		t.Errorf("table border should pass through unchanged, got %q", got)
+	}
+}
+
+func TestWordWrap_MixedTableAndText(t *testing.T) {
+	input := "Some header text that is long enough to wrap around\n│ Row │ Data │\nMore text here"
+	got := wordWrap(input, 30)
+	// Table line should be intact.
+	if !strings.Contains(got, "│ Row │ Data │") {
+		t.Error("table row should be preserved unchanged")
+	}
+	// Text should be wrapped.
+	lines := strings.Split(got, "\n")
+	for _, line := range lines {
+		if strings.ContainsRune(line, '│') {
+			continue // skip table lines
+		}
+		if len(line) > 30 {
+			t.Errorf("non-table line should be wrapped, got %d chars: %q", len(line), line)
+		}
+	}
+}
+
+func TestIsTableLine(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"│ Input │ 1.2K │", true},
+		{"───────────────", true},
+		{"┌──────┬──────┐", true},
+		{"plain text", false},
+		{"  /review — Code review", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			if got := isTableLine(tt.line); got != tt.want {
+				t.Errorf("isTableLine(%q) = %v, want %v", tt.line, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUpdateViewport_BottomAnchoring(t *testing.T) {
 	m := &chatModel{
 		viewport:  viewport.New(80, 20),
