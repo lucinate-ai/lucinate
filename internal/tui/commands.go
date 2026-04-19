@@ -104,7 +104,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		skillName := strings.TrimPrefix(command, "/")
 		for _, s := range m.skills {
 			if strings.ToLower(s.Name) == skillName {
-				msg := fmt.Sprintf("System: [Skill: %s]\n%s", s.Name, s.Body)
+				msg := prefixAllLines(fmt.Sprintf("[Skill: %s]\n%s", s.Name, s.Body))
 				m.messages = append(m.messages, chatMessage{role: "user", content: fmt.Sprintf("/%s", s.Name)})
 				m.sending = true
 				m.updateViewport()

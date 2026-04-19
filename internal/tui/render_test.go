@@ -180,6 +180,42 @@ func TestIsTableLine(t *testing.T) {
 	}
 }
 
+func TestPrefixWidth_AlignedBetweenUserAndAgent(t *testing.T) {
+	tests := []struct {
+		agentName string
+		wantWidth int
+	}{
+		{"ai", 5},         // "You: " (5) > "ai: " (4), use 5
+		{"claude", 8},     // "claude: " (8) > "You: " (5), use 8
+		{"You", 5},        // same length
+		{"a", 5},          // "You: " still wider
+		{"longagent", 11}, // "longagent: " (11) > "You: " (5)
+	}
+	for _, tt := range tests {
+		t.Run(tt.agentName, func(t *testing.T) {
+			m := &chatModel{agentName: tt.agentName}
+			got := m.prefixWidth()
+			if got != tt.wantWidth {
+				t.Errorf("prefixWidth() = %d, want %d", got, tt.wantWidth)
+			}
+		})
+	}
+}
+
+func TestPrefixLabel_PaddedToWidth(t *testing.T) {
+	m := &chatModel{agentName: "claude"}
+	pw := m.prefixWidth() // 9 (len("claude") + 2 = 8... wait)
+
+	youLabel := m.prefixLabel("You")
+	agentLabel := m.prefixLabel("claude")
+	if len(youLabel) != len(agentLabel) {
+		t.Errorf("prefix labels should be same length: You=%d, claude=%d", len(youLabel), len(agentLabel))
+	}
+	if len(youLabel) != pw {
+		t.Errorf("prefix label length %d != prefixWidth %d", len(youLabel), pw)
+	}
+}
+
 func TestUpdateViewport_BottomAnchoring(t *testing.T) {
 	m := &chatModel{
 		viewport:  viewport.New(80, 20),

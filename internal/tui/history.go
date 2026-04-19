@@ -88,15 +88,31 @@ func fetchHistory(cl *client.Client, sessionKey string, renderer *glamour.TermRe
 
 // stripSystemLines removes "System:" prefixed lines and leading whitespace
 // from user messages, returning only the human-authored portion.
+// Also matches "System (untrusted):" which the gateway may substitute.
 func stripSystemLines(s string) string {
 	lines := strings.Split(s, "\n")
 	var kept []string
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "System:") {
+		if isSystemLine(trimmed) {
 			continue
 		}
 		kept = append(kept, line)
 	}
 	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// isSystemLine returns true if the line starts with a System prefix,
+// matching both "System:" and gateway-rewritten forms like "System (untrusted):".
+func isSystemLine(line string) bool {
+	if strings.HasPrefix(line, "System:") {
+		return true
+	}
+	if strings.HasPrefix(line, "System (") {
+		// Match "System (<anything>):" pattern.
+		if idx := strings.Index(line, "):"); idx >= 0 {
+			return true
+		}
+	}
+	return false
 }

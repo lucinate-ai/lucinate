@@ -22,16 +22,15 @@ func (m *chatModel) updateViewport() {
 			b.WriteString("\n")
 
 		case "user":
-			prefix := userPrefixStyle.Render("You: ")
+			prefix := userPrefixStyle.Render(m.prefixLabel("You"))
 			b.WriteString(prefix)
-			b.WriteString(wordWrap(msg.content, contentWidth-6))
+			b.WriteString(wordWrap(msg.content, contentWidth-m.prefixWidth()))
 			b.WriteString("\n")
 
 		case "assistant":
-			prefixLen := len(m.agentName) + 2
-			prefix := assistantPrefixStyle.Render(m.agentName + ": ")
+			prefix := assistantPrefixStyle.Render(m.prefixLabel(m.agentName))
 			b.WriteString(prefix)
-			wrapWidth := contentWidth - prefixLen
+			wrapWidth := contentWidth - m.prefixWidth()
 			if msg.errMsg != "" {
 				b.WriteString(errorStyle.Render(wordWrap(msg.errMsg, wrapWidth)))
 			} else if msg.streaming {
@@ -58,9 +57,9 @@ func (m *chatModel) updateViewport() {
 	// Render queued messages that haven't been sent yet.
 	for _, text := range m.pendingMessages {
 		b.WriteString("\n")
-		prefix := userPrefixStyle.Render("You: ")
+		prefix := userPrefixStyle.Render(m.prefixLabel("You"))
 		b.WriteString(prefix)
-		b.WriteString(wordWrap(text, contentWidth-6))
+		b.WriteString(wordWrap(text, contentWidth-m.prefixWidth()))
 		b.WriteString("\n")
 	}
 
@@ -75,6 +74,28 @@ func (m *chatModel) updateViewport() {
 
 	m.viewport.SetContent(content)
 	m.viewport.GotoBottom()
+}
+
+// prefixWidth returns the column width used for message prefixes (e.g. "You: ",
+// "agentName: "). Both user and assistant prefixes are padded to the same width
+// so message content aligns vertically.
+func (m *chatModel) prefixWidth() int {
+	w := len("You") + 2 // "You: "
+	if aw := len(m.agentName) + 2; aw > w {
+		w = aw
+	}
+	return w
+}
+
+// prefixLabel returns a right-padded label for a message prefix, ensuring all
+// prefixes occupy the same column width.
+func (m *chatModel) prefixLabel(name string) string {
+	w := m.prefixWidth()
+	label := name + ": "
+	for len(label) < w {
+		label += " "
+	}
+	return label
 }
 
 // formatStatsTable renders session stats as a formatted table.

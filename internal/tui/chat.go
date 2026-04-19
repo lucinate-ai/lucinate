@@ -21,20 +21,20 @@ const inputHeight = 3
 
 // chatModel is the chat view.
 type chatModel struct {
-	viewport   viewport.Model
-	textarea   textarea.Model
-	messages   []chatMessage
-	client     *client.Client
-	sessionKey string
-	agentName  string
-	sending         bool
-	pendingMessages []string
-	width      int
-	height     int
-	renderer   *glamour.TermRenderer
-	stats      *sessionStats
-	modelID    string
-	skills          []agentSkill
+	viewport         viewport.Model
+	textarea         textarea.Model
+	messages         []chatMessage
+	client           *client.Client
+	sessionKey       string
+	agentName        string
+	sending          bool
+	pendingMessages  []string
+	width            int
+	height           int
+	renderer         *glamour.TermRenderer
+	stats            *sessionStats
+	modelID          string
+	skills           []agentSkill
 	skillCatalogSent bool
 }
 
@@ -372,8 +372,7 @@ func (m *chatModel) setSize(w, h int) {
 	m.height = h
 
 	// Recreate the glamour renderer with the new wrap width.
-	prefixLen := len(m.agentName) + 2
-	wrapWidth := w - 4 - prefixLen // contentWidth minus prefix
+	wrapWidth := w - 4 - m.prefixWidth() // contentWidth minus prefix
 	if wrapWidth < 20 {
 		wrapWidth = 20
 	}
