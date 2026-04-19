@@ -43,34 +43,23 @@ go build -o repclaw .
 
 ## Getting started
 
-### 1. Create an API token on your gateway
+### 1. Configure repclaw
 
-Generate an operator token using the OpenClaw CLI on the machine running your gateway:
-
-```sh
-openclaw token create --role operator --scopes operator:read,operator:write,operator:admin --name repclaw
-```
-
-Copy the token it prints — you'll need it in the next step.
-
-### 2. Configure repclaw
-
-Create a `.env` file in the directory you'll run repclaw from (or export the variables in your shell):
+Create a `.env` file in the directory you'll run repclaw from (or export the variable in your shell):
 
 ```sh
 OPENCLAW_GATEWAY_URL=https://your-gateway-host
-OPENCLAW_GATEWAY_TOKEN=<token-from-step-1>
 ```
 
 The gateway URL can use `https`, `http`, `wss`, or `ws` schemes. repclaw derives the WebSocket endpoint automatically.
 
-### 3. Connect and approve the device
+### 2. Connect and approve the device
 
 ```sh
 repclaw
 ```
 
-On first connection, the gateway will prompt you to approve device pairing. On the gateway host, run:
+On first run, repclaw generates an Ed25519 device identity under `~/.openclaw-go/identity/` and sends a pairing request to the gateway. On the gateway host, run:
 
 ```sh
 openclaw device list --pending
@@ -82,9 +71,9 @@ You should see repclaw's device ID. Approve it:
 openclaw device approve <device-id>
 ```
 
-Then restart repclaw — subsequent connections will use the paired device identity automatically. The identity (Ed25519 keypair and device token) is stored at `~/.openclaw-go/identity/`.
+Then restart repclaw — subsequent connections use the stored device token automatically.
 
-### 4. Start chatting
+### 3. Start chatting
 
 Select an agent from the list, then start chatting. Press `n` on the agent list to create a new agent.
 

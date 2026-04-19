@@ -75,7 +75,6 @@ func TestDeriveWSURL(t *testing.T) {
 
 func TestLoad_MissingGatewayURL(t *testing.T) {
 	t.Setenv("OPENCLAW_GATEWAY_URL", "")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "some-token")
 
 	// Ensure no .env file interferes.
 	origDir, _ := os.Getwd()
@@ -92,27 +91,8 @@ func TestLoad_MissingGatewayURL(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingToken(t *testing.T) {
-	t.Setenv("OPENCLAW_GATEWAY_URL", "https://example.com")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "")
-
-	origDir, _ := os.Getwd()
-	dir := t.TempDir()
-	os.Chdir(dir)
-	defer os.Chdir(origDir)
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error for missing OPENCLAW_GATEWAY_TOKEN")
-	}
-	if got := err.Error(); got != "OPENCLAW_GATEWAY_TOKEN is required" {
-		t.Errorf("unexpected error message: %s", got)
-	}
-}
-
 func TestLoad_Success(t *testing.T) {
 	t.Setenv("OPENCLAW_GATEWAY_URL", "https://mygateway.example.com")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "test-token-123")
 
 	origDir, _ := os.Getwd()
 	dir := t.TempDir()
@@ -129,14 +109,10 @@ func TestLoad_Success(t *testing.T) {
 	if cfg.WSURL != "wss://mygateway.example.com/ws" {
 		t.Errorf("WSURL = %q", cfg.WSURL)
 	}
-	if cfg.Token != "test-token-123" {
-		t.Errorf("Token = %q", cfg.Token)
-	}
 }
 
 func TestLoad_InvalidURL(t *testing.T) {
 	t.Setenv("OPENCLAW_GATEWAY_URL", "ftp://bad-scheme.example.com")
-	t.Setenv("OPENCLAW_GATEWAY_TOKEN", "token")
 
 	origDir, _ := os.Getwd()
 	dir := t.TempDir()

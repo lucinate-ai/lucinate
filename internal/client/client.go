@@ -52,13 +52,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 
 	deviceToken := c.store.LoadDeviceToken()
-	token := c.cfg.Token
-	if deviceToken != "" {
-		token = deviceToken
-	}
 
 	opts := []gateway.Option{
-		gateway.WithToken(token),
+		gateway.WithToken(deviceToken),
 		gateway.WithClientInfo(protocol.ClientInfo{
 			ID:       protocol.ClientIDCLI,
 			Version:  "0.1.0",

@@ -23,7 +23,7 @@ repclaw is a TUI chat client for the OpenClaw gateway, built with bubbletea.
 
 ### Packages
 
-- **`internal/config`** — Loads `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_TOKEN` from env/`.env` file. Auto-derives WebSocket URL from HTTP URL (`https` → `wss`).
+- **`internal/config`** — Loads `OPENCLAW_GATEWAY_URL` from env/`.env` file. Auto-derives WebSocket URL from HTTP URL (`https` → `wss`).
 - **`internal/client`** — Wraps the `openclaw-go` gateway SDK. Manages WebSocket connection, device identity (`~/.openclaw-go/identity/`), and bridges gateway events to a buffered channel for the TUI event loop.
 - **`internal/tui`** — Bubbletea TUI with two views: agent selection (`selectModel`) and chat (`chatModel`). Chat supports streaming responses with markdown rendering via glamour.
 
