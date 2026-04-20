@@ -201,6 +201,20 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "up":
+			// Recall the most recent queued message into the input for editing
+			// or deletion. Only when the input is empty, so multi-line cursor
+			// movement is preserved.
+			if m.textarea.Value() == "" && len(m.pendingMessages) > 0 {
+				last := len(m.pendingMessages) - 1
+				text := m.pendingMessages[last]
+				m.pendingMessages = m.pendingMessages[:last]
+				m.textarea.Reset()
+				m.textarea.SetValue(text)
+				m.textarea.CursorEnd()
+				m.updateViewport()
+				return m, nil
+			}
 		case "enter":
 			text := strings.TrimSpace(m.textarea.Value())
 			if text == "" {
@@ -441,7 +455,7 @@ func (m chatModel) View() string {
 		} else {
 			helpText := " enter: send | shift/alt+enter: newline | /help: commands"
 			if n := len(m.pendingMessages); n > 0 {
-				helpText += fmt.Sprintf(" | %d queued", n)
+				helpText += fmt.Sprintf(" | %d queued (up: edit last)", n)
 			}
 			help = helpStyle.Render(helpText)
 		}
