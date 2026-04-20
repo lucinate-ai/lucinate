@@ -83,6 +83,7 @@ type agentCreatedMsg struct {
 // sessionCreatedMsg is returned when a session is created for a non-default agent.
 type sessionCreatedMsg struct {
 	sessionKey string
+	agentID    string
 	agentName  string
 	modelID    string
 	err        error
@@ -91,6 +92,38 @@ type sessionCreatedMsg struct {
 // skillsDiscoveredMsg is returned when skill discovery completes.
 type skillsDiscoveredMsg struct {
 	skills []agentSkill
+}
+
+// showSessionsMsg signals the AppModel to switch to the session browser.
+type showSessionsMsg struct {
+	agentID   string
+	agentName string
+	modelID   string
+	mainKey   string
+}
+
+// sessionSelectedMsg is returned when the user picks a session to restore.
+type sessionSelectedMsg struct {
+	sessionKey string
+	agentName  string
+	modelID    string
+}
+
+// goBackFromSessionsMsg signals the AppModel to return to the chat view.
+type goBackFromSessionsMsg struct{}
+
+// sessionsLoadedMsg is returned when the session list is fetched.
+type sessionsLoadedMsg struct {
+	sessions []sessionItem
+	err      error
+}
+
+// newSessionCreatedMsg is returned when a new session is created from the browser.
+type newSessionCreatedMsg struct {
+	sessionKey string
+	agentName  string
+	modelID    string
+	err        error
 }
 
 // spinnerTickMsg advances the streaming-response placeholder animation.

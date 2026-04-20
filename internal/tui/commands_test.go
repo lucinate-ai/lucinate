@@ -92,7 +92,7 @@ func TestSlashCommand_Help(t *testing.T) {
 	}
 
 	// Every advertised command should appear in the help text.
-	for _, want := range []string{"/quit", "/exit", "/agents", "/clear", "/model", "/stats", "/skills", "/help"} {
+	for _, want := range []string{"/quit", "/exit", "/agents", "/clear", "/model", "/sessions", "/stats", "/skills", "/help"} {
 		if !strings.Contains(last.content, want) {
 			t.Errorf("/help text missing %q\ngot: %s", want, last.content)
 		}
@@ -355,8 +355,8 @@ func TestCompleteSlashCommand_IncludesSkills(t *testing.T) {
 	}
 
 	// Built-in commands still take priority when they match.
-	if got := m.completeSlashCommand("/s"); got != "/skills" {
-		t.Errorf("completeSlashCommand(%q) = %q, want %q", "/s", got, "/skills")
+	if got := m.completeSlashCommand("/s"); got != "/sessions" {
+		t.Errorf("completeSlashCommand(%q) = %q, want %q", "/s", got, "/sessions")
 	}
 	// Skill name is reachable when no built-in prefix matches.
 	if got := m.completeSlashCommand("/gr"); got != "/greet" {

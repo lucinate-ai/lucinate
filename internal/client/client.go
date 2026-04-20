@@ -127,11 +127,22 @@ func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error 
 	return nil
 }
 
+// SessionsList lists sessions for the given agent.
+func (c *Client) SessionsList(ctx context.Context, agentID string) (json.RawMessage, error) {
+	includeTitles := true
+	includeLastMsg := true
+	return c.gw.SessionsList(ctx, protocol.SessionsListParams{
+		AgentID:              agentID,
+		IncludeDerivedTitles: &includeTitles,
+		IncludeLastMessage:   &includeLastMsg,
+	})
+}
+
 // CreateSession creates or resumes a session for the given agent and returns
 // the gateway-assigned session key.
-func (c *Client) CreateSession(ctx context.Context, agentID string) (string, error) {
+func (c *Client) CreateSession(ctx context.Context, agentID, key string) (string, error) {
 	raw, err := c.gw.SessionsCreate(ctx, protocol.SessionsCreateParams{
-		Key:     "main",
+		Key:     key,
 		AgentID: agentID,
 	})
 	if err != nil {

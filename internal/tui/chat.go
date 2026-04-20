@@ -32,6 +32,7 @@ type chatModel struct {
 	messages         []chatMessage
 	client           *client.Client
 	sessionKey       string
+	agentID          string
 	agentName        string
 	sending          bool
 	pendingMessages  []string
@@ -71,7 +72,7 @@ func (m *chatModel) ensureSpinnerTicking() tea.Cmd {
 	return spinnerTickCmd()
 }
 
-func newChatModel(c *client.Client, sessionKey, agentName, modelID string) chatModel {
+func newChatModel(c *client.Client, sessionKey, agentID, agentName, modelID string) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Focus()
@@ -94,6 +95,7 @@ func newChatModel(c *client.Client, sessionKey, agentName, modelID string) chatM
 		textarea:   ta,
 		client:     c,
 		sessionKey: sessionKey,
+		agentID:    agentID,
 		agentName:  agentName,
 		renderer:   renderer,
 		modelID:    modelID,

@@ -72,7 +72,7 @@ func (a selectModelAdapter) View() tea.View {
 // rendering tests, wrapped in an adapter.
 func newRenderingChatModel(t *testing.T, agentName string) chatModelAdapter {
 	t.Helper()
-	m := newChatModel(nil, "session-key", agentName, "")
+	m := newChatModel(nil, "session-key", "", agentName, "")
 	m.setSize(120, 40)
 	return chatModelAdapter{inner: m}
 }
@@ -313,6 +313,91 @@ func TestRender_SelectView_ErrorStateShowsRetryHint(t *testing.T) {
 	defer finishProgram(t, tm)
 
 	waitForContains(t, tm.Output(), "gateway unreachable", "'r' to retry")
+}
+
+// sessionsModelAdapter wraps sessionsModel so it satisfies tea.Model for teatest.
+type sessionsModelAdapter struct {
+	inner sessionsModel
+}
+
+func (a sessionsModelAdapter) Init() tea.Cmd { return nil }
+
+func (a sessionsModelAdapter) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if ws, ok := msg.(tea.WindowSizeMsg); ok {
+		a.inner.setSize(ws.Width, ws.Height)
+		return a, nil
+	}
+	var cmd tea.Cmd
+	a.inner, cmd = a.inner.Update(msg)
+	return a, cmd
+}
+
+func (a sessionsModelAdapter) View() tea.View {
+	return tea.NewView(a.inner.View())
+}
+
+// newLoadedSessionsAdapter returns a sessionsModelAdapter with sessions already loaded.
+func newLoadedSessionsAdapter(t *testing.T, sessions ...sessionItem) sessionsModelAdapter {
+	t.Helper()
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key")
+	m.setSize(120, 40)
+	m, _ = m.Update(sessionsLoadedMsg{sessions: sessions})
+	return sessionsModelAdapter{inner: m}
+}
+
+func TestRender_SessionsView_RendersSessionTitles(t *testing.T) {
+	adapter := newLoadedSessionsAdapter(t,
+		sessionItem{key: "s1", title: "Planning the roadmap"},
+		sessionItem{key: "s2", title: "Debugging auth flow"},
+	)
+
+	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
+	defer finishProgram(t, tm)
+
+	waitForContains(t, tm.Output(), "Planning the roadmap", "Debugging auth flow")
+}
+
+func TestRender_SessionsView_ShowsCreateHint(t *testing.T) {
+	adapter := newLoadedSessionsAdapter(t,
+		sessionItem{key: "s1", title: "Some session"},
+	)
+
+	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
+	defer finishProgram(t, tm)
+
+	waitForContains(t, tm.Output(), "n: new session")
+}
+
+func TestRender_SessionsView_LoadingState(t *testing.T) {
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key")
+	m.setSize(120, 40)
+	adapter := sessionsModelAdapter{inner: m}
+
+	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
+	defer finishProgram(t, tm)
+
+	waitForContains(t, tm.Output(), "Loading sessions")
+}
+
+func TestRender_SessionsView_EmptyState(t *testing.T) {
+	adapter := newLoadedSessionsAdapter(t) // no sessions
+
+	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
+	defer finishProgram(t, tm)
+
+	waitForContains(t, tm.Output(), "No sessions found", "n: new session")
+}
+
+func TestRender_SessionsView_ErrorState(t *testing.T) {
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key")
+	m.setSize(120, 40)
+	m, _ = m.Update(sessionsLoadedMsg{err: errString("network timeout")})
+	adapter := sessionsModelAdapter{inner: m}
+
+	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
+	defer finishProgram(t, tm)
+
+	waitForContains(t, tm.Output(), "network timeout", "'r' to retry")
 }
 
 // errString is a tiny error helper so tests don't need to import "errors".

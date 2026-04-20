@@ -13,16 +13,18 @@ type viewState int
 const (
 	viewSelect viewState = iota
 	viewChat
+	viewSessions
 )
 
 // AppModel is the root bubbletea model.
 type AppModel struct {
-	state       viewState
-	selectModel selectModel
-	chatModel   chatModel
-	client      *client.Client
-	width       int
-	height      int
+	state         viewState
+	selectModel   selectModel
+	chatModel     chatModel
+	sessionsModel sessionsModel
+	client        *client.Client
+	width         int
+	height        int
 }
 
 // NewApp creates the root application model.
@@ -47,10 +49,40 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == viewChat {
 			m.chatModel.setSize(msg.Width, msg.Height)
 		}
+		if m.state == viewSessions {
+			m.sessionsModel.setSize(msg.Width, msg.Height)
+		}
 		return m, nil
 
 	case goBackMsg:
 		m.state = viewSelect
+		return m, nil
+
+	case showSessionsMsg:
+		m.sessionsModel = newSessionsModel(m.client, msg.agentID, msg.agentName, msg.modelID, msg.mainKey)
+		m.sessionsModel.setSize(m.width, m.height)
+		m.state = viewSessions
+		return m, m.sessionsModel.Init()
+
+	case sessionSelectedMsg:
+		m.chatModel = newChatModel(m.client, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID)
+		m.chatModel.setSize(m.width, m.height)
+		m.state = viewChat
+		return m, m.chatModel.Init()
+
+	case newSessionCreatedMsg:
+		if msg.err != nil {
+			m.sessionsModel.err = msg.err
+			m.sessionsModel.loading = false
+			return m, nil
+		}
+		m.chatModel = newChatModel(m.client, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID)
+		m.chatModel.setSize(m.width, m.height)
+		m.state = viewChat
+		return m, m.chatModel.Init()
+
+	case goBackFromSessionsMsg:
+		m.state = viewChat
 		return m, nil
 
 	case sessionCreatedMsg:
@@ -59,7 +91,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = viewSelect
 			return m, nil
 		}
-		m.chatModel = newChatModel(m.client, msg.sessionKey, msg.agentName, msg.modelID)
+		m.chatModel = newChatModel(m.client, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID)
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -69,6 +101,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "esc":
+			if m.state == viewSessions {
+				m.state = viewChat
+				return m, nil
+			}
 			if m.state == viewChat {
 				m.state = viewSelect
 				return m, nil
@@ -94,7 +130,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if item.sessionKey == m.selectModel.mainKey {
 					// Default agent: use the main session key directly.
-					m.chatModel = newChatModel(m.client, item.sessionKey, name, modelID)
+					m.chatModel = newChatModel(m.client, item.sessionKey, item.agent.ID, name, modelID)
 					m.chatModel.setSize(m.width, m.height)
 					m.state = viewChat
 					return m, m.chatModel.Init()
@@ -104,9 +140,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cl := m.client
 				agentID := item.agent.ID
 				return m, func() tea.Msg {
-					key, err := cl.CreateSession(context.Background(), agentID)
+					key, err := cl.CreateSession(context.Background(), agentID, "main")
 					return sessionCreatedMsg{
 						sessionKey: key,
+						agentID:    agentID,
 						agentName:  name,
 						modelID:    modelID,
 						err:        err,
@@ -120,6 +157,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.chatModel, cmd = m.chatModel.Update(msg)
 		return m, cmd
+
+	case viewSessions:
+		var cmd tea.Cmd
+		m.sessionsModel, cmd = m.sessionsModel.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -132,6 +174,8 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView(m.selectModel.View())
 	case viewChat:
 		v = tea.NewView(m.chatModel.View())
+	case viewSessions:
+		v = tea.NewView(m.sessionsModel.View())
 	default:
 		v = tea.NewView("")
 	}

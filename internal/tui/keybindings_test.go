@@ -10,7 +10,7 @@ import (
 )
 
 func TestNewChatModel_DeleteWordBackwardBinding(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 
 	// ctrl+w should match DeleteWordBackward.
 	ctrlW := tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl}
@@ -32,7 +32,7 @@ func TestNewChatModel_DeleteWordBackwardBinding(t *testing.T) {
 }
 
 func TestNewChatModel_InsertNewlineBinding(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 
 	// Plain enter should NOT match InsertNewline.
 	enter := tea.KeyPressMsg{Code: tea.KeyEnter}
@@ -48,7 +48,7 @@ func TestNewChatModel_InsertNewlineBinding(t *testing.T) {
 }
 
 func TestUpKey_RecallsLastQueuedMessage(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 	m.viewport = viewport.New()
 	m.width = 80
 	m.height = 30
@@ -69,7 +69,7 @@ func TestUpKey_RecallsLastQueuedMessage(t *testing.T) {
 }
 
 func TestUpKey_NoQueuedMessagesLeavesInputEmpty(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 	m.viewport = viewport.New()
 	m.width = 80
 	m.height = 30
@@ -83,7 +83,7 @@ func TestUpKey_NoQueuedMessagesLeavesInputEmpty(t *testing.T) {
 }
 
 func TestUpKey_NonEmptyInputDoesNotRecall(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 	m.viewport = viewport.New()
 	m.width = 80
 	m.height = 30
@@ -102,7 +102,7 @@ func TestUpKey_NonEmptyInputDoesNotRecall(t *testing.T) {
 }
 
 func TestUpKey_RecallingOnlyMessageEmptiesQueue(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 	m.viewport = viewport.New()
 	m.width = 80
 	m.height = 30
@@ -120,7 +120,7 @@ func TestUpKey_RecallingOnlyMessageEmptiesQueue(t *testing.T) {
 }
 
 func TestUpKey_SuccessiveRecallsPopInLIFOOrder(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 	m.viewport = viewport.New()
 	m.width = 80
 	m.height = 30
@@ -152,7 +152,7 @@ func TestUpKey_SuccessiveRecallsPopInLIFOOrder(t *testing.T) {
 }
 
 func TestUpKey_RecallThenClearDiscardsMessage(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 	m.viewport = viewport.New()
 	m.width = 80
 	m.height = 30
@@ -171,7 +171,7 @@ func TestUpKey_RecallThenClearDiscardsMessage(t *testing.T) {
 }
 
 func TestUpKey_RecallEditAndRequeueWhileSending(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 	m.viewport = viewport.New()
 	m.width = 80
 	m.height = 30
@@ -199,7 +199,7 @@ func TestUpKey_RecallEditAndRequeueWhileSending(t *testing.T) {
 }
 
 func TestView_HelpShowsUpHintWhenQueued(t *testing.T) {
-	m := newChatModel(nil, "main", "test", "")
+	m := newChatModel(nil, "main", "", "test", "")
 	m.viewport = viewport.New()
 	m.setSize(80, 30)
 	m.pendingMessages = []string{"one", "two"}
