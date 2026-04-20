@@ -78,7 +78,7 @@ func newChatModel(c *client.Client, sessionKey, agentName, modelID string) chatM
 	ta.CharLimit = 0
 	ta.SetHeight(inputHeight)
 	ta.ShowLineNumbers = false
-	ta.KeyMap.InsertNewline.SetKeys("shift+enter", "alt+enter")
+	ta.KeyMap.InsertNewline.SetKeys("alt+enter")
 	ta.KeyMap.DeleteWordBackward.SetKeys("alt+backspace", "ctrl+w")
 	ta.KeyMap.DeleteWordForward.SetKeys("alt+delete", "alt+d")
 
@@ -495,7 +495,7 @@ func (m chatModel) View() string {
 		if hint != "" {
 			help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", m.textarea.Value(), hint))
 		} else {
-			helpText := " enter: send | shift/alt+enter: newline | /help: commands"
+			helpText := " enter: send | alt+enter: newline | /help: commands"
 			if n := len(m.pendingMessages); n > 0 {
 				helpText += fmt.Sprintf(" | %d queued (up: edit last)", n)
 			}

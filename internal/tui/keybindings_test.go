@@ -40,10 +40,10 @@ func TestNewChatModel_InsertNewlineBinding(t *testing.T) {
 		t.Error("plain enter should not match InsertNewline")
 	}
 
-	// Shift+enter SHOULD match InsertNewline.
-	shiftEnter := tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}
-	if !key.Matches(shiftEnter, m.textarea.KeyMap.InsertNewline) {
-		t.Errorf("shift+enter should match InsertNewline, got string=%q", shiftEnter.String())
+	// Alt+enter SHOULD match InsertNewline.
+	altEnter := tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt}
+	if !key.Matches(altEnter, m.textarea.KeyMap.InsertNewline) {
+		t.Errorf("alt+enter should match InsertNewline, got string=%q", altEnter.String())
 	}
 }
 

@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - fix: drop bootstrap token, use device pairing only for setup
-- fix: support shift+enter and alt+enter for newline via bubbletea v2 upgrade
+- fix: support alt+enter for newline via bubbletea v2 upgrade
 
 ## [0.10.0] - 2026-04-20
 ### Added
@@ -111,7 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.10.1] - 2026-04-20
 ### Fixed
-- fix: support shift+enter and alt+enter for newline via bubbletea v2 upgrade
+- fix: support alt+enter for newline via bubbletea v2 upgrade
 
 ## [0.10.0] - 2026-04-20
 ### Added

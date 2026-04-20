@@ -19,7 +19,7 @@
 
 - Different indentation for messages from 'You' and the agent
 - Can't select/copy from TUI when window is focussed
-- ~~shift+enter for new line doesn't work~~ (shift+enter or alt+enter)
+- ~~newline key doesn't work~~ (alt+enter works)
 - Long user messages seem to be truncated
 - Timestamps appearing at the start of user messages in message history
 - When triggering the `/skills` command don't send the output as a user message to the model

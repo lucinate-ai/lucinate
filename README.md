@@ -83,7 +83,7 @@ Select an agent from the list, then start chatting. Press `n` on the agent list 
 | `n` | Agent list | Create a new agent |
 | `Enter` | Agent list | Select agent |
 | `Enter` | Chat | Send message |
-| `Shift+Enter` | Chat | Insert newline |
+| `Alt+Enter` | Chat | Insert newline |
 | `Ctrl+W` | Chat | Delete word |
 | `PgUp` / `PgDn` | Chat | Scroll chat history |
 | `Esc` | Chat | Back to agent list |
