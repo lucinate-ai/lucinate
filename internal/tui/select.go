@@ -229,7 +229,7 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 		m.loading = true
 		return m, m.loadAgents()
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 
@@ -242,7 +242,7 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m selectModel) handleKey(msg tea.KeyMsg) (selectModel, tea.Cmd) {
+func (m selectModel) handleKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 	if m.subState == subStateCreate {
 		return m.handleCreateKey(msg)
 	}
@@ -275,7 +275,7 @@ func (m selectModel) handleKey(msg tea.KeyMsg) (selectModel, tea.Cmd) {
 	return m, cmd
 }
 
-func (m selectModel) handleCreateKey(msg tea.KeyMsg) (selectModel, tea.Cmd) {
+func (m selectModel) handleCreateKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.subState = subStateList
