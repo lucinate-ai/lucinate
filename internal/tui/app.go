@@ -19,6 +19,7 @@ const (
 // AppModel is the root bubbletea model.
 type AppModel struct {
 	state         viewState
+	prevState     viewState // where to return when pressing esc from chat
 	selectModel   selectModel
 	chatModel     chatModel
 	sessionsModel sessionsModel
@@ -67,6 +68,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionSelectedMsg:
 		m.chatModel = newChatModel(m.client, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID)
 		m.chatModel.setSize(m.width, m.height)
+		m.prevState = viewSessions
 		m.state = viewChat
 		return m, m.chatModel.Init()
 
@@ -78,6 +80,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chatModel = newChatModel(m.client, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID)
 		m.chatModel.setSize(m.width, m.height)
+		m.prevState = viewSessions
 		m.state = viewChat
 		return m, m.chatModel.Init()
 
@@ -93,6 +96,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.chatModel = newChatModel(m.client, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID)
 		m.chatModel.setSize(m.width, m.height)
+		m.prevState = viewSelect
 		m.state = viewChat
 		return m, m.chatModel.Init()
 
@@ -106,7 +110,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.state == viewChat {
-				m.state = viewSelect
+				m.state = m.prevState
+				if m.state == viewSessions {
+					return m, m.sessionsModel.Init()
+				}
 				return m, nil
 			}
 			return m, tea.Quit
@@ -132,6 +139,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Default agent: use the main session key directly.
 					m.chatModel = newChatModel(m.client, item.sessionKey, item.agent.ID, name, modelID)
 					m.chatModel.setSize(m.width, m.height)
+					m.prevState = viewSelect
 					m.state = viewChat
 					return m, m.chatModel.Init()
 				}
