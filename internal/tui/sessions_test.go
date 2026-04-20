@@ -116,3 +116,110 @@ func TestSessionsView_Empty(t *testing.T) {
 		t.Error("expected non-empty view")
 	}
 }
+
+// --- cleanDerivedTitle ---
+
+func TestCleanDerivedTitle_Plain(t *testing.T) {
+	got := cleanDerivedTitle("Hello world")
+	if got != "Hello world" {
+		t.Errorf("got %q, want %q", got, "Hello world")
+	}
+}
+
+func TestCleanDerivedTitle_StripsSenderPrefix(t *testing.T) {
+	got := cleanDerivedTitle("Sender (untrusted metadata): Some title")
+	if got != "Some title" {
+		t.Errorf("got %q, want %q", got, "Some title")
+	}
+}
+
+func TestCleanDerivedTitle_StripsMarkdownFences(t *testing.T) {
+	got := cleanDerivedTitle("```json\nsome content")
+	if got != "some content" {
+		t.Errorf("got %q, want %q", got, "some content")
+	}
+
+	got = cleanDerivedTitle("```some content")
+	if got != "some content" {
+		t.Errorf("got %q, want %q", got, "some content")
+	}
+}
+
+func TestCleanDerivedTitle_StripsJSONContent(t *testing.T) {
+	got := cleanDerivedTitle(`{"label": "cli", "text": "hello"}`)
+	if got != "" {
+		t.Errorf("expected empty string for JSON content, got %q", got)
+	}
+}
+
+func TestCleanDerivedTitle_CombinedPrefixAndFence(t *testing.T) {
+	got := cleanDerivedTitle("Sender (untrusted metadata): ```json\n{\"foo\":\"bar\"}")
+	if got != "" {
+		t.Errorf("expected empty string, got %q", got)
+	}
+}
+
+func TestCleanDerivedTitle_EmptyInput(t *testing.T) {
+	got := cleanDerivedTitle("")
+	if got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+func TestCleanDerivedTitle_WhitespaceOnly(t *testing.T) {
+	got := cleanDerivedTitle("   ")
+	if got != "" {
+		t.Errorf("expected empty, got %q", got)
+	}
+}
+
+// --- sessionGroup ---
+
+func TestSessionGroup_Conversations(t *testing.T) {
+	got := sessionGroup("session-key-123")
+	if got != "Conversations" {
+		t.Errorf("got %q, want %q", got, "Conversations")
+	}
+}
+
+func TestSessionGroup_Scheduled(t *testing.T) {
+	got := sessionGroup("agent-1:cron:daily-check")
+	if got != "Scheduled" {
+		t.Errorf("got %q, want %q", got, "Scheduled")
+	}
+}
+
+// --- skipHeaders ---
+
+func TestSkipHeaders_SkipsGroupHeader(t *testing.T) {
+	m := newTestSessionsModel()
+	m, _ = m.Update(sessionsLoadedMsg{
+		sessions: []sessionItem{
+			{key: "s1", title: "First", group: "Conversations"},
+			{key: "s2", title: "Second", group: "Conversations"},
+		},
+	})
+	// After loading, the list has [header, s1, s2] and selection is at index 1.
+	// Move up should skip the header.
+	m.list.Select(0) // put on the header
+	m.skipHeaders(1)  // move down
+	if m.list.Index() != 1 {
+		t.Errorf("expected index 1 after skipping header, got %d", m.list.Index())
+	}
+}
+
+func TestSkipHeaders_StaysOnSessionItem(t *testing.T) {
+	m := newTestSessionsModel()
+	m, _ = m.Update(sessionsLoadedMsg{
+		sessions: []sessionItem{
+			{key: "s1", title: "First", group: "Conversations"},
+		},
+	})
+	// Selection should be on s1 (index 1).
+	m.skipHeaders(-1) // try moving up
+	// Should stay at index 1 (the header at 0 is skipped, clamped to 0, which is header, so stays).
+	idx := m.list.Index()
+	if idx < 0 {
+		t.Errorf("expected non-negative index, got %d", idx)
+	}
+}

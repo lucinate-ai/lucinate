@@ -405,6 +405,132 @@ func TestDeltaAfterDrain_CreatesNewAssistant(t *testing.T) {
 	}
 }
 
+func TestDrainQueueSkipRefresh_EmptyQueueNoRefresh(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.pendingMessages = nil
+
+	cmd := m.drainQueueSkipRefresh()
+
+	if m.sending {
+		t.Error("expected sending = false")
+	}
+	// drainQueueSkipRefresh with empty queue should return nil (no refresh).
+	if cmd != nil {
+		t.Error("expected nil cmd (no refresh)")
+	}
+}
+
+func TestDrainQueueSkipRefresh_DrainsPendingMessages(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.pendingMessages = []string{"queued"}
+
+	cmd := m.drainQueueSkipRefresh()
+
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd")
+	}
+	if len(m.pendingMessages) != 0 {
+		t.Errorf("expected 0 pending, got %d", len(m.pendingMessages))
+	}
+}
+
+func TestDrainQueueOpt_ExecCommandInQueue(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.pendingMessages = []string{"!ls -la"}
+
+	cmd := m.drainQueue()
+
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for exec command in queue")
+	}
+	// Should have added "$ ls -la" and "running..." messages.
+	found := false
+	for _, msg := range m.messages {
+		if msg.content == "$ ls -la" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected exec command message in messages")
+	}
+}
+
+func TestDrainQueueOpt_EmptyExecCommandIgnored(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.pendingMessages = []string{"!"}
+
+	cmd := m.drainQueue()
+
+	// "!" with nothing after it should set sending=false and return nil.
+	if m.sending {
+		t.Error("expected sending = false for empty exec command")
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for empty exec command")
+	}
+}
+
+func TestChatUpdate_SessionCompactedMsg_Success(t *testing.T) {
+	m := newTestChatModel()
+	initialCount := len(m.messages)
+
+	updated, _ := m.Update(sessionCompactedMsg{err: nil})
+
+	if len(updated.messages) != initialCount+1 {
+		t.Fatalf("expected %d messages, got %d", initialCount+1, len(updated.messages))
+	}
+	last := updated.messages[len(updated.messages)-1]
+	if last.role != "system" || last.content != "Session compacted." {
+		t.Errorf("unexpected message: role=%q content=%q", last.role, last.content)
+	}
+}
+
+func TestChatUpdate_SessionCompactedMsg_Error(t *testing.T) {
+	m := newTestChatModel()
+	updated, _ := m.Update(sessionCompactedMsg{err: errString("gateway error")})
+	last := updated.messages[len(updated.messages)-1]
+	if last.errMsg == "" {
+		t.Error("expected error message")
+	}
+}
+
+func TestChatUpdate_SessionClearedMsg_Success(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "old-key"
+	m.messages = []chatMessage{{role: "user", content: "hello"}}
+
+	updated, _ := m.Update(sessionClearedMsg{newSessionKey: "new-key"})
+
+	if updated.sessionKey != "new-key" {
+		t.Errorf("expected session key %q, got %q", "new-key", updated.sessionKey)
+	}
+	if len(updated.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(updated.messages))
+	}
+	if updated.messages[0].content != "Session cleared. Starting fresh." {
+		t.Errorf("unexpected message: %q", updated.messages[0].content)
+	}
+}
+
+func TestChatUpdate_SessionClearedMsg_Error(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "old-key"
+
+	updated, _ := m.Update(sessionClearedMsg{err: errString("delete failed")})
+
+	if updated.sessionKey != "old-key" {
+		t.Error("session key should not change on error")
+	}
+	last := updated.messages[len(updated.messages)-1]
+	if last.errMsg == "" {
+		t.Error("expected error message")
+	}
+}
+
 func TestHandleEvent_NonChatEventIgnored(t *testing.T) {
 	m := newTestChatModel()
 	m.messages = []chatMessage{{role: "user", content: "hello"}}
@@ -413,6 +539,148 @@ func TestHandleEvent_NonChatEventIgnored(t *testing.T) {
 
 	if len(m.messages) != 1 {
 		t.Errorf("expected 1 message, got %d", len(m.messages))
+	}
+}
+
+func TestHandleEvent_ExecFinished_UpdatesMessage(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-1"
+	m.messages = []chatMessage{
+		{role: "system", content: "$ ls"},
+		{role: "system", content: "running..."},
+	}
+	finished := protocol.ExecFinished{
+		SessionKey: "sess-1",
+		Command:    "ls",
+		Output:     "file1.txt\nfile2.txt",
+	}
+	payload, _ := json.Marshal(finished)
+	m.handleEvent(protocol.Event{EventName: protocol.EventExecFinished, Payload: payload})
+	last := m.messages[len(m.messages)-1]
+	if last.content != "file1.txt\nfile2.txt" {
+		t.Errorf("expected output in message, got %q", last.content)
+	}
+}
+
+func TestHandleEvent_ExecFinished_NoOutput(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-1"
+	m.messages = []chatMessage{
+		{role: "system", content: "$ touch foo"},
+		{role: "system", content: "running..."},
+	}
+	finished := protocol.ExecFinished{SessionKey: "sess-1", Output: ""}
+	payload, _ := json.Marshal(finished)
+	m.handleEvent(protocol.Event{EventName: protocol.EventExecFinished, Payload: payload})
+	last := m.messages[len(m.messages)-1]
+	if last.content != "(no output)" {
+		t.Errorf("expected '(no output)', got %q", last.content)
+	}
+}
+
+func TestHandleEvent_ExecFinished_NonZeroExitCode(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-1"
+	m.messages = []chatMessage{
+		{role: "system", content: "$ false"},
+		{role: "system", content: "running..."},
+	}
+	exitCode := 1
+	finished := protocol.ExecFinished{SessionKey: "sess-1", ExitCode: &exitCode, Output: "error output"}
+	payload, _ := json.Marshal(finished)
+	m.handleEvent(protocol.Event{EventName: protocol.EventExecFinished, Payload: payload})
+	last := m.messages[len(m.messages)-1]
+	if last.content != "error output\nexit code: 1" {
+		t.Errorf("expected exit code in output, got %q", last.content)
+	}
+}
+
+func TestHandleEvent_ExecFinished_DifferentSession_Ignored(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-1"
+	m.messages = []chatMessage{
+		{role: "system", content: "running..."},
+	}
+	finished := protocol.ExecFinished{SessionKey: "other-session", Output: "should not appear"}
+	payload, _ := json.Marshal(finished)
+	m.handleEvent(protocol.Event{EventName: protocol.EventExecFinished, Payload: payload})
+	if m.messages[0].content != "running..." {
+		t.Error("message should be unchanged for different session")
+	}
+}
+
+func TestHandleEvent_ExecApprovalResolved_Deny(t *testing.T) {
+	m := newTestChatModel()
+	m.messages = []chatMessage{
+		{role: "system", content: "running..."},
+	}
+	resolved := protocol.ExecApprovalResolvedEvent{ID: "req-1", Decision: "deny"}
+	payload, _ := json.Marshal(resolved)
+	m.handleEvent(protocol.Event{EventName: "exec.approval.resolved", Payload: payload})
+	last := m.messages[0]
+	if last.errMsg != "command execution denied" {
+		t.Errorf("expected denial error, got errMsg=%q content=%q", last.errMsg, last.content)
+	}
+}
+
+func TestHandleEvent_ExecApprovalResolved_Allow(t *testing.T) {
+	m := newTestChatModel()
+	m.messages = []chatMessage{
+		{role: "system", content: "running..."},
+	}
+	resolved := protocol.ExecApprovalResolvedEvent{ID: "req-1", Decision: "allow-once"}
+	payload, _ := json.Marshal(resolved)
+	cmd := m.handleEvent(protocol.Event{EventName: "exec.approval.resolved", Payload: payload})
+	// Allow should return nil — exec.finished will follow.
+	if cmd != nil {
+		t.Error("expected nil cmd for allow decision")
+	}
+	if m.messages[0].content != "running..." {
+		t.Error("message should be unchanged for allow decision")
+	}
+}
+
+func TestHandleEvent_ExecDenied(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-1"
+	m.messages = []chatMessage{
+		{role: "system", content: "running..."},
+	}
+	denied := protocol.ExecDenied{SessionKey: "sess-1", Reason: "policy"}
+	payload, _ := json.Marshal(denied)
+	m.handleEvent(protocol.Event{EventName: protocol.EventExecDenied, Payload: payload})
+	last := m.messages[0]
+	if last.errMsg != "command execution denied" {
+		t.Errorf("expected denial error, got errMsg=%q", last.errMsg)
+	}
+}
+
+func TestHandleEvent_ExecDenied_DifferentSession_Ignored(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-1"
+	m.messages = []chatMessage{
+		{role: "system", content: "running..."},
+	}
+	denied := protocol.ExecDenied{SessionKey: "other-session"}
+	payload, _ := json.Marshal(denied)
+	m.handleEvent(protocol.Event{EventName: protocol.EventExecDenied, Payload: payload})
+	if m.messages[0].content != "running..." {
+		t.Error("message should be unchanged for different session")
+	}
+}
+
+func TestHandleEvent_FinalWithBellPref(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.prefs.CompletionBell = true
+	m.messages = []chatMessage{
+		{role: "user", content: "hello"},
+		{role: "assistant", content: "text", streaming: true},
+	}
+	finalMsg := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"text"}],"timestamp":123}`)
+	cmd := m.handleEvent(makeChatEvent("final", "run1", 3, finalMsg))
+	if cmd == nil {
+		t.Error("expected a non-nil cmd (should include bell)")
 	}
 }
 

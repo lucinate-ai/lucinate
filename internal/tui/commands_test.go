@@ -347,6 +347,40 @@ func TestSlashCommandHint(t *testing.T) {
 	}
 }
 
+func TestSlashCommand_Config(t *testing.T) {
+	m := newSlashTestModel()
+	handled, cmd := m.handleSlashCommand("/config")
+	if !handled {
+		t.Fatal("expected /config to be handled")
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd from /config")
+	}
+	msg := cmd()
+	if _, ok := msg.(showConfigMsg); !ok {
+		t.Errorf("expected showConfigMsg, got %T", msg)
+	}
+}
+
+func TestSlashCommand_Commands_ShowsHelp(t *testing.T) {
+	m := newSlashTestModel()
+	initialCount := len(m.messages)
+	handled, cmd := m.handleSlashCommand("/commands")
+	if !handled {
+		t.Fatal("expected /commands to be handled")
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd from /commands")
+	}
+	if len(m.messages) != initialCount+1 {
+		t.Fatalf("expected %d messages, got %d", initialCount+1, len(m.messages))
+	}
+	last := m.messages[len(m.messages)-1]
+	if last.role != "system" || !strings.Contains(last.content, "/help") {
+		t.Errorf("expected help content, got: %s", last.content)
+	}
+}
+
 func TestSlashCommand_Compact_SetsConfirmation(t *testing.T) {
 	m := newSlashTestModel()
 	initialCount := len(m.messages)
