@@ -34,3 +34,27 @@ repclaw is a TUI chat client for the OpenClaw gateway, built with bubbletea.
 ### Key dependency
 
 `github.com/a3tai/openclaw-go` is a **local replace** (`../openclaw-go`) — the OpenClaw Go SDK must be checked out as a sibling directory.
+
+## Testing requirements
+
+Add or update tests whenever you change behaviour. Focus on core functionality — tests should capture behaviour a user or caller actually depends on, not exist for coverage's sake.
+
+**Write a test when you:**
+- add or change a command, event handler, key binding, or slash command
+- change rendering output users see (prefixes, help bar, queued/pending state, streaming cursor, error styling)
+- change control flow in `chatModel`/`selectModel` (queueing, draining, state transitions, view switches)
+- fix a bug — add a regression test that fails without the fix
+
+**Don't add a test for:**
+- trivial getters/setters, style constants, or pure wiring
+- behaviour already covered by an existing test
+- implementation details that would lock in a specific refactor
+
+**Pick the right level:**
+- Pure logic (formatters, wrapping, validation, slash parsing) → plain unit tests against the function.
+- Model state transitions → drive `Update` directly and assert on the returned model (see `commands_test.go`, `select_test.go`).
+- Rendered output → use `teatest/v2` against a model adapter (see `rendering_test.go`). Assert on ANSI-stripped bytes via a single `teatest.WaitFor` — repeated `WaitFor` calls drain `tm.Output()`.
+- Anything requiring the real gateway → guard with `//go:build integration` (see `queue_integration_test.go`) so `go test ./...` stays hermetic.
+
+Run `make test` before committing. Pushes trigger CI; a failing test blocks review.
+
