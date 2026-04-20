@@ -183,10 +183,11 @@ func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error 
 	return nil
 }
 
-// CreateSession creates a new session for the given agent and returns the
-// gateway-assigned session key.
+// CreateSession creates or resumes a session for the given agent and returns
+// the gateway-assigned session key.
 func (c *Client) CreateSession(ctx context.Context, agentID string) (string, error) {
 	raw, err := c.gw.SessionsCreate(ctx, protocol.SessionsCreateParams{
+		Key:     "main",
 		AgentID: agentID,
 	})
 	if err != nil {
