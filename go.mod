@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.6
 	charm.land/glamour/v2 v2.0.0
 	charm.land/lipgloss/v2 v2.0.3
-	github.com/a3tai/openclaw-go v0.0.0
+	github.com/a3tai/openclaw-go v1.20260325.1-0.20260417064242-ec5cddc23822
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/joho/godotenv v1.5.1
 	github.com/olekukonko/tablewriter v1.1.4
@@ -50,5 +50,3 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
 )
-
-replace github.com/a3tai/openclaw-go => ../openclaw-go

@@ -12,18 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Checkout openclaw-go SDK
-        uses: actions/checkout@v6
-        with:
-          repository: a3tai/openclaw-go
-          path: openclaw-go
-
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-
-      - name: Point go.mod replace at checked-out SDK
-        run: go mod edit -replace github.com/a3tai/openclaw-go=./openclaw-go
 
       - name: Build
         run: make build
