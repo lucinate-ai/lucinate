@@ -1,6 +1,6 @@
 # repclaw
 
-The terminal client for [OpenClaw](https://github.com/daggerhashimoto/openclaw-nerve).
+The terminal client for [OpenClaw](https://github.com/openclaw/openclaw).
 
 [![CI](https://github.com/outofcoffee/repclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/outofcoffee/repclaw/actions/workflows/ci.yml)
 
