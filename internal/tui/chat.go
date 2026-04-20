@@ -343,7 +343,11 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	}
 
 	passToViewport := true
-	if km, isKey := msg.(tea.KeyPressMsg); isKey {
+	switch msg.(type) {
+	case tea.MouseWheelMsg:
+		// Allow mouse wheel events through to the viewport.
+	case tea.KeyPressMsg:
+		km := msg.(tea.KeyPressMsg)
 		switch km.Code {
 		case tea.KeyPgUp, tea.KeyPgDown, tea.KeyUp, tea.KeyDown:
 			// Allow scrolling keys through.

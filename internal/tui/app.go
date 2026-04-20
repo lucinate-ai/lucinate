@@ -188,6 +188,7 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView("")
 	}
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 	v.KeyboardEnhancements.ReportEventTypes = true
 	return v
 }
