@@ -79,6 +79,7 @@ func newChatModel(c *client.Client, sessionKey, agentID, agentName, modelID stri
 	ta.CharLimit = 0
 	ta.SetHeight(inputHeight)
 	ta.ShowLineNumbers = false
+	ta.Prompt = ""
 	ta.KeyMap.InsertNewline.SetKeys("alt+enter")
 	ta.KeyMap.DeleteWordBackward.SetKeys("alt+backspace", "ctrl+w")
 	ta.KeyMap.DeleteWordForward.SetKeys("alt+delete", "alt+d")
@@ -454,7 +455,7 @@ func (m *chatModel) setSize(w, h int) {
 	m.viewport.SetWidth(w)
 	m.viewport.SetHeight(vpHeight)
 
-	m.textarea.SetWidth(w - 4)
+	m.textarea.SetWidth(w - 7)
 	m.updateViewport()
 }
 
