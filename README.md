@@ -12,6 +12,15 @@ repclaw connects to your OpenClaw gateway over WebSocket and gives you a clean T
 
 That's it. No file browsers, no task boards, no dashboards. Just chat.
 
+### Highlights
+
+- **Create agents** directly from the TUI — name, workspace, done
+- **Markdown rendering** for assistant messages via Glamour
+- **Remote command execution** — prefix with `!` to run commands on the gateway host
+- **Message queueing** — keep typing while the agent is responding
+- **Local agent skills** — drop skills into `~/.agents/skills/` and use them as slash commands
+- **Live token/cost stats** in the header bar
+
 ## Install
 
 ```sh
@@ -39,7 +48,7 @@ go build -o repclaw .
 Generate an operator token using the OpenClaw CLI on the machine running your gateway:
 
 ```sh
-openclaw token create --role operator --scopes operator:read,operator:write --name repclaw
+openclaw token create --role operator --scopes operator:read,operator:write,operator:admin --name repclaw
 ```
 
 Copy the token it prints — you'll need it in the next step.
@@ -77,15 +86,17 @@ Then restart repclaw — subsequent connections will use the paired device ident
 
 ### 4. Start chatting
 
-Select an agent from the list, then start chatting.
+Select an agent from the list, then start chatting. Press `n` on the agent list to create a new agent.
 
-| Key | Action |
-|-----|--------|
-| `Enter` | Send message |
-| `Shift+Enter` | Insert newline |
-| `Ctrl+W` | Delete word |
-| `PgUp` / `PgDn` | Scroll chat history |
-| `Esc` | Back to agent list |
+| Key | Context | Action |
+|-----|---------|--------|
+| `n` | Agent list | Create a new agent |
+| `Enter` | Agent list | Select agent |
+| `Enter` | Chat | Send message |
+| `Shift+Enter` | Chat | Insert newline |
+| `Ctrl+W` | Chat | Delete word |
+| `PgUp` / `PgDn` | Chat | Scroll chat history |
+| `Esc` | Chat | Back to agent list |
 | `Ctrl+C` | Quit |
 
 ## Commands

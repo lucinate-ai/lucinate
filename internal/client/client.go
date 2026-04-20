@@ -106,6 +106,101 @@ func (c *Client) ListAgents(ctx context.Context) (*protocol.AgentsListResult, er
 	return c.gw.AgentsList(ctx)
 }
 
+// CreateAgent provisions a standalone agent by reading the current gateway
+// config, appending the new agent to agents.list, and applying the updated
+// config. It also seeds an IDENTITY.md file for the new agent.
+func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error {
+	agentDir := "~/.openclaw/agents/" + name + "/agent"
+
+	// Fetch current config to get the base hash and existing agents list.
+	configRaw, err := c.gw.ConfigGet(ctx)
+	if err != nil {
+		return fmt.Errorf("config get: %w", err)
+	}
+
+	// Parse the response to extract hash and existing agents.list.
+	var configResp struct {
+		Hash   string          `json:"hash"`
+		Config json.RawMessage `json:"config"`
+	}
+	if err := json.Unmarshal(configRaw, &configResp); err != nil {
+		return fmt.Errorf("parse config response: %w", err)
+	}
+
+	// Parse the config object to read the existing agents.list.
+	var cfg map[string]any
+	if err := json.Unmarshal(configResp.Config, &cfg); err != nil {
+		return fmt.Errorf("parse config: %w", err)
+	}
+
+	// Extract existing agents.list (may not exist yet).
+	var agentsList []any
+	if agents, ok := cfg["agents"].(map[string]any); ok {
+		if list, ok := agents["list"].([]any); ok {
+			agentsList = list
+		}
+	}
+
+	// Append the new agent entry.
+	newAgent := map[string]any{
+		"id":        name,
+		"name":      name,
+		"workspace": workspace,
+		"agentDir":  agentDir,
+	}
+	agentsList = append(agentsList, newAgent)
+
+	// Build the patch with the full updated agents.list (arrays replace).
+	patch := map[string]any{
+		"agents": map[string]any{
+			"list": agentsList,
+		},
+	}
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("marshal config patch: %w", err)
+	}
+
+	if err := c.gw.ConfigPatch(ctx, protocol.ConfigPatchParams{
+		Raw:      string(raw),
+		BaseHash: configResp.Hash,
+		Note:     fmt.Sprintf("add agent %q", name),
+	}); err != nil {
+		return fmt.Errorf("config patch: %w", err)
+	}
+
+	// Seed IDENTITY.md so the agent has a name.
+	identity := fmt.Sprintf("# Identity\n\nName: %s\n", name)
+	if _, err := c.gw.AgentsFilesSet(ctx, protocol.AgentsFilesSetParams{
+		AgentID: name,
+		Name:    "IDENTITY.md",
+		Content: identity,
+	}); err != nil {
+		// Non-fatal: agent is created but identity file may need manual setup.
+		log.Printf("warning: failed to seed IDENTITY.md: %v", err)
+	}
+
+	return nil
+}
+
+// CreateSession creates a new session for the given agent and returns the
+// gateway-assigned session key.
+func (c *Client) CreateSession(ctx context.Context, agentID string) (string, error) {
+	raw, err := c.gw.SessionsCreate(ctx, protocol.SessionsCreateParams{
+		AgentID: agentID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("sessions create: %w", err)
+	}
+	var result struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return "", fmt.Errorf("parse session result: %w", err)
+	}
+	return result.Key, nil
+}
+
 // ChatSend sends a chat message and returns the initial ack.
 func (c *Client) ChatSend(ctx context.Context, sessionKey, message, idemKey string) (*protocol.ChatSendResult, error) {
 	return c.gw.ChatSend(ctx, protocol.ChatSendParams{

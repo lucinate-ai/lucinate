@@ -74,6 +74,20 @@ type execSubmittedMsg struct {
 	err error
 }
 
+// agentCreatedMsg is returned when an agent is created via the API.
+type agentCreatedMsg struct {
+	name string
+	err  error
+}
+
+// sessionCreatedMsg is returned when a session is created for a non-default agent.
+type sessionCreatedMsg struct {
+	sessionKey string
+	agentName  string
+	modelID    string
+	err        error
+}
+
 // skillsDiscoveredMsg is returned when skill discovery completes.
 type skillsDiscoveredMsg struct {
 	skills []agentSkill

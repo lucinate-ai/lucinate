@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/outofcoffee/repclaw/internal/client"
@@ -51,6 +53,17 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = viewSelect
 		return m, nil
 
+	case sessionCreatedMsg:
+		if msg.err != nil {
+			m.selectModel.err = msg.err
+			m.state = viewSelect
+			return m, nil
+		}
+		m.chatModel = newChatModel(m.client, msg.sessionKey, msg.agentName, msg.modelID)
+		m.chatModel.setSize(m.width, m.height)
+		m.state = viewChat
+		return m, m.chatModel.Init()
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
@@ -79,10 +92,26 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if item.agent.Model != nil {
 					modelID = item.agent.Model.Primary
 				}
-				m.chatModel = newChatModel(m.client, item.sessionKey, name, modelID)
-				m.chatModel.setSize(m.width, m.height)
-				m.state = viewChat
-				return m, m.chatModel.Init()
+				if item.sessionKey == m.selectModel.mainKey {
+					// Default agent: use the main session key directly.
+					m.chatModel = newChatModel(m.client, item.sessionKey, name, modelID)
+					m.chatModel.setSize(m.width, m.height)
+					m.state = viewChat
+					return m, m.chatModel.Init()
+				}
+				// Non-default agent: create a session so the gateway
+				// routes to the correct agent and workspace.
+				cl := m.client
+				agentID := item.agent.ID
+				return m, func() tea.Msg {
+					key, err := cl.CreateSession(context.Background(), agentID)
+					return sessionCreatedMsg{
+						sessionKey: key,
+						agentName:  name,
+						modelID:    modelID,
+						err:        err,
+					}
+				}
 			}
 		}
 		return m, cmd
