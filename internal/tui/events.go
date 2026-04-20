@@ -164,6 +164,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 			streaming: true,
 		})
 		m.updateViewport()
+		return m.ensureSpinnerTicking()
 
 	case "final":
 		logEvent("  FINAL msgContent=%s", string(chatEv.Message))

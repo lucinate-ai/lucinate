@@ -19,6 +19,12 @@ import (
 
 const inputHeight = 3
 
+// spinnerFrames cycles the streaming-response placeholder through a braille
+// spinner. Each frame is a single display cell so line wrapping is unaffected.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+const spinnerInterval = 120 * time.Millisecond
+
 // chatModel is the chat view.
 type chatModel struct {
 	viewport         viewport.Model
@@ -36,6 +42,33 @@ type chatModel struct {
 	modelID          string
 	skills           []agentSkill
 	skillCatalogSent bool
+	spinnerFrame     int
+	spinnerTicking   bool
+}
+
+func spinnerTickCmd() tea.Cmd {
+	return tea.Tick(spinnerInterval, func(time.Time) tea.Msg {
+		return spinnerTickMsg{}
+	})
+}
+
+// hasStreamingMessage reports whether any assistant message is still streaming.
+func (m *chatModel) hasStreamingMessage() bool {
+	for i := range m.messages {
+		if m.messages[i].streaming {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureSpinnerTicking starts the spinner animation if one is not already scheduled.
+func (m *chatModel) ensureSpinnerTicking() tea.Cmd {
+	if m.spinnerTicking {
+		return nil
+	}
+	m.spinnerTicking = true
+	return spinnerTickCmd()
 }
 
 func newChatModel(c *client.Client, sessionKey, agentName, modelID string) chatModel {
@@ -275,6 +308,15 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		ev := protocol.Event(msg)
 		cmd := m.handleEvent(ev)
 		return m, cmd
+
+	case spinnerTickMsg:
+		if !m.hasStreamingMessage() {
+			m.spinnerTicking = false
+			return m, nil
+		}
+		m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+		m.updateViewport()
+		return m, spinnerTickCmd()
 	}
 
 	// Update sub-components.

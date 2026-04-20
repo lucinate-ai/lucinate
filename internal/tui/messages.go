@@ -92,3 +92,6 @@ type sessionCreatedMsg struct {
 type skillsDiscoveredMsg struct {
 	skills []agentSkill
 }
+
+// spinnerTickMsg advances the streaming-response placeholder animation.
+type spinnerTickMsg struct{}
