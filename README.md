@@ -1,16 +1,16 @@
 # repclaw
 
-[![CI](https://github.com/outofcoffee/repclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/outofcoffee/repclaw/actions/workflows/ci.yml)
+The terminal client for [OpenClaw](https://github.com/daggerhashimoto/openclaw-nerve).
 
-A terminal chat client for [OpenClaw](https://github.com/daggerhashimoto/openclaw-nerve). Pick an agent, start talking, see responses stream in live.
+[![CI](https://github.com/outofcoffee/repclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/outofcoffee/repclaw/actions/workflows/ci.yml)
 
 ![repclaw demo](docs/demo.gif)
 
 ## What it does
 
-repclaw connects to your OpenClaw gateway over WebSocket and gives you a clean TUI for chatting with agents. It loads recent conversation history on startup so you have context, and streams responses as they arrive — no waiting for the full reply.
+repclaw is the terminal-native client for OpenClaw. Connect to your gateway, pick an agent, and chat — with streaming responses, markdown rendering, and a keyboard-driven interface that doesn't make you reach for the mouse.
 
-That's it. No file browsers, no task boards, no dashboards. Just chat.
+No file browsers, no task boards, no dashboards. Just chat.
 
 ### Highlights
 
@@ -125,9 +125,9 @@ Prefix input with `!` to run a command on the gateway host. The input border tur
 
 The gateway's exec security policy controls which commands are allowed. If a command is denied, you'll see an error message. Configure exec permissions on the gateway host using `openclaw config`.
 
-## How it works
+## Built on
 
-repclaw uses the [openclaw-go](https://github.com/a3tai/openclaw-go) SDK to communicate with the gateway. The TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lip Gloss](https://github.com/charmbracelet/lipgloss). Completed responses are rendered as markdown with [Glamour](https://github.com/charmbracelet/glamour).
+repclaw uses the [openclaw-go](https://github.com/a3tai/openclaw-go) SDK for gateway communication. The TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lip Gloss](https://github.com/charmbracelet/lipgloss), with markdown rendered via [Glamour](https://github.com/charmbracelet/glamour).
 
 Device identity (Ed25519 keypair) is stored at `~/.openclaw-go/identity/` and shared with other openclaw-go clients.
 
