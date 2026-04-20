@@ -1,0 +1,18 @@
+services:
+  gateway:
+    image: ghcr.io/openclaw/openclaw:latest
+    ports:
+      - "18789:18789"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./openclaw.json:/home/node/.openclaw/openclaw.json
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: "repclaw-integration-test"
+      OLLAMA_API_KEY: "ollama-local"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18789/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s

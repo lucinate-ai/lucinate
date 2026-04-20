@@ -1,0 +1,22 @@
+{
+  "models": {
+    "providers": {
+      "ollama": {
+        "baseUrl": "http://host.docker.internal:11434"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "ollama/qwen2.5:3b"
+      }
+    }
+  },
+  "tools": {
+    "exec": {
+      "security": "full",
+      "ask": "off"
+    }
+  }
+}

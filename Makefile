@@ -34,6 +34,18 @@ coverage:
 coverage-html: coverage
 	go tool cover -html=coverage.out -o coverage.html
 
+.PHONY: test-integration-setup
+test-integration-setup:
+	./test/integration/setup.sh
+
+.PHONY: test-integration
+test-integration:
+	go test -tags integration -count=1 -v ./internal/tui/
+
+.PHONY: test-integration-teardown
+test-integration-teardown:
+	./test/integration/teardown.sh
+
 .PHONY: demo
 demo: build
 	PATH="$(CURDIR):$(PATH)" vhs docs/demo.tape
