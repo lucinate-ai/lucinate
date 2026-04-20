@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.12.0] - 2026-04-20
+### Added
+- feat: add session browser via /sessions command (#9)
+
+### Changed
+- test: add rendering tests using teatest/v2 (#43)
+
+### Fixed
+- fix: return to correct parent view when pressing escape from chat
+
 ## [0.11.1] - 2026-04-20
 ### Changed
 - refactor: use gateway agents.create API instead of config patching
