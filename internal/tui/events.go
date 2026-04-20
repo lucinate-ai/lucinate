@@ -69,7 +69,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		}
 		if len(m.messages) > 0 {
 			last := &m.messages[len(m.messages)-1]
-			if last.role == "system" && last.content == "running..." {
+			if last.role == "system" && last.content == "running on gateway..." {
 				output := finished.Output
 				if output == "" {
 					output = "(no output)"
@@ -93,7 +93,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		if resolved.Decision == "deny" {
 			if len(m.messages) > 0 {
 				last := &m.messages[len(m.messages)-1]
-				if last.role == "system" && last.content == "running..." {
+				if last.role == "system" && last.content == "running on gateway..." {
 					last.content = ""
 					last.errMsg = "command execution denied"
 				}
@@ -117,7 +117,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		}
 		if len(m.messages) > 0 {
 			last := &m.messages[len(m.messages)-1]
-			if last.role == "system" && last.content == "running..." {
+			if last.role == "system" && last.content == "running on gateway..." {
 				last.content = ""
 				last.errMsg = "command execution denied"
 			}

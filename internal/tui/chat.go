@@ -315,6 +315,19 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 
 			m.textarea.Reset()
 
+			if strings.HasPrefix(text, "!!") {
+				command := strings.TrimSpace(text[2:])
+				if command == "" {
+					return m, nil
+				}
+				m.messages = append(m.messages, chatMessage{role: "system", content: fmt.Sprintf("!! %s", command)})
+				m.messages = append(m.messages, chatMessage{role: "system", content: "running on gateway..."})
+				m.sending = true
+				m.updateViewport()
+				cmds = append(cmds, m.execCommand(command))
+				return m, tea.Batch(cmds...)
+			}
+
 			if strings.HasPrefix(text, "!") {
 				command := strings.TrimSpace(text[1:])
 				if command == "" {
@@ -324,7 +337,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.messages = append(m.messages, chatMessage{role: "system", content: "running..."})
 				m.sending = true
 				m.updateViewport()
-				cmds = append(cmds, m.execCommand(command))
+				cmds = append(cmds, localExecCommand(command))
 				return m, tea.Batch(cmds...)
 			}
 
@@ -339,7 +352,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		if msg.err != nil {
 			if len(m.messages) > 0 {
 				last := &m.messages[len(m.messages)-1]
-				if last.role == "system" && last.content == "running..." {
+				if last.role == "system" && (last.content == "running..." || last.content == "running on gateway...") {
 					last.content = ""
 					last.errMsg = msg.err.Error()
 				}
@@ -349,6 +362,29 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case localExecFinishedMsg:
+		if len(m.messages) > 0 {
+			last := &m.messages[len(m.messages)-1]
+			if last.role == "system" && last.content == "running..." {
+				if msg.err != nil {
+					last.content = ""
+					last.errMsg = msg.err.Error()
+				} else {
+					output := msg.output
+					if output == "" {
+						output = "(no output)"
+					}
+					if msg.exitCode != 0 {
+						output += fmt.Sprintf("\nexit code: %d", msg.exitCode)
+					}
+					last.content = output
+				}
+			}
+		}
+		m.updateViewport()
+		cmd := m.drainQueueSkipRefresh()
+		return m, cmd
 
 	case chatSentMsg:
 		if msg.err != nil {
@@ -455,6 +491,18 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 	text := m.pendingMessages[0]
 	m.pendingMessages = m.pendingMessages[1:]
 
+	if strings.HasPrefix(text, "!!") {
+		command := strings.TrimSpace(text[2:])
+		if command == "" {
+			m.sending = false
+			return nil
+		}
+		m.messages = append(m.messages, chatMessage{role: "system", content: fmt.Sprintf("!! %s", command)})
+		m.messages = append(m.messages, chatMessage{role: "system", content: "running on gateway..."})
+		m.updateViewport()
+		return m.execCommand(command)
+	}
+
 	if strings.HasPrefix(text, "!") {
 		command := strings.TrimSpace(text[1:])
 		if command == "" {
@@ -464,7 +512,7 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 		m.messages = append(m.messages, chatMessage{role: "system", content: fmt.Sprintf("$ %s", command)})
 		m.messages = append(m.messages, chatMessage{role: "system", content: "running..."})
 		m.updateViewport()
-		return m.execCommand(command)
+		return localExecCommand(command)
 	}
 
 	m.messages = append(m.messages, chatMessage{role: "user", content: text})
@@ -528,17 +576,22 @@ func (m chatModel) View() string {
 		Render(title)
 
 	borderStyle := inputBorderStyle
-	isExecMode := strings.HasPrefix(m.textarea.Value(), "!")
-	if isExecMode {
+	isRemoteExec := strings.HasPrefix(m.textarea.Value(), "!!")
+	isLocalExec := !isRemoteExec && strings.HasPrefix(m.textarea.Value(), "!")
+	if isRemoteExec {
 		borderStyle = execBorderStyle
+	} else if isLocalExec {
+		borderStyle = localExecBorderStyle
 	}
 	input := borderStyle.
 		Width(m.width - 4).
 		Render(m.textarea.View())
 
 	var help string
-	if isExecMode {
+	if isRemoteExec {
 		help = helpStyle.Render(execPrefixStyle.Render(" remote command") + " — runs on gateway host")
+	} else if isLocalExec {
+		help = helpStyle.Render(localExecPrefixStyle.Render(" local command") + " — runs on this machine")
 	} else {
 		hint := m.slashCommandHint(m.textarea.Value())
 		if hint != "" {

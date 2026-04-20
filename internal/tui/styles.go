@@ -7,8 +7,9 @@ var (
 	subtle  = lipgloss.Color("#5C5C5C")
 	accent  = lipgloss.Color("#AD8CFF")
 	userClr = lipgloss.Color("#48CAE4")
-	errClr  = lipgloss.Color("#FF6B6B")
-	execClr = lipgloss.Color("#FFB74D")
+	errClr      = lipgloss.Color("#FF6B6B")
+	execClr     = lipgloss.Color("#FFB74D")
+	localExcClr = lipgloss.Color("#66BB6A")
 
 	// Header bar.
 	headerStyle = lipgloss.NewStyle().
@@ -53,10 +54,21 @@ var (
 			BorderForeground(execClr).
 			Padding(0, 1)
 
-	// Exec command prefix style.
+	// Exec command prefix style (remote).
 	execPrefixStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(execClr)
+
+	// Input area border for local exec mode.
+	localExecBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(localExcClr).
+				Padding(0, 1)
+
+	// Local exec command prefix style.
+	localExecPrefixStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(localExcClr)
 
 	// Help text.
 	helpStyle = lipgloss.NewStyle().

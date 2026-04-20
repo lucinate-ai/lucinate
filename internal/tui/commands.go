@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/a3tai/openclaw-go/protocol"
@@ -126,7 +128,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			}
 		}
 	case "/help", "/commands":
-		helpText := "/quit, /exit — quit repclaw\n/agents — return to agent picker\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/model — list available models\n/model <name> — switch model\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/skills — list available agent skills\n/help — show this help\n\n!<command> — run command on gateway host"
+		helpText := "/quit, /exit — quit repclaw\n/agents — return to agent picker\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/model — list available models\n/model <name> — switch model\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/skills — list available agent skills\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
 		if len(m.skills) > 0 {
 			helpText += fmt.Sprintf("\n\n%d agent skill(s) available — type /skills to list", len(m.skills))
 		}
@@ -276,5 +278,30 @@ func (m *chatModel) execCommand(command string) tea.Cmd {
 
 		// Output arrives via exec.finished event through the event pump.
 		return execSubmittedMsg{}
+	}
+}
+
+// localExecCommand runs a command locally on the user's machine.
+func localExecCommand(command string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("sh", "-c", command)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		err := cmd.Run()
+
+		output := stdout.String() + stderr.String()
+		output = strings.TrimRight(output, "\n")
+
+		exitCode := 0
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				exitCode = exitErr.ExitCode()
+			} else {
+				return localExecFinishedMsg{err: err}
+			}
+		}
+		return localExecFinishedMsg{output: output, exitCode: exitCode}
 	}
 }

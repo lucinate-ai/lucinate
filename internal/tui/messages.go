@@ -78,6 +78,13 @@ type execSubmittedMsg struct {
 	err error
 }
 
+// localExecFinishedMsg carries the result of a locally executed command.
+type localExecFinishedMsg struct {
+	output   string
+	exitCode int
+	err      error
+}
+
 // agentCreatedMsg is returned when an agent is created via the API.
 type agentCreatedMsg struct {
 	name string

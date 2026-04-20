@@ -231,13 +231,24 @@ func TestRender_ChatView_SystemMessageRendered(t *testing.T) {
 	waitForContains(t, tm.Output(), "Switched to claude-sonnet-4-6")
 }
 
-func TestRender_ChatView_ExecModeHelpText(t *testing.T) {
+func TestRender_ChatView_LocalExecModeHelpText(t *testing.T) {
 	adapter := newRenderingChatModel(t, "main")
 
 	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
 	defer finishProgram(t, tm)
 
 	tm.Type("!ls")
+
+	waitForContains(t, tm.Output(), "local command")
+}
+
+func TestRender_ChatView_RemoteExecModeHelpText(t *testing.T) {
+	adapter := newRenderingChatModel(t, "main")
+
+	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
+	defer finishProgram(t, tm)
+
+	tm.Type("!!ls")
 
 	waitForContains(t, tm.Output(), "remote command")
 }

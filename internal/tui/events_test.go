@@ -436,7 +436,7 @@ func TestDrainQueueSkipRefresh_DrainsPendingMessages(t *testing.T) {
 	}
 }
 
-func TestDrainQueueOpt_ExecCommandInQueue(t *testing.T) {
+func TestDrainQueueOpt_LocalExecCommandInQueue(t *testing.T) {
 	m := newTestChatModel()
 	m.sending = true
 	m.pendingMessages = []string{"!ls -la"}
@@ -444,7 +444,7 @@ func TestDrainQueueOpt_ExecCommandInQueue(t *testing.T) {
 	cmd := m.drainQueue()
 
 	if cmd == nil {
-		t.Fatal("expected non-nil cmd for exec command in queue")
+		t.Fatal("expected non-nil cmd for local exec command in queue")
 	}
 	// Should have added "$ ls -la" and "running..." messages.
 	found := false
@@ -454,11 +454,40 @@ func TestDrainQueueOpt_ExecCommandInQueue(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("expected exec command message in messages")
+		t.Error("expected local exec command message in messages")
 	}
 }
 
-func TestDrainQueueOpt_EmptyExecCommandIgnored(t *testing.T) {
+func TestDrainQueueOpt_RemoteExecCommandInQueue(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.pendingMessages = []string{"!!uptime"}
+
+	cmd := m.drainQueue()
+
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd for remote exec command in queue")
+	}
+	// Should have added "!! uptime" and "running on gateway..." messages.
+	foundCmd := false
+	foundRunning := false
+	for _, msg := range m.messages {
+		if msg.content == "!! uptime" {
+			foundCmd = true
+		}
+		if msg.content == "running on gateway..." {
+			foundRunning = true
+		}
+	}
+	if !foundCmd {
+		t.Error("expected remote exec command message in messages")
+	}
+	if !foundRunning {
+		t.Error("expected 'running on gateway...' message")
+	}
+}
+
+func TestDrainQueueOpt_EmptyLocalExecCommandIgnored(t *testing.T) {
 	m := newTestChatModel()
 	m.sending = true
 	m.pendingMessages = []string{"!"}
@@ -471,6 +500,85 @@ func TestDrainQueueOpt_EmptyExecCommandIgnored(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd for empty exec command")
+	}
+}
+
+func TestDrainQueueOpt_EmptyRemoteExecCommandIgnored(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.pendingMessages = []string{"!!"}
+
+	cmd := m.drainQueue()
+
+	if m.sending {
+		t.Error("expected sending = false for empty remote exec command")
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for empty remote exec command")
+	}
+}
+
+func TestLocalExecFinishedMsg_UpdatesMessage(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.messages = []chatMessage{
+		{role: "system", content: "$ echo hello"},
+		{role: "system", content: "running..."},
+	}
+
+	updated, _ := m.Update(localExecFinishedMsg{output: "hello", exitCode: 0})
+
+	last := updated.messages[len(updated.messages)-1]
+	if last.content != "hello" {
+		t.Errorf("expected output 'hello', got %q", last.content)
+	}
+}
+
+func TestLocalExecFinishedMsg_NoOutput(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.messages = []chatMessage{
+		{role: "system", content: "$ true"},
+		{role: "system", content: "running..."},
+	}
+
+	updated, _ := m.Update(localExecFinishedMsg{output: "", exitCode: 0})
+
+	last := updated.messages[len(updated.messages)-1]
+	if last.content != "(no output)" {
+		t.Errorf("expected '(no output)', got %q", last.content)
+	}
+}
+
+func TestLocalExecFinishedMsg_NonZeroExitCode(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.messages = []chatMessage{
+		{role: "system", content: "$ false"},
+		{role: "system", content: "running..."},
+	}
+
+	updated, _ := m.Update(localExecFinishedMsg{output: "error output", exitCode: 1})
+
+	last := updated.messages[len(updated.messages)-1]
+	if last.content != "error output\nexit code: 1" {
+		t.Errorf("expected exit code in output, got %q", last.content)
+	}
+}
+
+func TestLocalExecFinishedMsg_Error(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.messages = []chatMessage{
+		{role: "system", content: "$ badcmd"},
+		{role: "system", content: "running..."},
+	}
+
+	updated, _ := m.Update(localExecFinishedMsg{err: errString("exec: not found")})
+
+	last := updated.messages[len(updated.messages)-1]
+	if last.errMsg != "exec: not found" {
+		t.Errorf("expected error message, got errMsg=%q", last.errMsg)
 	}
 }
 
@@ -547,7 +655,7 @@ func TestHandleEvent_ExecFinished_UpdatesMessage(t *testing.T) {
 	m.sessionKey = "sess-1"
 	m.messages = []chatMessage{
 		{role: "system", content: "$ ls"},
-		{role: "system", content: "running..."},
+		{role: "system", content: "running on gateway..."},
 	}
 	finished := protocol.ExecFinished{
 		SessionKey: "sess-1",
@@ -567,7 +675,7 @@ func TestHandleEvent_ExecFinished_NoOutput(t *testing.T) {
 	m.sessionKey = "sess-1"
 	m.messages = []chatMessage{
 		{role: "system", content: "$ touch foo"},
-		{role: "system", content: "running..."},
+		{role: "system", content: "running on gateway..."},
 	}
 	finished := protocol.ExecFinished{SessionKey: "sess-1", Output: ""}
 	payload, _ := json.Marshal(finished)
@@ -583,7 +691,7 @@ func TestHandleEvent_ExecFinished_NonZeroExitCode(t *testing.T) {
 	m.sessionKey = "sess-1"
 	m.messages = []chatMessage{
 		{role: "system", content: "$ false"},
-		{role: "system", content: "running..."},
+		{role: "system", content: "running on gateway..."},
 	}
 	exitCode := 1
 	finished := protocol.ExecFinished{SessionKey: "sess-1", ExitCode: &exitCode, Output: "error output"}
@@ -599,12 +707,12 @@ func TestHandleEvent_ExecFinished_DifferentSession_Ignored(t *testing.T) {
 	m := newTestChatModel()
 	m.sessionKey = "sess-1"
 	m.messages = []chatMessage{
-		{role: "system", content: "running..."},
+		{role: "system", content: "running on gateway..."},
 	}
 	finished := protocol.ExecFinished{SessionKey: "other-session", Output: "should not appear"}
 	payload, _ := json.Marshal(finished)
 	m.handleEvent(protocol.Event{EventName: protocol.EventExecFinished, Payload: payload})
-	if m.messages[0].content != "running..." {
+	if m.messages[0].content != "running on gateway..." {
 		t.Error("message should be unchanged for different session")
 	}
 }
@@ -612,7 +720,7 @@ func TestHandleEvent_ExecFinished_DifferentSession_Ignored(t *testing.T) {
 func TestHandleEvent_ExecApprovalResolved_Deny(t *testing.T) {
 	m := newTestChatModel()
 	m.messages = []chatMessage{
-		{role: "system", content: "running..."},
+		{role: "system", content: "running on gateway..."},
 	}
 	resolved := protocol.ExecApprovalResolvedEvent{ID: "req-1", Decision: "deny"}
 	payload, _ := json.Marshal(resolved)
@@ -626,7 +734,7 @@ func TestHandleEvent_ExecApprovalResolved_Deny(t *testing.T) {
 func TestHandleEvent_ExecApprovalResolved_Allow(t *testing.T) {
 	m := newTestChatModel()
 	m.messages = []chatMessage{
-		{role: "system", content: "running..."},
+		{role: "system", content: "running on gateway..."},
 	}
 	resolved := protocol.ExecApprovalResolvedEvent{ID: "req-1", Decision: "allow-once"}
 	payload, _ := json.Marshal(resolved)
@@ -635,7 +743,7 @@ func TestHandleEvent_ExecApprovalResolved_Allow(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd for allow decision")
 	}
-	if m.messages[0].content != "running..." {
+	if m.messages[0].content != "running on gateway..." {
 		t.Error("message should be unchanged for allow decision")
 	}
 }
@@ -644,7 +752,7 @@ func TestHandleEvent_ExecDenied(t *testing.T) {
 	m := newTestChatModel()
 	m.sessionKey = "sess-1"
 	m.messages = []chatMessage{
-		{role: "system", content: "running..."},
+		{role: "system", content: "running on gateway..."},
 	}
 	denied := protocol.ExecDenied{SessionKey: "sess-1", Reason: "policy"}
 	payload, _ := json.Marshal(denied)
@@ -659,12 +767,12 @@ func TestHandleEvent_ExecDenied_DifferentSession_Ignored(t *testing.T) {
 	m := newTestChatModel()
 	m.sessionKey = "sess-1"
 	m.messages = []chatMessage{
-		{role: "system", content: "running..."},
+		{role: "system", content: "running on gateway..."},
 	}
 	denied := protocol.ExecDenied{SessionKey: "other-session"}
 	payload, _ := json.Marshal(denied)
 	m.handleEvent(protocol.Event{EventName: protocol.EventExecDenied, Payload: payload})
-	if m.messages[0].content != "running..." {
+	if m.messages[0].content != "running on gateway..." {
 		t.Error("message should be unchanged for different session")
 	}
 }

@@ -17,7 +17,7 @@ No file browsers, no task boards, no dashboards. Just chat.
 - **Chat with your OpenClaw agents** from the terminal, with streaming responses, conversation history, and multi-agent support
 - **Create agents** directly from the TUI
 - **Markdown rendering** for assistant messages
-- **Remote command execution** on the gateway host via `!` prefix
+- **Shell commands** — run locally with `!` or remotely on the gateway with `!!`
 - **Message queueing** so you can keep typing while the agent is responding
 - **Local agent skills** loaded from `~/.agents/skills/` as slash commands
 - **Live token/cost stats** in the header bar
@@ -133,17 +133,29 @@ Type these in the chat input. Tab autocompletes partial commands.
 | `/stats` | Show token usage and cost breakdown |
 | `/quit`, `/exit` | Quit repclaw |
 
-## Remote commands
+## Shell commands
 
-Prefix input with `!` to run a command on the gateway host. The input border turns amber to indicate remote execution mode.
+### Local commands
+
+Prefix input with `!` to run a command locally on your machine. The input border turns green to indicate local execution mode.
 
 ```
-!hostname
-!ls -la /tmp
-!uptime
+!ls -la
+!git status
+!cat README.md
 ```
 
-The gateway's exec security policy controls which commands are allowed. If a command is denied, you'll see an error message. Configure exec permissions on the gateway host using `openclaw config`.
+### Remote commands
+
+Prefix input with `!!` to run a command on the gateway host. The input border turns amber to indicate remote execution mode.
+
+```
+!!hostname
+!!ls -la /tmp
+!!uptime
+```
+
+The gateway's exec security policy controls which remote commands are allowed. If a command is denied, you'll see an error message. Configure exec permissions on the gateway host using `openclaw config`.
 
 ## Built on
 
