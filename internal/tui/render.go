@@ -68,15 +68,16 @@ func (m *chatModel) updateViewport() {
 		}
 	}
 
-	// Render queued messages that haven't been sent yet.
+	// Render queued messages that haven't been sent yet — shown as dim/italic
+	// shadows to distinguish them from confirmed messages.
 	for _, text := range m.pendingMessages {
 		b.WriteString("\n")
 		label := m.prefixLabel("You")
-		prefix := userPrefixStyle.Render(label)
+		prefix := pendingPrefixStyle.Render(label)
 		prefixIndent := strings.Repeat(" ", len(label))
 		b.WriteString(prefix)
 		body := wordWrap(text, contentWidth-len(label))
-		b.WriteString(indentMultiline(body, prefixIndent))
+		b.WriteString(pendingBodyStyle.Render(indentMultiline(body, prefixIndent)))
 	}
 
 	content := b.String()
