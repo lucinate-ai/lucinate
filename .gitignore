@@ -25,3 +25,6 @@ dist/
 
 # Integration test worktrees
 .claude/worktrees/
+
+# Integration test state
+test/integration/state/

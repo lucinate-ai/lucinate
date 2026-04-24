@@ -1,15 +1,20 @@
 services:
   gateway:
     image: ghcr.io/openclaw/openclaw:latest
+    user: "${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}"
     ports:
       - "18789:18789"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./openclaw.json:/home/node/.openclaw/openclaw.json
+      - ./state:/home/node/.openclaw
     environment:
+      HOME: /home/node
       OPENCLAW_GATEWAY_TOKEN: "repclaw-integration-test"
       OLLAMA_API_KEY: "ollama-local"
+      # Redirect npm cache to /tmp so plugin dep installs work when running
+      # as a non-root user (the image's /home/node/.npm is root-owned).
+      npm_config_cache: /tmp/npm-cache
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18789/healthz || exit 1"]
       interval: 5s

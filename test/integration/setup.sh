@@ -23,8 +23,10 @@ BACKUP_FILE="$IDENTITY_DIR/device-token.backup"
 
 MODEL="${MODEL:-qwen2.5:3b}"
 GATEWAY_URL="http://localhost:18789"
-PAIR_TIMEOUT=60
+GATEWAY_WS_URL="ws://127.0.0.1:18789/ws"
 HEALTH_TIMEOUT=60
+
+GATEWAY_TOKEN="repclaw-integration-test"
 
 # --- Parse args -----------------------------------------------------------
 
@@ -83,11 +85,27 @@ ok "Model ready"
 
 # --- Gateway ---------------------------------------------------------------
 
+info "Preparing gateway state directory"
+STATE_DIR="$SCRIPT_DIR/state"
+mkdir -p "$STATE_DIR"
+cp "$SCRIPT_DIR/openclaw.json" "$STATE_DIR/openclaw.json"
+ok "State directory ready at $STATE_DIR"
+
 info "Starting OpenClaw gateway"
-docker compose -f "$COMPOSE_FILE" up -d --wait 2>&1 | sed 's/^/    /'
+OPENCLAW_UID="$(id -u)" OPENCLAW_GID="$(id -g)" \
+    docker compose -f "$COMPOSE_FILE" up -d --wait 2>&1 | sed 's/^/    /'
 ok "Gateway is healthy"
 
 # --- Device pairing --------------------------------------------------------
+#
+# Flow:
+#   1. Back up any existing device token.
+#   2. Seed the gateway token so the first connect authenticates.
+#   3. Connect once — this registers the device as pending (NOT_PAIRED).
+#   4. Approve the pending device via the gateway CLI.
+#   5. Rotate the device token to get a proper device credential.
+#   6. Save the rotated token locally.
+#   7. Verify the client can now connect with the device token.
 
 info "Pairing device with test gateway"
 
@@ -99,50 +117,68 @@ if [ -f "$IDENTITY_DIR/device-token" ]; then
     ok "Backed up existing device token"
 fi
 
-# Start the pairing client in the background. It will block until approved.
-OPENCLAW_GATEWAY_URL="$GATEWAY_URL" go run "$SCRIPT_DIR/pair/main.go" &
-PAIR_PID=$!
+# Seed the gateway token as the device token. The gateway accepts this as
+# bearer auth on the first connect, which registers the device as pending.
+echo -n "$GATEWAY_TOKEN" > "$IDENTITY_DIR/device-token"
+ok "Seeded gateway token for initial authentication"
 
-# Poll for pending device pairing requests and auto-approve.
-APPROVED=false
-for i in $(seq 1 "$PAIR_TIMEOUT"); do
-    # Try to list pending devices. The CLI output format may vary, so we
-    # try --json first, then fall back to plain text parsing.
-    PENDING=$(docker compose -f "$COMPOSE_FILE" exec -T \
-        -e OPENCLAW_GATEWAY_TOKEN=repclaw-integration-test \
-        gateway openclaw device list --pending --json 2>/dev/null || echo "")
+# First connect: registers the device as pending (exits non-zero with NOT_PAIRED).
+info "Registering device with gateway"
+OPENCLAW_GATEWAY_URL="$GATEWAY_URL" go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /' || true
 
-    if [ -n "$PENDING" ] && [ "$PENDING" != "[]" ] && [ "$PENDING" != "null" ]; then
-        # Extract device ID — handle both .id and .deviceId field names.
-        DEVICE_ID=$(echo "$PENDING" | jq -r '
-            if type == "array" then
-                .[0] | (.id // .deviceId // .device_id // empty)
-            else
-                (.id // .deviceId // .device_id // empty)
-            end' 2>/dev/null || echo "")
+# Get the pending device from the gateway.
+info "Fetching pending device list"
+DEVICES_JSON="$(docker compose -f "$COMPOSE_FILE" exec -T gateway \
+    openclaw devices list --json \
+    --token "$GATEWAY_TOKEN" \
+    --url "$GATEWAY_WS_URL" 2>/dev/null)"
 
-        if [ -n "$DEVICE_ID" ]; then
-            info "Approving device: $DEVICE_ID"
-            docker compose -f "$COMPOSE_FILE" exec -T \
-                -e OPENCLAW_GATEWAY_TOKEN=repclaw-integration-test \
-                gateway openclaw device approve "$DEVICE_ID" 2>&1 | sed 's/^/    /'
-            APPROVED=true
-            break
-        fi
-    fi
-    sleep 1
-done
+REQUEST_ID="$(echo "$DEVICES_JSON" | jq -r '.pending[0].requestId // empty')"
+DEVICE_ID="$(echo "$DEVICES_JSON" | jq -r '.pending[0].deviceId // empty')"
 
-if [ "$APPROVED" = false ]; then
-    kill "$PAIR_PID" 2>/dev/null || true
-    fail "No pending device found after ${PAIR_TIMEOUT}s. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
+if [ -z "$REQUEST_ID" ] || [ -z "$DEVICE_ID" ]; then
+    fail "No pending device found. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
+fi
+ok "Found pending device: $DEVICE_ID (requestId: $REQUEST_ID)"
+
+# Approve the pending device.
+info "Approving device"
+docker compose -f "$COMPOSE_FILE" exec -T gateway \
+    openclaw devices approve "$REQUEST_ID" \
+    --token "$GATEWAY_TOKEN" \
+    --url "$GATEWAY_WS_URL" 2>&1 | sed 's/^/    /'
+ok "Device approved"
+
+# Rotate the device token to get a proper device credential.
+info "Rotating device token"
+ROTATE_JSON="$(docker compose -f "$COMPOSE_FILE" exec -T gateway \
+    openclaw devices rotate \
+    --device "$DEVICE_ID" \
+    --role operator \
+    --scope operator.read \
+    --scope operator.write \
+    --scope operator.admin \
+    --scope operator.approvals \
+    --json \
+    --token "$GATEWAY_TOKEN" \
+    --url "$GATEWAY_WS_URL" 2>/dev/null)"
+
+DEVICE_TOKEN="$(echo "$ROTATE_JSON" | jq -r '.token // empty')"
+
+if [ -z "$DEVICE_TOKEN" ]; then
+    fail "Failed to rotate device token. rotate output: $ROTATE_JSON"
 fi
 
-# Wait for the pairing client to finish (it should succeed now).
-if wait "$PAIR_PID"; then
-    ok "Device paired"
+# Save the rotated token as the active device token.
+echo -n "$DEVICE_TOKEN" > "$IDENTITY_DIR/device-token"
+ok "Device token saved"
+
+# Verify connection with the new device token.
+info "Verifying connection"
+if OPENCLAW_GATEWAY_URL="$GATEWAY_URL" go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /'; then
+    ok "Device paired and verified"
 else
-    fail "Device pairing failed. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
+    fail "Connection failed. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
 fi
 
 # --- Write .env for test runs ---------------------------------------------

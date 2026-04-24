@@ -23,6 +23,14 @@ info "Stopping OpenClaw gateway"
 docker compose -f "$COMPOSE_FILE" down 2>&1 | sed 's/^/    /'
 ok "Gateway stopped"
 
+# --- Clean state directory -------------------------------------------------
+
+STATE_DIR="$SCRIPT_DIR/state"
+if [ -d "$STATE_DIR" ]; then
+    rm -rf "$STATE_DIR"
+    ok "Removed gateway state directory"
+fi
+
 # --- Restore device token --------------------------------------------------
 
 if [ -f "$BACKUP_FILE" ]; then

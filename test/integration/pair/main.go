@@ -1,6 +1,5 @@
-// pair connects to the OpenClaw gateway to trigger device pairing.
-// It blocks until the device is approved (or the timeout expires),
-// then saves the device token and exits.
+// pair connects to the OpenClaw gateway to register or verify a device.
+// It exits 0 on success and non-zero on failure.
 //
 // Usage:
 //
@@ -35,10 +34,9 @@ func run() error {
 	}
 	defer c.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	fmt.Println("connecting to gateway (waiting for device approval)...")
 	if err := c.Connect(ctx); err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}

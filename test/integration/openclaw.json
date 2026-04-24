@@ -1,8 +1,20 @@
 {
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "repclaw-integration-test"
+    }
+  },
   "models": {
     "providers": {
       "ollama": {
-        "baseUrl": "http://host.docker.internal:11434"
+        "baseUrl": "http://host.docker.internal:11434",
+        "models": [
+          {
+            "id": "qwen2.5:3b",
+            "name": "Qwen 2.5 3B"
+          }
+        ]
       }
     }
   },
