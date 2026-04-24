@@ -150,19 +150,16 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if item.agent.Model != nil {
 					modelID = item.agent.Model.Primary
 				}
-				if item.sessionKey == m.selectModel.mainKey {
-					// Default agent: use the main session key directly.
-					m.chatModel = newChatModel(m.client, item.sessionKey, item.agent.ID, name, modelID, m.prefs)
-					m.chatModel.setSize(m.width, m.height)
-					m.state = viewChat
-					return m, m.chatModel.Init()
-				}
-				// Non-default agent: create a session so the gateway
-				// routes to the correct agent and workspace.
+				// Create/resume a session so the gateway returns
+				// the resolved session key for event filtering.
 				cl := m.client
 				agentID := item.agent.ID
+				createKey := "main"
+				if item.sessionKey == m.selectModel.mainKey {
+					createKey = item.sessionKey
+				}
 				return m, func() tea.Msg {
-					key, err := cl.CreateSession(context.Background(), agentID, "main")
+					key, err := cl.CreateSession(context.Background(), agentID, createKey)
 					return sessionCreatedMsg{
 						sessionKey: key,
 						agentID:    agentID,
