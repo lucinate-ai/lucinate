@@ -4,6 +4,9 @@
 // Usage:
 //
 //	OPENCLAW_GATEWAY_URL=http://localhost:18789 go run ./test/integration/pair
+
+//go:build ignore
+
 package main
 
 import (
