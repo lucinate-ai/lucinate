@@ -5,8 +5,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/outofcoffee/repclaw/internal/client"
-	"github.com/outofcoffee/repclaw/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 type viewState int

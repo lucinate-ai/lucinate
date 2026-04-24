@@ -8,7 +8,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/outofcoffee/repclaw/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 func TestNewChatModel_DeleteWordBackwardBinding(t *testing.T) {

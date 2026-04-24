@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 
-REPO="outofcoffee/repclaw"
-BINARY="repclaw"
+REPO="lucinate-ai/lucinate"
+BINARY="lucinate"
 INSTALL_DIR="/usr/local/bin"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')

@@ -2,10 +2,10 @@ version: 2
 
 builds:
   - main: .
-    binary: repclaw
+    binary: lucinate
     ldflags:
       - -s -w
-      - -X github.com/outofcoffee/repclaw/internal/version.Version={{.Version}}
+      - -X github.com/lucinate-ai/lucinate/internal/version.Version={{.Version}}
     goos:
       - linux
       - darwin

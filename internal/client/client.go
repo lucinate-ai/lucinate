@@ -12,7 +12,7 @@ import (
 	"github.com/a3tai/openclaw-go/identity"
 	"github.com/a3tai/openclaw-go/protocol"
 
-	"github.com/outofcoffee/repclaw/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // Client wraps the gateway SDK client and bridges events to a channel

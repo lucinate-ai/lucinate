@@ -1,4 +1,4 @@
-module github.com/outofcoffee/repclaw
+module github.com/lucinate-ai/lucinate
 
 go 1.25.8
 

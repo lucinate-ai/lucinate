@@ -8,7 +8,7 @@ import (
 var debugLog *log.Logger
 
 func init() {
-	f, err := os.OpenFile("/tmp/repclaw-events.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	f, err := os.OpenFile("/tmp/lucinate-events.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err == nil {
 		debugLog = log.New(f, "", log.LstdFlags|log.Lmicroseconds)
 	}

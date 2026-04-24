@@ -29,7 +29,7 @@ func TestSaveAndLoadPreferences(t *testing.T) {
 	}
 
 	// Verify file exists.
-	path := filepath.Join(dir, ".repclaw", "config.json")
+	path := filepath.Join(dir, ".lucinate", "config.json")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("config file not created: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestLoadPreferences_MissingHistoryLimit(t *testing.T) {
 	t.Setenv("HOME", dir)
 
 	// Write a config file without historyLimit (simulates upgrade from old version).
-	configDir := filepath.Join(dir, ".repclaw")
+	configDir := filepath.Join(dir, ".lucinate")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		t.Fatal(err)
 	}

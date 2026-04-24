@@ -3,7 +3,7 @@ package tui
 import (
 	"github.com/a3tai/openclaw-go/protocol"
 
-	"github.com/outofcoffee/repclaw/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // chatMessage represents a single message in the conversation.

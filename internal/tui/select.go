@@ -13,7 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/outofcoffee/repclaw/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/client"
 )
 
 // agentItem is a list item for the agent picker.

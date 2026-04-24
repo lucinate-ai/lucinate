@@ -30,7 +30,7 @@ func PreferencesPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".repclaw")
+	dir := filepath.Join(home, ".lucinate")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}

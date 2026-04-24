@@ -9,21 +9,21 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/outofcoffee/repclaw/internal/client"
-	"github.com/outofcoffee/repclaw/internal/config"
-	"github.com/outofcoffee/repclaw/internal/tui"
-	"github.com/outofcoffee/repclaw/internal/version"
+	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/tui"
+	"github.com/lucinate-ai/lucinate/internal/version"
 )
 
 func main() {
-	fs := flag.NewFlagSet("repclaw", flag.ExitOnError)
+	fs := flag.NewFlagSet("lucinate", flag.ExitOnError)
 	showVersion := fs.Bool("version", false, "print version and exit")
 	fs.BoolVar(showVersion, "v", false, "print version and exit")
 	historyLimit := fs.Int("history-limit", 0, "number of messages to load per session (overrides preference)")
 	_ = fs.Parse(os.Args[1:])
 
 	if *showVersion {
-		fmt.Printf("repclaw %s\n", version.Version)
+		fmt.Printf("lucinate %s\n", version.Version)
 		return
 	}
 

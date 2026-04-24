@@ -1,13 +1,13 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -X github.com/outofcoffee/repclaw/internal/version.Version=$(VERSION)
+LDFLAGS := -X github.com/lucinate-ai/lucinate/internal/version.Version=$(VERSION)
 
 .PHONY: build
 build:
-	go build -ldflags "$(LDFLAGS)" -o repclaw .
+	go build -ldflags "$(LDFLAGS)" -o lucinate .
 
 .PHONY: build-prod
 build-prod:
-	go build -ldflags "$(LDFLAGS) -s -w" -trimpath -o repclaw .
+	go build -ldflags "$(LDFLAGS) -s -w" -trimpath -o lucinate .
 
 .PHONY: fmt
 fmt:

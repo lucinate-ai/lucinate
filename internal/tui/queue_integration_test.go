@@ -17,8 +17,8 @@ import (
 	"charm.land/glamour/v2"
 	"github.com/joho/godotenv"
 
-	"github.com/outofcoffee/repclaw/internal/client"
-	"github.com/outofcoffee/repclaw/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // projectRoot returns the repo root (two levels up from this file).

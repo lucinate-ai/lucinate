@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 
-	"github.com/outofcoffee/repclaw/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/client"
 )
 
 // historyResponse is the structure of the chat.history RPC response.

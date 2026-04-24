@@ -19,7 +19,7 @@ Run a single test: `go test ./internal/tui/ -run TestExtractContent`
 
 ## Architecture
 
-repclaw is a TUI chat client for the OpenClaw gateway, built with bubbletea.
+lucinate is a TUI chat client for the OpenClaw gateway, built with bubbletea.
 
 ### Packages
 

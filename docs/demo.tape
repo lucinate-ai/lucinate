@@ -1,4 +1,4 @@
-# repclaw Demo — terminal chat client for OpenClaw
+# lucinate Demo — terminal chat client for OpenClaw
 # Record with: vhs demo.tape
 
 Output docs/demo.gif
@@ -9,8 +9,8 @@ Set Height 540
 Set Padding 10
 Set TypingSpeed 50ms
 
-# Launch repclaw
-Type "repclaw"
+# Launch lucinate
+Type "lucinate"
 Sleep 1s
 Enter
 Sleep 3s

@@ -14,8 +14,8 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/outofcoffee/repclaw/internal/client"
-	"github.com/outofcoffee/repclaw/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 const inputHeight = 3
@@ -478,7 +478,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 func (m *chatModel) sendMessage(text string) tea.Cmd {
 	sessionKey := m.sessionKey
 	return func() tea.Msg {
-		idemKey := fmt.Sprintf("repclaw-%d", time.Now().UnixNano())
+		idemKey := fmt.Sprintf("lucinate-%d", time.Now().UnixNano())
 		_, err := m.client.ChatSend(context.Background(), sessionKey, text, idemKey)
 		return chatSentMsg{err: err}
 	}
@@ -582,7 +582,7 @@ func (m *chatModel) setSize(w, h int) {
 }
 
 func (m chatModel) View() string {
-	left := fmt.Sprintf(" repclaw — %s", m.agentName)
+	left := fmt.Sprintf(" lucinate — %s", m.agentName)
 	if m.modelID != "" {
 		model := m.modelID
 		if i := strings.LastIndex(model, "/"); i >= 0 {

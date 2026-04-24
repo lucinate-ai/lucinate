@@ -1,14 +1,14 @@
-# repclaw
+# lucinate
 
 The terminal client for [OpenClaw](https://github.com/openclaw/openclaw).
 
-[![CI](https://github.com/outofcoffee/repclaw/actions/workflows/ci.yml/badge.svg)](https://github.com/outofcoffee/repclaw/actions/workflows/ci.yml)
+[![CI](https://github.com/lucinate-ai/lucinate/actions/workflows/ci.yml/badge.svg)](https://github.com/lucinate-ai/lucinate/actions/workflows/ci.yml)
 
-![repclaw demo](docs/demo.gif)
+![lucinate demo](docs/demo.gif)
 
 ## What it does
 
-repclaw is the terminal-native client for OpenClaw. Connect to your gateway, pick an agent, and start chatting. Responses stream in live, messages render as markdown, and you never need to reach for the mouse.
+lucinate is the terminal-native client for OpenClaw. Connect to your gateway, pick an agent, and start chatting. Responses stream in live, messages render as markdown, and you never need to reach for the mouse.
 
 No file browsers, no task boards, no dashboards. Just chat.
 
@@ -26,34 +26,34 @@ No file browsers, no task boards, no dashboards. Just chat.
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/outofcoffee/repclaw/main/install/repclaw.sh | sh
+curl -fsSL https://raw.githubusercontent.com/lucinate-ai/lucinate/main/install/lucinate.sh | sh
 ```
 
 Or, if you have Go 1.24+:
 
 ```sh
-go install github.com/outofcoffee/repclaw@latest
+go install github.com/lucinate-ai/lucinate@latest
 ```
 
 Or build from source:
 
 ```sh
-git clone https://github.com/outofcoffee/repclaw.git
-cd repclaw
-go build -o repclaw .
+git clone https://github.com/lucinate-ai/lucinate.git
+cd lucinate
+go build -o lucinate .
 ```
 
 ## Getting started
 
-### 1. Configure repclaw
+### 1. Configure lucinate
 
-Create a `.env` file in the directory you'll run repclaw from (or export the variable in your shell):
+Create a `.env` file in the directory you'll run lucinate from (or export the variable in your shell):
 
 ```sh
 OPENCLAW_GATEWAY_URL=https://your-gateway-host
 ```
 
-The gateway URL can use `https`, `http`, `wss`, or `ws` schemes. repclaw derives the WebSocket endpoint automatically.
+The gateway URL can use `https`, `http`, `wss`, or `ws` schemes. lucinate derives the WebSocket endpoint automatically.
 
 ### Flags
 
@@ -65,22 +65,22 @@ The gateway URL can use `https`, `http`, `wss`, or `ws` schemes. repclaw derives
 ### 2. Connect and approve the device
 
 ```sh
-repclaw
+lucinate
 ```
 
-On first run, repclaw generates an Ed25519 device identity under `~/.openclaw-go/identity/` and sends a pairing request to the gateway. On the gateway host, run:
+On first run, lucinate generates an Ed25519 device identity under `~/.openclaw-go/identity/` and sends a pairing request to the gateway. On the gateway host, run:
 
 ```sh
 openclaw device list --pending
 ```
 
-You should see repclaw's device ID. Approve it:
+You should see lucinate's device ID. Approve it:
 
 ```sh
 openclaw device approve <device-id>
 ```
 
-Then restart repclaw — subsequent connections use the stored device token automatically.
+Then restart lucinate — subsequent connections use the stored device token automatically.
 
 ### 3. Pick an agent
 
@@ -106,7 +106,7 @@ Select an agent from the list to start chatting.
 
 ### Preferences
 
-Use `/config` to open the preferences view. Settings are persisted to `~/.repclaw/config.json`.
+Use `/config` to open the preferences view. Settings are persisted to `~/.lucinate/config.json`.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -134,7 +134,7 @@ Type these in the chat input. Tab autocompletes partial commands.
 | `/stats` | Show token usage and cost breakdown |
 | `/think` | Show current thinking level |
 | `/think <level>` | Set thinking level (`off`, `minimal`, `low`, `medium`, `high`) |
-| `/quit`, `/exit` | Quit repclaw |
+| `/quit`, `/exit` | Quit lucinate |
 
 ## Shell commands
 
@@ -162,7 +162,7 @@ The gateway's exec security policy controls which remote commands are allowed. I
 
 ## Built on
 
-repclaw uses the [openclaw-go](https://github.com/a3tai/openclaw-go) SDK for gateway communication. The TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lip Gloss](https://github.com/charmbracelet/lipgloss), with markdown rendered via [Glamour](https://github.com/charmbracelet/glamour).
+lucinate uses the [openclaw-go](https://github.com/a3tai/openclaw-go) SDK for gateway communication. The TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lip Gloss](https://github.com/charmbracelet/lipgloss), with markdown rendered via [Glamour](https://github.com/charmbracelet/glamour).
 
 Device identity (Ed25519 keypair) is stored at `~/.openclaw-go/identity/` and shared with other openclaw-go clients.
 

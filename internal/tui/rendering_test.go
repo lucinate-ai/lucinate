@@ -22,7 +22,7 @@ import (
 	teatest "github.com/charmbracelet/x/exp/teatest/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/outofcoffee/repclaw/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // chatModelAdapter wraps chatModel so it satisfies tea.Model for teatest.
@@ -127,7 +127,7 @@ func TestRender_ChatView_HeaderShowsAgentName(t *testing.T) {
 	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
 	defer finishProgram(t, tm)
 
-	waitForContains(t, tm.Output(), "repclaw", "scout")
+	waitForContains(t, tm.Output(), "lucinate", "scout")
 }
 
 func TestRender_ChatView_QueuedCountShownInHelpBar(t *testing.T) {
