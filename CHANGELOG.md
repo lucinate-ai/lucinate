@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.18.0] - 2026-04-24
+### Added
+- feat: add /status command for gateway health view (#52)
+- feat: add cancel turn via Escape key and /cancel command (#59)
+
+### Changed
+- refactor: remove --history-limit CLI flag (#61)
+- test: add integration test stack with Docker, Ollama, and Bedrock
+
+### Fixed
+- fix: resolve session key via gateway for default agent (#62)
+
 ## [0.17.1] - 2026-04-24
 ### Changed
 - docs: add logo
