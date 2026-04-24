@@ -138,6 +138,7 @@ Type these in the chat input. Tab autocompletes partial commands.
 | `/sessions` | Browse and restore previous sessions |
 | `/skills` | List available agent skills |
 | `/stats` | Show token usage and cost breakdown |
+| `/status` | Show gateway health and agent status |
 | `/think` | Show current thinking level |
 | `/think <level>` | Set thinking level (`off`, `minimal`, `low`, `medium`, `high`) |
 | `/quit`, `/exit` | Quit lucinate |

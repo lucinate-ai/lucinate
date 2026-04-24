@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/a3tai/openclaw-go/protocol"
 	tea "charm.land/bubbletea/v2"
@@ -18,7 +19,7 @@ type pendingConfirmation struct {
 }
 
 // slashCommands is the list of available slash commands for autocomplete.
-var slashCommands = []string{"/agents", "/clear", "/commands", "/compact", "/config", "/exit", "/help", "/model", "/quit", "/reset", "/sessions", "/skills", "/stats", "/think"}
+var slashCommands = []string{"/agents", "/clear", "/commands", "/compact", "/config", "/exit", "/help", "/model", "/quit", "/reset", "/sessions", "/skills", "/stats", "/status", "/think"}
 
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
@@ -131,7 +132,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			}
 		}
 	case "/help", "/commands":
-		helpText := "/quit, /exit — quit lucinate\n/agents — return to agent picker\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/model — list available models\n/model <name> — switch model\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/skills — list available agent skills\n/think — show current thinking level\n/think <level> — set thinking level (off/minimal/low/medium/high)\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
+		helpText := "/quit, /exit — quit lucinate\n/agents — return to agent picker\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/model — list available models\n/model <name> — switch model\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/status — show gateway health and agent status\n/skills — list available agent skills\n/think — show current thinking level\n/think <level> — set thinking level (off/minimal/low/medium/high)\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
 		if len(m.skills) > 0 {
 			helpText += fmt.Sprintf("\n\n%d agent skill(s) available — type /skills to list", len(m.skills))
 		}
@@ -150,6 +151,14 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		m.messages = append(m.messages, chatMessage{role: "system", content: m.formatStatsTable()})
 		m.updateViewport()
 		return true, nil
+	case "/status":
+		cl := m.client
+		return true, func() tea.Msg {
+			health, err := cl.GatewayHealth(context.Background())
+			uptimeMs := cl.HelloUptimeMs()
+			return gatewayStatusMsg{health: health, uptimeMs: uptimeMs, err: err}
+		}
+
 	case "/skills":
 		if len(m.skills) == 0 {
 			m.messages = append(m.messages, chatMessage{role: "system", content: "No agent skills found.\nPlace skills in <cwd>/.agents/skills/<name>/SKILL.md or ~/.agents/skills/<name>/SKILL.md"})
@@ -312,6 +321,84 @@ func localExecCommand(command string) tea.Cmd {
 		}
 		return localExecFinishedMsg{output: output, exitCode: exitCode}
 	}
+}
+
+// formatGatewayStatus renders a HealthEvent as a human-readable status block.
+func formatGatewayStatus(h *protocol.HealthEvent, uptimeMs int64) string {
+	var sb strings.Builder
+
+	// Overall status line.
+	status := "OK"
+	if !h.OK {
+		status = "DEGRADED"
+	}
+	sb.WriteString(fmt.Sprintf("Gateway: %s  (check: %dms, heartbeat: %ds)\n", status, h.DurationMs, h.HeartbeatSeconds))
+
+	if uptimeMs > 0 {
+		sb.WriteString(fmt.Sprintf("Uptime:  %s\n", formatDuration(uptimeMs)))
+	}
+
+	// Sessions summary.
+	sb.WriteString(fmt.Sprintf("Sessions: %d active\n", h.Sessions.Count))
+
+	// Agents table.
+	if len(h.Agents) > 0 {
+		sb.WriteString("\nAgents:\n")
+		for _, a := range h.Agents {
+			marker := "  "
+			if a.IsDefault {
+				marker = "* "
+			}
+			sb.WriteString(fmt.Sprintf("  %s%-30s  %d session(s)\n", marker, a.Name, a.Sessions.Count))
+		}
+	}
+
+	// Channels table.
+	if len(h.ChannelOrder) > 0 {
+		sb.WriteString("\nChannels:\n")
+		for _, key := range h.ChannelOrder {
+			label := key
+			if l, ok := h.ChannelLabels[key]; ok && l != "" {
+				label = l
+			}
+			ch := h.Channels[key]
+			configured := formatBoolPtr(ch.Configured)
+			linked := formatBoolPtr(ch.Linked)
+			var authAge string
+			if ch.AuthAgeMs != nil {
+				authAge = fmt.Sprintf(" auth: %s ago", formatDuration(*ch.AuthAgeMs))
+			}
+			sb.WriteString(fmt.Sprintf("  %-20s configured:%-3s  linked:%-3s%s\n",
+				label, configured, linked, authAge))
+		}
+	}
+
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// formatBoolPtr returns "yes", "no", or "?" for a *bool.
+func formatBoolPtr(b *bool) string {
+	if b == nil {
+		return "?"
+	}
+	if *b {
+		return "yes"
+	}
+	return "no"
+}
+
+// formatDuration renders a millisecond duration as a human-readable string.
+func formatDuration(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh%dm", h, m)
 }
 
 // handleThinkCommand handles `/think` and `/think <level>`.
