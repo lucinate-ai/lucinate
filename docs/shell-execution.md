@@ -1,6 +1,6 @@
 # Shell execution
 
-Repclaw supports running shell commands directly from the chat input using a prefix convention:
+Lucinate supports running shell commands directly from the chat input using a prefix convention:
 
 | Prefix | Where it runs |
 |---|---|

@@ -73,7 +73,7 @@ The gateway URL can use `https`, `http`, `wss`, or `ws` schemes. lucinate derive
 lucinate
 ```
 
-On first run, lucinate generates an Ed25519 device identity under `~/.openclaw-go/identity/` and sends a pairing request to the gateway. On the gateway host, run:
+On first run, lucinate generates an Ed25519 device identity under `~/.lucinate/identity/<endpoint>/` (keyed by gateway host) and sends a pairing request to the gateway. On the gateway host, run:
 
 ```sh
 openclaw device list --pending
@@ -170,7 +170,7 @@ The gateway's exec security policy controls which remote commands are allowed. I
 
 lucinate uses the [openclaw-go](https://github.com/a3tai/openclaw-go) SDK for gateway communication. The TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lip Gloss](https://github.com/charmbracelet/lipgloss), with markdown rendered via [Glamour](https://github.com/charmbracelet/glamour).
 
-Device identity (Ed25519 keypair) is stored at `~/.openclaw-go/identity/` and shared with other openclaw-go clients.
+Device identity (Ed25519 keypair and device token) is stored at `~/.lucinate/identity/<endpoint>/`, isolated per gateway endpoint.
 
 ## License
 

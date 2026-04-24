@@ -1,6 +1,6 @@
 # Developer docs
 
-This directory contains maintainer-level documentation for repclaw. It covers how the major subsystems are implemented — intended as a starting point when working on a feature area, not as a user guide.
+This directory contains maintainer-level documentation for lucinate. It covers how the major subsystems are implemented — intended as a starting point when working on a feature area, not as a user guide.
 
 ## Index
 

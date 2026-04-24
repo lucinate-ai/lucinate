@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/a3tai/openclaw-go/gateway"
 	"github.com/a3tai/openclaw-go/identity"
@@ -26,12 +28,11 @@ type Client struct {
 
 // New creates a new client from the given config.
 func New(cfg *config.Config) (*Client, error) {
-	home, err := os.UserHomeDir()
+	identityDir, err := identityDirForEndpoint(cfg.GatewayURL)
 	if err != nil {
-		return nil, fmt.Errorf("user home dir: %w", err)
+		return nil, fmt.Errorf("identity dir: %w", err)
 	}
 
-	identityDir := filepath.Join(home, ".openclaw-go", "identity")
 	store, err := identity.NewStore(identityDir)
 	if err != nil {
 		return nil, fmt.Errorf("identity store: %w", err)
@@ -42,6 +43,42 @@ func New(cfg *config.Config) (*Client, error) {
 		cfg:    cfg,
 		store:  store,
 	}, nil
+}
+
+// identityDirForEndpoint returns a per-endpoint identity directory under
+// ~/.lucinate/identity/<host_port>/.  This keeps keys and device tokens
+// isolated per gateway so switching endpoints doesn't overwrite them.
+func identityDirForEndpoint(gatewayURL string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("user home dir: %w", err)
+	}
+
+	u, err := url.Parse(gatewayURL)
+	if err != nil {
+		return "", fmt.Errorf("parse gateway URL: %w", err)
+	}
+
+	key := sanitiseHost(u.Host)
+	if key == "" {
+		return "", fmt.Errorf("gateway URL has no host: %s", gatewayURL)
+	}
+
+	return filepath.Join(home, ".lucinate", "identity", key), nil
+}
+
+// sanitiseHost converts a host or host:port into a filesystem-safe directory
+// name.  Colons (from the port separator) are replaced with underscores; any
+// other characters that are not alphanumeric, '.', '-', or '_' are dropped.
+func sanitiseHost(host string) string {
+	host = strings.ReplaceAll(host, ":", "_")
+	var b strings.Builder
+	for _, r := range host {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // Connect establishes a WebSocket connection to the gateway.
