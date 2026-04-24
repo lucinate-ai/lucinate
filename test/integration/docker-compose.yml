@@ -15,6 +15,12 @@ services:
       # Redirect npm cache to /tmp so plugin dep installs work when running
       # as a non-root user (the image's /home/node/.npm is root-owned).
       npm_config_cache: /tmp/npm-cache
+      # AWS credentials — only needed for the Bedrock provider. Empty values
+      # are ignored by the gateway when Bedrock is not configured.
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID:-}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
+      AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
+      AWS_REGION: "${AWS_REGION:-us-east-1}"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18789/healthz || exit 1"]
       interval: 5s

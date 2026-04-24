@@ -38,6 +38,10 @@ coverage-html: coverage
 test-integration-setup:
 	./test/integration/setup.sh
 
+.PHONY: test-integration-setup-bedrock
+test-integration-setup-bedrock:
+	./test/integration/setup.sh --provider bedrock
+
 .PHONY: test-integration
 test-integration:
 	go test -tags integration -count=1 -v ./internal/tui/

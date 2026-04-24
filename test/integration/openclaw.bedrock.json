@@ -1,0 +1,34 @@
+{
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "repclaw-integration-test"
+    }
+  },
+  "models": {
+    "providers": {
+      "amazon-bedrock": {
+        "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "models": [
+          {
+            "id": "zai.glm-5",
+            "name": "GLM-5"
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "amazon-bedrock/zai.glm-5"
+      }
+    }
+  },
+  "tools": {
+    "exec": {
+      "security": "full",
+      "ask": "off"
+    }
+  }
+}
