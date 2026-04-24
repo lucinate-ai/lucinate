@@ -196,6 +196,14 @@ func (c *Client) SessionPatchModel(ctx context.Context, sessionKey, modelID stri
 	})
 }
 
+// SessionPatchThinking sets the thinking level for a session.
+func (c *Client) SessionPatchThinking(ctx context.Context, sessionKey, level string) error {
+	return c.gw.SessionsPatch(ctx, protocol.SessionsPatchParams{
+		Key:           sessionKey,
+		ThinkingLevel: &level,
+	})
+}
+
 // ExecRequest submits a command for execution on the gateway host.
 // TwoPhase is set so the gateway returns immediately with status "accepted"
 // and the decision arrives asynchronously via an exec.approval.resolved event.

@@ -18,7 +18,10 @@ type pendingConfirmation struct {
 }
 
 // slashCommands is the list of available slash commands for autocomplete.
-var slashCommands = []string{"/agents", "/clear", "/commands", "/compact", "/config", "/exit", "/help", "/model", "/quit", "/reset", "/sessions", "/skills", "/stats"}
+var slashCommands = []string{"/agents", "/clear", "/commands", "/compact", "/config", "/exit", "/help", "/model", "/quit", "/reset", "/sessions", "/skills", "/stats", "/think"}
+
+// thinkingLevels is the ordered list of valid thinking levels.
+var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
 
 // completeSlashCommand returns the first matching slash command for the given
 // prefix, or "" if no match. Includes skill names as slash commands.
@@ -128,7 +131,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			}
 		}
 	case "/help", "/commands":
-		helpText := "/quit, /exit — quit repclaw\n/agents — return to agent picker\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/model — list available models\n/model <name> — switch model\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/skills — list available agent skills\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
+		helpText := "/quit, /exit — quit repclaw\n/agents — return to agent picker\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/model — list available models\n/model <name> — switch model\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/skills — list available agent skills\n/think — show current thinking level\n/think <level> — set thinking level (off/minimal/low/medium/high)\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
 		if len(m.skills) > 0 {
 			helpText += fmt.Sprintf("\n\n%d agent skill(s) available — type /skills to list", len(m.skills))
 		}
@@ -167,6 +170,11 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	// /model with optional argument.
 	if command == "/model" || strings.HasPrefix(command, "/model ") {
 		return m.handleModelCommand(text)
+	}
+
+	// /think with optional level argument.
+	if command == "/think" || strings.HasPrefix(command, "/think ") {
+		return m.handleThinkCommand(text)
 	}
 
 	// Skill activation: /skill-name sends the skill body as a System:-prefixed message.
@@ -303,5 +311,47 @@ func localExecCommand(command string) tea.Cmd {
 			}
 		}
 		return localExecFinishedMsg{output: output, exitCode: exitCode}
+	}
+}
+
+// handleThinkCommand handles `/think` and `/think <level>`.
+func (m *chatModel) handleThinkCommand(text string) (bool, tea.Cmd) {
+	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
+	if len(parts) == 1 {
+		// /think with no argument — show current level.
+		level := m.thinkingLevel
+		if level == "" {
+			level = "off (gateway default)"
+		}
+		m.messages = append(m.messages, chatMessage{
+			role:    "system",
+			content: fmt.Sprintf("Thinking level: %s\nAvailable levels: %s", level, strings.Join(thinkingLevels, ", ")),
+		})
+		m.updateViewport()
+		return true, nil
+	}
+
+	level := strings.ToLower(strings.TrimSpace(parts[1]))
+	valid := false
+	for _, l := range thinkingLevels {
+		if l == level {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		m.messages = append(m.messages, chatMessage{
+			role:   "system",
+			errMsg: fmt.Sprintf("unknown thinking level %q — valid levels: %s", level, strings.Join(thinkingLevels, ", ")),
+		})
+		m.updateViewport()
+		return true, nil
+	}
+
+	cl := m.client
+	sessionKey := m.sessionKey
+	return true, func() tea.Msg {
+		err := cl.SessionPatchThinking(context.Background(), sessionKey, level)
+		return thinkingChangedMsg{level: level, err: err}
 	}
 }

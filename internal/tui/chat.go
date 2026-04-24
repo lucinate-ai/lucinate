@@ -49,6 +49,7 @@ type chatModel struct {
 	prefs            config.Preferences
 	pendingConfirm   *pendingConfirmation
 	historyLimit     int
+	thinkingLevel    string // current thinking level; "" means not set / using gateway default
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -201,6 +202,23 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{
 				role:    "system",
 				content: fmt.Sprintf("Switched to %s", msg.modelID),
+			})
+		}
+		m.updateViewport()
+		return m, nil
+
+	case thinkingChangedMsg:
+		if msg.err != nil {
+			m.messages = append(m.messages, chatMessage{role: "system", errMsg: msg.err.Error()})
+		} else {
+			m.thinkingLevel = msg.level
+			display := msg.level
+			if display == "" || display == "off" {
+				display = "off"
+			}
+			m.messages = append(m.messages, chatMessage{
+				role:    "system",
+				content: fmt.Sprintf("Thinking level set to %s", display),
 			})
 		}
 		m.updateViewport()
@@ -557,6 +575,9 @@ func (m chatModel) View() string {
 			model = model[i+1:]
 		}
 		left += " · " + model
+	}
+	if m.thinkingLevel != "" && m.thinkingLevel != "off" {
+		left += " · think:" + m.thinkingLevel
 	}
 	right := ""
 	if m.stats != nil {

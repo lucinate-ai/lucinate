@@ -148,6 +148,12 @@ type prefsUpdatedMsg struct {
 	prefs config.Preferences
 }
 
+// thinkingChangedMsg is returned after changing the thinking level.
+type thinkingChangedMsg struct {
+	level string
+	err   error
+}
+
 // sessionCompactedMsg is returned after compacting a session.
 type sessionCompactedMsg struct{ err error }
 

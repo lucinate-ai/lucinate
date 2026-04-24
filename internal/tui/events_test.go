@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/a3tai/openclaw-go/protocol"
@@ -636,6 +637,111 @@ func TestChatUpdate_SessionClearedMsg_Error(t *testing.T) {
 	last := updated.messages[len(updated.messages)-1]
 	if last.errMsg == "" {
 		t.Error("expected error message")
+	}
+}
+
+func TestThinkingChangedMsg_SetsLevel(t *testing.T) {
+	m := newTestChatModel()
+	updated, _ := m.Update(thinkingChangedMsg{level: "medium"})
+	if updated.thinkingLevel != "medium" {
+		t.Errorf("expected thinkingLevel 'medium', got %q", updated.thinkingLevel)
+	}
+	last := updated.messages[len(updated.messages)-1]
+	if last.role != "system" || last.content != "Thinking level set to medium" {
+		t.Errorf("unexpected message: role=%q content=%q", last.role, last.content)
+	}
+}
+
+func TestThinkingChangedMsg_OffLevel(t *testing.T) {
+	m := newTestChatModel()
+	m.thinkingLevel = "high"
+	updated, _ := m.Update(thinkingChangedMsg{level: "off"})
+	if updated.thinkingLevel != "off" {
+		t.Errorf("expected thinkingLevel 'off', got %q", updated.thinkingLevel)
+	}
+	last := updated.messages[len(updated.messages)-1]
+	if last.content != "Thinking level set to off" {
+		t.Errorf("unexpected message: %q", last.content)
+	}
+}
+
+func TestThinkingChangedMsg_Error(t *testing.T) {
+	m := newTestChatModel()
+	m.thinkingLevel = "low"
+	updated, _ := m.Update(thinkingChangedMsg{level: "high", err: errString("patch failed")})
+	if updated.thinkingLevel != "low" {
+		t.Error("thinkingLevel should not change on error")
+	}
+	last := updated.messages[len(updated.messages)-1]
+	if last.errMsg != "patch failed" {
+		t.Errorf("expected error message, got %q", last.errMsg)
+	}
+}
+
+func TestHandleThinkCommand_NoArg_ShowsCurrent(t *testing.T) {
+	m := newTestChatModel()
+	m.thinkingLevel = "low"
+	handled, cmd := m.handleThinkCommand("/think")
+	if !handled {
+		t.Error("expected handled = true")
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for status query")
+	}
+	last := m.messages[len(m.messages)-1]
+	if last.role != "system" {
+		t.Errorf("expected system message, got role=%q", last.role)
+	}
+	if !strings.Contains(last.content, "low") {
+		t.Errorf("expected current level in message, got %q", last.content)
+	}
+}
+
+func TestHandleThinkCommand_NoArg_DefaultMessage(t *testing.T) {
+	m := newTestChatModel()
+	// thinkingLevel is "" (unset)
+	handled, cmd := m.handleThinkCommand("/think")
+	if !handled {
+		t.Error("expected handled = true")
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd")
+	}
+	last := m.messages[len(m.messages)-1]
+	if !strings.Contains(last.content, "gateway default") {
+		t.Errorf("expected 'gateway default' in message, got %q", last.content)
+	}
+}
+
+func TestHandleThinkCommand_ValidLevel_ReturnsCmd(t *testing.T) {
+	m := newTestChatModel()
+	for _, level := range thinkingLevels {
+		m.messages = nil
+		handled, cmd := m.handleThinkCommand("/think " + level)
+		if !handled {
+			t.Errorf("level %q: expected handled = true", level)
+		}
+		if cmd == nil {
+			t.Errorf("level %q: expected non-nil cmd", level)
+		}
+	}
+}
+
+func TestHandleThinkCommand_InvalidLevel_ReturnsError(t *testing.T) {
+	m := newTestChatModel()
+	handled, cmd := m.handleThinkCommand("/think turbo")
+	if !handled {
+		t.Error("expected handled = true")
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for invalid level")
+	}
+	last := m.messages[len(m.messages)-1]
+	if last.errMsg == "" {
+		t.Error("expected error message for unknown level")
+	}
+	if !strings.Contains(last.errMsg, "turbo") {
+		t.Errorf("expected level name in error, got %q", last.errMsg)
 	}
 }
 

@@ -21,6 +21,7 @@ No file browsers, no task boards, no dashboards. Just chat.
 - **Message queueing** so you can keep typing while the agent is responding
 - **Local agent skills** loaded from `~/.agents/skills/` as slash commands
 - **Live token/cost stats** in the header bar
+- **Thinking level control** via `/think` — tune reasoning depth per session
 
 ## Install
 
@@ -131,6 +132,8 @@ Type these in the chat input. Tab autocompletes partial commands.
 | `/sessions` | Browse and restore previous sessions |
 | `/skills` | List available agent skills |
 | `/stats` | Show token usage and cost breakdown |
+| `/think` | Show current thinking level |
+| `/think <level>` | Set thinking level (`off`, `minimal`, `low`, `medium`, `high`) |
 | `/quit`, `/exit` | Quit repclaw |
 
 ## Shell commands
