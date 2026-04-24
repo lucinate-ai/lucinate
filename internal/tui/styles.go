@@ -70,6 +70,17 @@ var (
 				Bold(true).
 				Foreground(localExcClr)
 
+	// Pending (queued) message prefix — dimmed, italic shadow of the user style.
+	pendingPrefixStyle = lipgloss.NewStyle().
+				Italic(true).
+				Faint(true).
+				Foreground(userClr)
+
+	// Pending (queued) message body — dimmed italic to match prefix.
+	pendingBodyStyle = lipgloss.NewStyle().
+				Italic(true).
+				Faint(true)
+
 	// Help text.
 	helpStyle = lipgloss.NewStyle().
 			Foreground(subtle)
