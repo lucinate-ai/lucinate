@@ -65,7 +65,6 @@ The gateway URL can use `https`, `http`, `wss`, or `ws` schemes. lucinate derive
 
 | Flag | Description |
 |------|-------------|
-| `--history-limit <n>` | Number of messages to load per session (overrides the preference; default 50) |
 | `--version`, `-v` | Print version and exit |
 
 ### 2. Connect and approve the device

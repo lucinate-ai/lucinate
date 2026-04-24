@@ -32,28 +32,14 @@ type AppModel struct {
 	height        int
 }
 
-// AppOption configures the application model.
-type AppOption func(*AppModel)
-
-// WithHistoryLimit overrides the preference-based history limit.
-func WithHistoryLimit(n int) AppOption {
-	return func(m *AppModel) {
-		m.prefs.HistoryLimit = n
-	}
-}
-
 // NewApp creates the root application model.
-func NewApp(c *client.Client, opts ...AppOption) AppModel {
-	m := AppModel{
+func NewApp(c *client.Client) AppModel {
+	return AppModel{
 		state:       viewSelect,
 		selectModel: newSelectModel(c),
 		client:      c,
 		prefs:       config.LoadPreferences(),
 	}
-	for _, opt := range opts {
-		opt(&m)
-	}
-	return m
 }
 
 func (m AppModel) Init() tea.Cmd {

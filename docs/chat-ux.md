@@ -47,7 +47,7 @@ Stats are loaded on init and refreshed after each message exchange via `loadStat
 
 ## History depth
 
-The number of messages loaded from the gateway on session init is configurable. The default is 50. It can be changed via `/config` ("History limit") in steps of 10 (range 10–500), or overridden at startup with the `--history-limit` CLI flag. The value is stored in `prefs.HistoryLimit` and passed to `loadHistory()` as the fetch limit.
+The number of messages loaded from the gateway on session init is configurable. The default is 50. It can be changed via `/config` ("History limit") in steps of 10 (range 10–500). The value is stored in `prefs.HistoryLimit` and passed to `loadHistory()` as the fetch limit.
 
 See [sessions.md](sessions.md#lifecycle) for how history loading fits into the session lifecycle.
 
