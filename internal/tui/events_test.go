@@ -11,11 +11,17 @@ import (
 
 // makeChatEvent builds a protocol.Event wrapping a ChatEvent payload.
 func makeChatEvent(state, runID string, seq int, message json.RawMessage) protocol.Event {
+	return makeChatEventForSession(state, runID, "", seq, message)
+}
+
+// makeChatEventForSession builds a protocol.Event with an explicit sessionKey.
+func makeChatEventForSession(state, runID, sessionKey string, seq int, message json.RawMessage) protocol.Event {
 	chatEv := protocol.ChatEvent{
-		RunID:   runID,
-		State:   state,
-		Seq:     seq,
-		Message: message,
+		RunID:      runID,
+		SessionKey: sessionKey,
+		State:      state,
+		Seq:        seq,
+		Message:    message,
 	}
 	payload, _ := json.Marshal(chatEv)
 	return protocol.Event{
@@ -935,6 +941,163 @@ func TestHandleEvent_EmptyDeltaIgnored(t *testing.T) {
 
 	if len(m.messages) != 1 {
 		t.Errorf("expected 1 message, got %d", len(m.messages))
+	}
+}
+
+// --- Session-key filtering for chat events ---
+
+// TestHandleEvent_ChatDelta_DifferentSession_Ignored verifies that a delta
+// event carrying a sessionKey that doesn't match the model's session is silently
+// dropped and does not create or modify any assistant message.
+func TestHandleEvent_ChatDelta_DifferentSession_Ignored(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-A"
+	m.messages = []chatMessage{{role: "user", content: "hello"}}
+
+	ev := makeChatEventForSession("delta", "run-B", "sess-B", 1, json.RawMessage(`"should not appear"`))
+	m.handleEvent(ev)
+
+	if len(m.messages) != 1 {
+		t.Fatalf("expected 1 message (no spurious assistant), got %d", len(m.messages))
+	}
+}
+
+// TestHandleEvent_ChatDelta_DifferentSession_DoesNotCorruptStreaming verifies
+// that a delta from another session does not overwrite an in-progress streaming
+// assistant message from the correct session.
+func TestHandleEvent_ChatDelta_DifferentSession_DoesNotCorruptStreaming(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-A"
+	m.messages = []chatMessage{
+		{role: "user", content: "hello"},
+		{role: "assistant", content: "correct text", streaming: true},
+	}
+
+	ev := makeChatEventForSession("delta", "run-B", "sess-B", 1, json.RawMessage(`"wrong text"`))
+	m.handleEvent(ev)
+
+	if m.messages[1].content != "correct text" {
+		t.Errorf("streaming content corrupted: got %q, want %q", m.messages[1].content, "correct text")
+	}
+}
+
+// TestHandleEvent_ChatFinal_DifferentSession_Ignored verifies that a final
+// event from another session does not finalise the current streaming message.
+func TestHandleEvent_ChatFinal_DifferentSession_Ignored(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-A"
+	m.sending = true
+	m.messages = []chatMessage{
+		{role: "user", content: "hello"},
+		{role: "assistant", content: "streaming…", streaming: true},
+	}
+
+	finalMsg := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"other"}],"timestamp":123}`)
+	cmd := m.handleEvent(makeChatEventForSession("final", "run-B", "sess-B", 1, finalMsg))
+
+	if cmd != nil {
+		t.Error("expected nil cmd — foreign final must not trigger any action")
+	}
+	if !m.messages[1].streaming {
+		t.Error("own streaming message should still be streaming")
+	}
+	if !m.sending {
+		t.Error("sending should remain true")
+	}
+}
+
+// TestHandleEvent_ChatFinal_DifferentSession_DoesNotDrainQueue is the critical
+// regression test: a final event from another session must NOT trigger drainQueue
+// and send pending messages prematurely.
+func TestHandleEvent_ChatFinal_DifferentSession_DoesNotDrainQueue(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-A"
+	m.sending = true
+	m.pendingMessages = []string{"queued msg"}
+	m.messages = []chatMessage{
+		{role: "user", content: "hello"},
+		{role: "assistant", content: "streaming…", streaming: true},
+	}
+
+	finalMsg := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"other session done"}],"timestamp":123}`)
+	cmd := m.handleEvent(makeChatEventForSession("final", "run-B", "sess-B", 1, finalMsg))
+
+	if cmd != nil {
+		t.Error("expected nil cmd — foreign final must not drain the queue")
+	}
+	if len(m.pendingMessages) != 1 {
+		t.Errorf("queue should be untouched: got %d pending, want 1", len(m.pendingMessages))
+	}
+	if !m.sending {
+		t.Error("sending should remain true")
+	}
+}
+
+// TestHandleEvent_ChatError_DifferentSession_Ignored verifies that an error
+// event from another session does not affect the current model state.
+func TestHandleEvent_ChatError_DifferentSession_Ignored(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-A"
+	m.sending = true
+	m.messages = []chatMessage{
+		{role: "user", content: "hello"},
+		{role: "assistant", content: "streaming…", streaming: true},
+	}
+
+	chatEv := protocol.ChatEvent{
+		RunID:        "run-B",
+		SessionKey:   "sess-B",
+		State:        "error",
+		ErrorMessage: "something failed",
+	}
+	payload, _ := json.Marshal(chatEv)
+	cmd := m.handleEvent(protocol.Event{EventName: protocol.EventChat, Payload: payload})
+
+	if cmd != nil {
+		t.Error("expected nil cmd for foreign error event")
+	}
+	if m.messages[1].errMsg != "" {
+		t.Errorf("errMsg should be empty, got %q", m.messages[1].errMsg)
+	}
+	if !m.messages[1].streaming {
+		t.Error("own streaming message should still be streaming")
+	}
+}
+
+// TestHandleEvent_ChatDelta_EmptySessionKey_Processed verifies that events
+// without a sessionKey (e.g. from older gateway versions) are still handled.
+func TestHandleEvent_ChatDelta_EmptySessionKey_Processed(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-A"
+	m.messages = []chatMessage{{role: "user", content: "hello"}}
+
+	// sessionKey="" — should not be filtered out.
+	ev := makeChatEventForSession("delta", "run-1", "", 1, json.RawMessage(`"hello from gateway"`))
+	m.handleEvent(ev)
+
+	if len(m.messages) != 2 {
+		t.Fatalf("expected 2 messages (delta processed), got %d", len(m.messages))
+	}
+	if m.messages[1].content != "hello from gateway" {
+		t.Errorf("content = %q, want %q", m.messages[1].content, "hello from gateway")
+	}
+}
+
+// TestHandleEvent_ChatDelta_MatchingSession_Processed verifies that events
+// with a matching sessionKey are handled normally.
+func TestHandleEvent_ChatDelta_MatchingSession_Processed(t *testing.T) {
+	m := newTestChatModel()
+	m.sessionKey = "sess-A"
+	m.messages = []chatMessage{{role: "user", content: "hello"}}
+
+	ev := makeChatEventForSession("delta", "run-1", "sess-A", 1, json.RawMessage(`"correct response"`))
+	m.handleEvent(ev)
+
+	if len(m.messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(m.messages))
+	}
+	if m.messages[1].content != "correct response" {
+		t.Errorf("content = %q, want %q", m.messages[1].content, "correct response")
 	}
 }
 

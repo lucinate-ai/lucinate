@@ -155,7 +155,13 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		return nil
 	}
 
-	logEvent("EVENT state=%s runID=%s seq=%d msgLen=%d", chatEv.State, chatEv.RunID, chatEv.Seq, len(chatEv.Message))
+	logEvent("EVENT state=%s runID=%s seq=%d msgLen=%d sessionKey=%s", chatEv.State, chatEv.RunID, chatEv.Seq, len(chatEv.Message), chatEv.SessionKey)
+
+	// Ignore chat events from other sessions.
+	if chatEv.SessionKey != "" && chatEv.SessionKey != m.sessionKey {
+		logEvent("  CHAT ignored (different session)")
+		return nil
+	}
 
 	switch chatEv.State {
 	case "delta":
