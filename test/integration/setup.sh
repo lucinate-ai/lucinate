@@ -122,22 +122,31 @@ fi
 echo -n "$GATEWAY_TOKEN" > "$IDENTITY_DIR/device-token"
 ok "Seeded gateway token for initial authentication"
 
-# First connect: registers the device as pending (exits non-zero with NOT_PAIRED).
+# First connect: registers the device as pending. The gateway rejects it with
+# NOT_PAIRED — that is expected. A socket timeout is also possible if the
+# gateway is busy; retry until a pending device appears.
 info "Registering device with gateway"
-OPENCLAW_GATEWAY_URL="$GATEWAY_URL" go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /' || true
-
-# Get the pending device from the gateway.
-info "Fetching pending device list"
-DEVICES_JSON="$(docker compose -f "$COMPOSE_FILE" exec -T gateway \
-    openclaw devices list --json \
-    --token "$GATEWAY_TOKEN" \
-    --url "$GATEWAY_WS_URL" 2>/dev/null)"
-
-REQUEST_ID="$(echo "$DEVICES_JSON" | jq -r '.pending[0].requestId // empty')"
-DEVICE_ID="$(echo "$DEVICES_JSON" | jq -r '.pending[0].deviceId // empty')"
+REQUEST_ID=""
+DEVICE_ID=""
+for attempt in 1 2 3; do
+    OPENCLAW_GATEWAY_URL="$GATEWAY_URL" go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /' || true
+    DEVICES_JSON="$(docker compose -f "$COMPOSE_FILE" exec -T gateway \
+        openclaw devices list --json \
+        --token "$GATEWAY_TOKEN" \
+        --url "$GATEWAY_WS_URL" 2>/dev/null)"
+    REQUEST_ID="$(echo "$DEVICES_JSON" | jq -r '.pending[0].requestId // empty')"
+    DEVICE_ID="$(echo "$DEVICES_JSON" | jq -r '.pending[0].deviceId // empty')"
+    if [ -n "$REQUEST_ID" ] && [ -n "$DEVICE_ID" ]; then
+        break
+    fi
+    if [ "$attempt" -lt 3 ]; then
+        warn "Attempt $attempt: no pending device found, retrying..."
+        sleep 2
+    fi
+done
 
 if [ -z "$REQUEST_ID" ] || [ -z "$DEVICE_ID" ]; then
-    fail "No pending device found. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
+    fail "No pending device found after 3 attempts. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
 fi
 ok "Found pending device: $DEVICE_ID (requestId: $REQUEST_ID)"
 
