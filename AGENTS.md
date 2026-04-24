@@ -35,6 +35,19 @@ repclaw is a TUI chat client for the OpenClaw gateway, built with bubbletea.
 
 `github.com/a3tai/openclaw-go` is a **local replace** (`../openclaw-go`) — the OpenClaw Go SDK must be checked out as a sibling directory.
 
+## Developer docs
+
+The `docs/` directory contains maintainer-level documentation for the main subsystems:
+
+- [authentication.md](docs/authentication.md) — device pairing flow, identity storage, gateway connection
+- [agents.md](docs/agents.md) — agent picker, auto-selection, agent creation
+- [sessions.md](docs/sessions.md) — session lifecycle, session browser, compact/reset, message queueing
+- [commands.md](docs/commands.md) — slash command dispatch, all built-in commands, tab completion, confirmation pattern
+- [shell-execution.md](docs/shell-execution.md) — `!` local and `!!` remote exec, two-phase approval
+- [skills.md](docs/skills.md) — skill file format, discovery, catalog injection, activation
+- [chat-ux.md](docs/chat-ux.md) — input bindings, streaming animation, thinking levels, header bar, history depth
+- [message-rendering.md](docs/message-rendering.md) — message roles, `System:` prefix convention, history cleanup, markdown rendering
+
 ## Testing requirements
 
 Add or update tests whenever you change behaviour. Focus on core functionality — tests should capture behaviour a user or caller actually depends on, not exist for coverage's sake.
