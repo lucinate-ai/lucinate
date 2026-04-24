@@ -150,6 +150,13 @@ type prefsUpdatedMsg struct {
 	prefs config.Preferences
 }
 
+// gatewayStatusMsg is returned after fetching the gateway health.
+type gatewayStatusMsg struct {
+	health   *protocol.HealthEvent
+	uptimeMs int64
+	err      error
+}
+
 // thinkingChangedMsg is returned after changing the thinking level.
 type thinkingChangedMsg struct {
 	level string

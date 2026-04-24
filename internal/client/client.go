@@ -238,6 +238,28 @@ func (c *Client) SessionDelete(ctx context.Context, sessionKey string) error {
 	})
 }
 
+// GatewayHealth retrieves the gateway health snapshot.
+func (c *Client) GatewayHealth(ctx context.Context) (*protocol.HealthEvent, error) {
+	raw, err := c.gw.Health(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("health: %w", err)
+	}
+	var h protocol.HealthEvent
+	if err := json.Unmarshal(raw, &h); err != nil {
+		return nil, fmt.Errorf("parse health: %w", err)
+	}
+	return &h, nil
+}
+
+// HelloUptimeMs returns the gateway uptime in milliseconds from the connect
+// handshake, or 0 if not connected.
+func (c *Client) HelloUptimeMs() int64 {
+	if h := c.gw.Hello(); h != nil {
+		return h.Snapshot.UptimeMs
+	}
+	return 0
+}
+
 // GW returns the underlying gateway client (for direct RPC access).
 func (c *Client) GW() *gateway.Client { return c.gw }
 

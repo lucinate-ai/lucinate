@@ -218,6 +218,18 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case gatewayStatusMsg:
+		if msg.err != nil {
+			m.messages = append(m.messages, chatMessage{role: "system", errMsg: msg.err.Error()})
+		} else {
+			m.messages = append(m.messages, chatMessage{
+				role:    "system",
+				content: formatGatewayStatus(msg.health, msg.uptimeMs),
+			})
+		}
+		m.updateViewport()
+		return m, nil
+
 	case thinkingChangedMsg:
 		if msg.err != nil {
 			m.messages = append(m.messages, chatMessage{role: "system", errMsg: msg.err.Error()})

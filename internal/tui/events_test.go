@@ -1130,3 +1130,136 @@ func TestHandleEvent_FullStreamingFlow(t *testing.T) {
 		t.Errorf("after late delta: expected 2 messages, got %d", len(m.messages))
 	}
 }
+
+func TestGatewayStatusMsg_Success(t *testing.T) {
+	m := newTestChatModel()
+	configured := true
+	linked := true
+	health := &protocol.HealthEvent{
+		OK:               true,
+		DurationMs:       12,
+		HeartbeatSeconds: 30,
+		Sessions:         protocol.HealthSessionsSummary{Count: 3},
+		Agents: []protocol.AgentHealthSummary{
+			{AgentID: "a1", Name: "Alpha", IsDefault: true, Sessions: protocol.HealthSessionsSummary{Count: 2}},
+			{AgentID: "a2", Name: "Beta", IsDefault: false, Sessions: protocol.HealthSessionsSummary{Count: 1}},
+		},
+		ChannelOrder:  []string{"slack"},
+		ChannelLabels: map[string]string{"slack": "Slack"},
+		Channels: map[string]protocol.ChannelHealthSummary{
+			"slack": {Configured: &configured, Linked: &linked},
+		},
+	}
+
+	updated, _ := m.Update(gatewayStatusMsg{health: health, uptimeMs: 7200000})
+
+	if len(updated.messages) == 0 {
+		t.Fatal("expected a status message")
+	}
+	last := updated.messages[len(updated.messages)-1]
+	if last.role != "system" {
+		t.Errorf("expected system role, got %q", last.role)
+	}
+	if last.errMsg != "" {
+		t.Errorf("expected no error, got %q", last.errMsg)
+	}
+	if !strings.Contains(last.content, "Gateway: OK") {
+		t.Errorf("expected 'Gateway: OK' in content, got %q", last.content)
+	}
+	if !strings.Contains(last.content, "Alpha") {
+		t.Errorf("expected agent name 'Alpha' in content, got %q", last.content)
+	}
+	if !strings.Contains(last.content, "Slack") {
+		t.Errorf("expected channel label 'Slack' in content, got %q", last.content)
+	}
+	if !strings.Contains(last.content, "2h0m") {
+		t.Errorf("expected uptime '2h0m' in content, got %q", last.content)
+	}
+}
+
+func TestGatewayStatusMsg_Degraded(t *testing.T) {
+	m := newTestChatModel()
+	health := &protocol.HealthEvent{
+		OK:         false,
+		DurationMs: 500,
+	}
+
+	updated, _ := m.Update(gatewayStatusMsg{health: health, uptimeMs: 0})
+
+	last := updated.messages[len(updated.messages)-1]
+	if !strings.Contains(last.content, "DEGRADED") {
+		t.Errorf("expected 'DEGRADED' in content, got %q", last.content)
+	}
+}
+
+func TestGatewayStatusMsg_Error(t *testing.T) {
+	m := newTestChatModel()
+
+	updated, _ := m.Update(gatewayStatusMsg{err: errString("connection refused")})
+
+	last := updated.messages[len(updated.messages)-1]
+	if last.errMsg != "connection refused" {
+		t.Errorf("expected error message, got %q", last.errMsg)
+	}
+}
+
+func TestFormatGatewayStatus_DefaultAgent(t *testing.T) {
+	health := &protocol.HealthEvent{
+		OK: true,
+		Agents: []protocol.AgentHealthSummary{
+			{AgentID: "a1", Name: "Main", IsDefault: true},
+			{AgentID: "a2", Name: "Other", IsDefault: false},
+		},
+	}
+	out := formatGatewayStatus(health, 0)
+	if !strings.Contains(out, "* Main") {
+		t.Errorf("expected default agent marked with '*', got %q", out)
+	}
+	if strings.Contains(out, "* Other") {
+		t.Errorf("non-default agent should not be marked with '*'")
+	}
+}
+
+func TestFormatGatewayStatus_NoUptime(t *testing.T) {
+	health := &protocol.HealthEvent{OK: true}
+	out := formatGatewayStatus(health, 0)
+	if strings.Contains(out, "Uptime") {
+		t.Errorf("expected no Uptime line when uptimeMs=0, got %q", out)
+	}
+}
+
+func TestFormatGatewayStatus_ChannelNilConfigured(t *testing.T) {
+	health := &protocol.HealthEvent{
+		OK:            true,
+		ChannelOrder:  []string{"email"},
+		ChannelLabels: map[string]string{"email": "Email"},
+		Channels: map[string]protocol.ChannelHealthSummary{
+			"email": {Configured: nil, Linked: nil},
+		},
+	}
+	out := formatGatewayStatus(health, 0)
+	if !strings.Contains(out, "configured:?") {
+		t.Errorf("expected '?' for nil configured field, got %q", out)
+	}
+}
+
+func TestFormatDuration_Seconds(t *testing.T) {
+	got := formatDuration(45000)
+	if got != "45s" {
+		t.Errorf("expected '45s', got %q", got)
+	}
+}
+
+func TestFormatDuration_Minutes(t *testing.T) {
+	got := formatDuration(90000)
+	if got != "1m30s" {
+		t.Errorf("expected '1m30s', got %q", got)
+	}
+}
+
+func TestFormatDuration_Hours(t *testing.T) {
+	got := formatDuration(3661000)
+	if got != "1h1m" {
+		t.Errorf("expected '1h1m', got %q", got)
+	}
+}
