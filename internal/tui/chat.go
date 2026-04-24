@@ -68,6 +68,17 @@ func (m *chatModel) hasStreamingMessage() bool {
 	return false
 }
 
+// removeThinkingPlaceholder removes the streaming assistant placeholder added
+// when a message is sent, before any gateway delta has arrived.
+func (m *chatModel) removeThinkingPlaceholder() {
+	if len(m.messages) > 0 {
+		last := &m.messages[len(m.messages)-1]
+		if last.role == "assistant" && last.streaming && last.content == "" {
+			m.messages = m.messages[:len(m.messages)-1]
+		}
+	}
+}
+
 // ensureSpinnerTicking starts the spinner animation if one is not already scheduled.
 func (m *chatModel) ensureSpinnerTicking() tea.Cmd {
 	if m.spinnerTicking {
@@ -360,9 +371,10 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			}
 
 			m.messages = append(m.messages, chatMessage{role: "user", content: text})
+			m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true})
 			m.sending = true
 			m.updateViewport()
-			cmds = append(cmds, m.sendMessage(m.withSkillCatalog(text)))
+			cmds = append(cmds, m.sendMessage(m.withSkillCatalog(text)), m.ensureSpinnerTicking())
 			return m, tea.Batch(cmds...)
 		}
 
@@ -407,6 +419,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	case chatSentMsg:
 		if msg.err != nil {
 			logEvent("SEND_ERROR: %v", msg.err)
+			m.removeThinkingPlaceholder()
 			m.messages = append(m.messages, chatMessage{
 				role:   "assistant",
 				errMsg: msg.err.Error(),
@@ -534,8 +547,9 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 	}
 
 	m.messages = append(m.messages, chatMessage{role: "user", content: text})
+	m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true})
 	m.updateViewport()
-	return m.sendMessage(text)
+	return tea.Batch(m.sendMessage(text), m.ensureSpinnerTicking())
 }
 
 func (m *chatModel) setSize(w, h int) {

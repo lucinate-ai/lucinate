@@ -275,10 +275,15 @@ func TestDrainQueue_SendsFirstPendingMessage(t *testing.T) {
 	if !m.sending {
 		t.Error("expected sending to remain true while queue is non-empty")
 	}
-	// User message should be appended to m.messages when dequeued.
-	last := m.messages[len(m.messages)-1]
-	if last.role != "user" || last.content != "msg1" {
-		t.Errorf("expected last message to be user 'msg1', got %s %q", last.role, last.content)
+	// User message and thinking placeholder should be appended when dequeued.
+	n := len(m.messages)
+	userMsg := m.messages[n-2]
+	if userMsg.role != "user" || userMsg.content != "msg1" {
+		t.Errorf("expected second-to-last message to be user 'msg1', got %s %q", userMsg.role, userMsg.content)
+	}
+	placeholder := m.messages[n-1]
+	if placeholder.role != "assistant" || !placeholder.streaming || placeholder.content != "" {
+		t.Errorf("expected thinking placeholder (assistant streaming empty), got %s %q streaming=%v", placeholder.role, placeholder.content, placeholder.streaming)
 	}
 }
 
@@ -376,10 +381,15 @@ func TestFinalEvent_DrainAfterStreamingResponse(t *testing.T) {
 	if len(m.pendingMessages) != 0 {
 		t.Errorf("expected queue to be drained, got %d pending", len(m.pendingMessages))
 	}
-	// The dequeued message should now be in m.messages.
-	last := m.messages[len(m.messages)-1]
-	if last.role != "user" || last.content != "next msg" {
-		t.Errorf("expected dequeued user message, got %s %q", last.role, last.content)
+	// The dequeued user message and thinking placeholder should be in m.messages.
+	n := len(m.messages)
+	userMsg := m.messages[n-2]
+	if userMsg.role != "user" || userMsg.content != "next msg" {
+		t.Errorf("expected dequeued user message at second-to-last, got %s %q", userMsg.role, userMsg.content)
+	}
+	placeholder := m.messages[n-1]
+	if placeholder.role != "assistant" || !placeholder.streaming || placeholder.content != "" {
+		t.Errorf("expected thinking placeholder (assistant streaming empty), got %s %q streaming=%v", placeholder.role, placeholder.content, placeholder.streaming)
 	}
 }
 
