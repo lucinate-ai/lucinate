@@ -15,8 +15,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/outofcoffee/repclaw/internal/client"
-	"github.com/outofcoffee/repclaw/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 func main() {
