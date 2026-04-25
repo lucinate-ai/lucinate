@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ import (
 // promptAuthFix presents interactive options when the gateway rejects the
 // stored device token. Returns true if a fix was applied and a retry should
 // be attempted, false if the user chose to quit.
-func promptAuthFix(c *client.Client) bool {
+func promptAuthFix(c *client.Client, in io.Reader) bool {
 	fmt.Fprintln(os.Stderr, "The stored device token was rejected by the gateway.")
 	fmt.Fprintln(os.Stderr, "Choose an option:")
 	fmt.Fprintln(os.Stderr, "  1) Clear stored token and retry  (recommended)")
@@ -28,7 +29,7 @@ func promptAuthFix(c *client.Client) bool {
 	fmt.Fprintln(os.Stderr, "  3) Quit")
 	fmt.Fprint(os.Stderr, "\nChoice [1-3]: ")
 
-	scanner := bufio.NewScanner(os.Stdin)
+	scanner := bufio.NewScanner(in)
 	if !scanner.Scan() {
 		return false
 	}
@@ -85,7 +86,7 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "connection error: %v\n\n", err)
-		if !promptAuthFix(c) {
+		if !promptAuthFix(c, os.Stdin) {
 			os.Exit(1)
 		}
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)

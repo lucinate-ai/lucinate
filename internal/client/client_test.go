@@ -1,8 +1,11 @@
 package client
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 func TestSanitiseHost(t *testing.T) {
@@ -76,5 +79,83 @@ func TestIdentityDirForEndpoint(t *testing.T) {
 			}
 			_ = suffix
 		})
+	}
+}
+
+// newTestClient creates a Client backed by a temporary home directory.
+// The config uses GatewayURL "http://example.com", so the identity directory
+// will be <home>/.lucinate/identity/example.com/.
+func newTestClient(t *testing.T) (*Client, string) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	c, err := New(&config.Config{GatewayURL: "http://example.com", WSURL: "ws://example.com/ws"})
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+	return c, dir
+}
+
+// testIdentityDir returns the identity directory for the test client's gateway URL.
+func testIdentityDir(home string) string {
+	return filepath.Join(home, ".lucinate", "identity", "example.com")
+}
+
+func TestClearToken_RemovesStoredToken(t *testing.T) {
+	c, home := newTestClient(t)
+
+	tokenPath := filepath.Join(testIdentityDir(home), "device-token")
+	if err := os.MkdirAll(filepath.Dir(tokenPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("test-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.ClearToken(); err != nil {
+		t.Fatalf("ClearToken: %v", err)
+	}
+	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {
+		t.Error("expected token file to be removed after ClearToken")
+	}
+}
+
+func TestClearToken_NoopWhenAbsent(t *testing.T) {
+	c, _ := newTestClient(t)
+	if err := c.ClearToken(); err != nil {
+		t.Errorf("ClearToken with no token should not error, got: %v", err)
+	}
+}
+
+func TestResetIdentity_RemovesAllData(t *testing.T) {
+	c, home := newTestClient(t)
+
+	idDir := testIdentityDir(home)
+	if err := os.MkdirAll(idDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	keypairPath := filepath.Join(idDir, "keypair.json")
+	tokenPath := filepath.Join(idDir, "device-token")
+	if err := os.WriteFile(keypairPath, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("test-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.ResetIdentity(); err != nil {
+		t.Fatalf("ResetIdentity: %v", err)
+	}
+	for _, path := range []string{keypairPath, tokenPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("expected %s to be removed after ResetIdentity", filepath.Base(path))
+		}
+	}
+}
+
+func TestResetIdentity_NoopWhenAbsent(t *testing.T) {
+	c, _ := newTestClient(t)
+	if err := c.ResetIdentity(); err != nil {
+		t.Errorf("ResetIdentity with no files should not error, got: %v", err)
 	}
 }
