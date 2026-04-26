@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.19.0] - 2026-04-26
+### Added
+- feat: interactive auth recovery on gateway connect
+
+### Changed
+- refactor: isolate device identity per gateway endpoint (#64)
+
+### Fixed
+- fix: skip empty skills when building catalog block
+- fix: update identity path in integration test scripts for per-endpoint isolation
+- fix: update stale module path in integration pair test
+
 ## [0.18.0] - 2026-04-24
 ### Added
 - feat: add /status command for gateway health view (#52)
