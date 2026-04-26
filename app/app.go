@@ -44,6 +44,25 @@ type RunOptions struct {
 	// screen until the next full repaint.
 	InitialCols int
 	InitialRows int
+
+	// ForceFullRepaintOnInput, when true, batches a tea.ClearScreen into
+	// every input-shaped Update (key/mouse/window-size). The renderer's
+	// diff state is reset and the next View output is emitted in full,
+	// rather than as a delta against the renderer's model of the screen.
+	//
+	// Embedders driving the program through a virtual terminal whose
+	// actual screen state can drift from the cursed renderer's model
+	// — typically because the host emulator handles a subset of the
+	// renderer's positioning sequences differently to a hardware TTY —
+	// should set this. The CLI never needs to: the renderer's
+	// incremental diffs are correct against a real terminal, and a
+	// CLI-side full repaint on every keypress would be visibly wasteful.
+	//
+	// Server-driven messages (gateway events, streamed chat tokens) are
+	// not gated by this flag — those arrive at high frequency and a
+	// per-event full repaint would defeat the whole point of an
+	// incremental renderer.
+	ForceFullRepaintOnInput bool
 }
 
 // Program wraps a Bubble Tea program with the lucinate model and a
@@ -69,7 +88,10 @@ func New(opts RunOptions) (*Program, error) {
 		out = os.Stdout
 	}
 
-	model := tui.NewApp(opts.Client)
+	var model tea.Model = tui.NewApp(opts.Client)
+	if opts.ForceFullRepaintOnInput {
+		model = repaintOnInput{Model: model}
+	}
 	teaOpts := []tea.ProgramOption{
 		tea.WithInput(in),
 		tea.WithOutput(out),
@@ -79,6 +101,37 @@ func New(opts RunOptions) (*Program, error) {
 	}
 	tp := tea.NewProgram(model, teaOpts...)
 	return &Program{tp: tp, client: opts.Client}, nil
+}
+
+// repaintOnInput wraps a tea.Model and, after every input-shaped Update,
+// batches tea.ClearScreen into the returned Cmd. The clearScreen message
+// is then processed in order on the program's update loop, after the
+// inner Update has produced the new state, guaranteeing a fresh full
+// repaint on the next render. This lives in app/ rather than the binding
+// repo because it needs the bubbletea.Model interface.
+type repaintOnInput struct {
+	tea.Model
+}
+
+func (r repaintOnInput) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	inner, cmd := r.Model.Update(msg)
+	if !shouldForceRepaint(msg) {
+		return repaintOnInput{Model: inner}, cmd
+	}
+	return repaintOnInput{Model: inner}, tea.Batch(cmd, tea.ClearScreen)
+}
+
+func (r repaintOnInput) View() tea.View {
+	return r.Model.View()
+}
+
+func shouldForceRepaint(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.KeyReleaseMsg, tea.MouseMsg, tea.WindowSizeMsg, tea.PasteMsg:
+		return true
+	default:
+		return false
+	}
 }
 
 // Run starts the Bubble Tea program and blocks until it exits or ctx is
