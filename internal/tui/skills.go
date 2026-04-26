@@ -132,13 +132,14 @@ func prefixAllLines(text string) string {
 // Every line is prefixed with "System:" so that stripSystemLines removes the
 // entire block from display after a history refresh.
 func skillCatalogBlock(skills []agentSkill) string {
-	if len(skills) == 0 {
+	var entries strings.Builder
+	for _, s := range skills {
+		if s.Name != "" {
+			entries.WriteString(fmt.Sprintf("  - %s: %s\n", s.Name, s.Description))
+		}
+	}
+	if entries.Len() == 0 {
 		return ""
 	}
-	var b strings.Builder
-	b.WriteString("Available agent skills (activate with /skill-name):\n")
-	for _, s := range skills {
-		b.WriteString(fmt.Sprintf("  - %s: %s\n", s.Name, s.Description))
-	}
-	return prefixAllLines(b.String())
+	return prefixAllLines("Available agent skills (activate with /skill-name):\n" + entries.String())
 }

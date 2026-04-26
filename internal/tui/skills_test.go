@@ -71,6 +71,16 @@ func TestSkillCatalogBlock_Empty(t *testing.T) {
 	}
 }
 
+func TestSkillCatalogBlock_EmptyNames(t *testing.T) {
+	skills := []agentSkill{
+		{Name: "", Description: "no name"},
+		{Name: "", Description: "also no name"},
+	}
+	if block := skillCatalogBlock(skills); block != "" {
+		t.Errorf("expected empty block when all skills have empty names, got %q", block)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }
@@ -188,6 +198,19 @@ func TestWithSkillCatalog_NoSkills(t *testing.T) {
 	result := m.withSkillCatalog("hello")
 	if result != "hello" {
 		t.Errorf("expected unmodified text with no skills, got %q", result)
+	}
+}
+
+func TestWithSkillCatalog_EmptyCatalog(t *testing.T) {
+	m := newSlashTestModel()
+	// Skills with empty names produce an empty catalog block.
+	m.skills = []agentSkill{{Name: "", Description: "no name"}}
+	result := m.withSkillCatalog("hello")
+	if result != "hello" {
+		t.Errorf("expected unmodified text when catalog is empty, got %q", result)
+	}
+	if m.skillCatalogSent {
+		t.Error("skillCatalogSent should not be set when catalog is empty")
 	}
 }
 

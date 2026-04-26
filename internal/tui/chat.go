@@ -548,8 +548,12 @@ func (m *chatModel) withSkillCatalog(text string) string {
 	if m.skillCatalogSent || len(m.skills) == 0 {
 		return text
 	}
+	catalog := skillCatalogBlock(m.skills)
+	if catalog == "" {
+		return text
+	}
 	m.skillCatalogSent = true
-	return skillCatalogBlock(m.skills) + "\n" + text
+	return catalog + "\n" + text
 }
 
 // drainQueue sends the next queued message if any are pending.
