@@ -40,6 +40,18 @@ The save is non-fatal — if it fails, a warning is logged but the session conti
 
 If the token is expired or revoked the gateway rejects the connection and an error is shown in the agent picker. The user can press `r` to retry after the device has been re-approved.
 
+## Interactive auth recovery on connect
+
+When the initial connect fails with an auth error, `connectWithAuth` in `main.go` handles it interactively before exiting:
+
+- **Token mismatch** (`gateway token mismatch`) — the stored device token is no longer valid for this gateway (for example, the device was removed and re-added). The user is offered three choices:
+  1. Clear the stored token and retry pairing (default).
+  2. Reset the device identity entirely (new keypair) and retry pairing.
+  3. Quit.
+- **Token missing** (`gateway token missing`) — the gateway requires a pre-shared auth token that the client doesn't have. This can occur on a first-time connect, or as a follow-up after a clear/reset retry. The user is prompted to paste the gateway auth token, which is saved via `client.StoreToken()` and the connect is retried.
+
+Both flows read from `os.Stdin`, so they only trigger in an interactive terminal. Non-interactive callers will see the original error and exit.
+
 ## Scopes
 
 The client connects with operator-level scopes: `ScopeOperatorRead`, `ScopeOperatorWrite`, `ScopeOperatorAdmin`, and `ScopeOperatorApprovals`. These are set in `internal/client/client.go` and are required for session management, exec approval, and agent administration.

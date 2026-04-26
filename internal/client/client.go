@@ -305,6 +305,24 @@ func (c *Client) HelloUptimeMs() int64 {
 	return 0
 }
 
+// ClearToken removes the stored device token so the next Connect call
+// will authenticate without a cached token.
+func (c *Client) ClearToken() error {
+	return c.store.ClearDeviceToken()
+}
+
+// ResetIdentity removes all stored identity data (keypair and device token)
+// so the next Connect call will register as a new device.
+func (c *Client) ResetIdentity() error {
+	return c.store.Reset()
+}
+
+// StoreToken saves a new device token. Use this after clearing a stale token
+// to seed the gateway auth token before retrying the connection.
+func (c *Client) StoreToken(token string) error {
+	return c.store.SaveDeviceToken(token)
+}
+
 // GW returns the underlying gateway client (for direct RPC access).
 func (c *Client) GW() *gateway.Client { return c.gw }
 
