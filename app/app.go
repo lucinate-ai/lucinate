@@ -16,6 +16,7 @@ import (
 	"os"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/tui"
@@ -45,16 +46,38 @@ type RunOptions struct {
 	InitialCols int
 	InitialRows int
 
-	// HideInputArea suppresses the chat view's textarea and help line so
-	// the embedder can supply its own input surface (for example, a
-	// platform-native text field whose typed bytes are written into
-	// Input). The underlying textarea model is still updated by the
-	// incoming byte stream so command parsing, history, and Enter-to-send
-	// behave exactly as in the CLI; only its rendering and the help line
-	// below it are skipped, and the chat viewport reclaims the freed
-	// rows. The CLI never needs this; embedders without a separate input
-	// surface should leave it false.
+	// ColorProfile, when non-zero, overrides Bubble Tea's automatic
+	// colour-profile detection. Bubble Tea inspects Output to decide
+	// what palette Lipgloss is allowed to emit; when Output is not a
+	// real TTY (an in-process virtual terminal driven by an embedder,
+	// say) the auto-detected profile is NoTTY, which strips every SGR
+	// sequence and produces a monochrome render. Embedders whose
+	// terminal supports colour should set this to the appropriate
+	// profile (typically colorprofile.TrueColor). The CLI leaves it
+	// zero so its existing detection still applies.
+	ColorProfile colorprofile.Profile
+
+	// HideInputArea suppresses the chat view's textarea so the embedder
+	// can supply its own input surface (for example, a platform-native
+	// text field whose typed bytes are written into Input). The
+	// underlying textarea model is still updated by the incoming byte
+	// stream so command parsing, slash-command autocomplete, history,
+	// and Enter-to-send behave exactly as in the CLI; only the textarea
+	// view and its border are skipped, and the help line below
+	// continues to surface slash-command hints. The CLI never needs
+	// this; embedders without a separate input surface should leave it
+	// false.
 	HideInputArea bool
+
+	// DisableMouse stops the program from emitting the
+	// alt-screen mouse-tracking enable sequence. Embedders driving the
+	// program through a virtual terminal whose host wants to handle
+	// pan/swipe gestures natively (translating them into PgUp/PgDown
+	// keystrokes for example) should set this so the host's gesture
+	// recogniser doesn't capture pans into mouse motion events that the
+	// program then ignores. The CLI relies on mouse tracking for
+	// selection and should leave it false.
+	DisableMouse bool
 }
 
 // Program wraps a Bubble Tea program with the lucinate model and a
@@ -80,13 +103,19 @@ func New(opts RunOptions) (*Program, error) {
 		out = os.Stdout
 	}
 
-	model := tui.NewApp(opts.Client, tui.AppOptions{HideInputArea: opts.HideInputArea})
+	model := tui.NewApp(opts.Client, tui.AppOptions{
+		HideInputArea: opts.HideInputArea,
+		DisableMouse:  opts.DisableMouse,
+	})
 	teaOpts := []tea.ProgramOption{
 		tea.WithInput(in),
 		tea.WithOutput(out),
 	}
 	if opts.InitialCols > 0 && opts.InitialRows > 0 {
 		teaOpts = append(teaOpts, tea.WithWindowSize(opts.InitialCols, opts.InitialRows))
+	}
+	if opts.ColorProfile != 0 {
+		teaOpts = append(teaOpts, tea.WithColorProfile(opts.ColorProfile))
 	}
 	tp := tea.NewProgram(model, teaOpts...)
 	return &Program{tp: tp, client: opts.Client}, nil

@@ -714,7 +714,7 @@ func (m *chatModel) setSize(w, h int) {
 	borderH := 2
 	vpHeight := h - inputHeight - headerH - helpH - borderH - 2
 	if m.hideInput {
-		vpHeight = h - headerH - 2
+		vpHeight = h - headerH - helpH - 2
 	}
 
 	m.viewport.SetWidth(w)
@@ -756,14 +756,6 @@ func (m chatModel) View() string {
 		Width(m.width).
 		Render(title)
 
-	if m.hideInput {
-		return lipgloss.JoinVertical(
-			lipgloss.Left,
-			header,
-			m.viewport.View(),
-		)
-	}
-
 	borderStyle := inputBorderStyle
 	isRemoteExec := strings.HasPrefix(m.textarea.Value(), "!!")
 	isLocalExec := !isRemoteExec && strings.HasPrefix(m.textarea.Value(), "!")
@@ -772,9 +764,6 @@ func (m chatModel) View() string {
 	} else if isLocalExec {
 		borderStyle = localExecBorderStyle
 	}
-	input := borderStyle.
-		Width(m.width - 4).
-		Render(m.textarea.View())
 
 	var help string
 	if isRemoteExec {
@@ -785,6 +774,8 @@ func (m chatModel) View() string {
 		hint := m.slashCommandHint(m.textarea.Value())
 		if hint != "" {
 			help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", m.textarea.Value(), hint))
+		} else if m.hideInput {
+			help = helpStyle.Render(" /help: commands")
 		} else {
 			helpText := " enter: send | alt+enter: newline | /help: commands"
 			if n := len(m.pendingMessages); n > 0 {
@@ -793,6 +784,19 @@ func (m chatModel) View() string {
 			help = helpStyle.Render(helpText)
 		}
 	}
+
+	if m.hideInput {
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			header,
+			m.viewport.View(),
+			help,
+		)
+	}
+
+	input := borderStyle.
+		Width(m.width - 4).
+		Render(m.textarea.View())
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,

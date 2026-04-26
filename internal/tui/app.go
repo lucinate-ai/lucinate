@@ -24,6 +24,7 @@ const (
 // rationale.
 type AppOptions struct {
 	HideInputArea bool
+	DisableMouse  bool
 }
 
 // AppModel is the root bubbletea model.
@@ -38,16 +39,18 @@ type AppModel struct {
 	width         int
 	height        int
 	hideInput     bool
+	disableMouse  bool
 }
 
 // NewApp creates the root application model.
 func NewApp(c *client.Client, opts AppOptions) AppModel {
 	return AppModel{
-		state:       viewSelect,
-		selectModel: newSelectModel(c),
-		client:      c,
-		prefs:       config.LoadPreferences(),
-		hideInput:   opts.HideInputArea,
+		state:        viewSelect,
+		selectModel:  newSelectModel(c),
+		client:       c,
+		prefs:        config.LoadPreferences(),
+		hideInput:    opts.HideInputArea,
+		disableMouse: opts.DisableMouse,
 	}
 }
 
@@ -220,7 +223,9 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView("")
 	}
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	if !m.disableMouse {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	v.KeyboardEnhancements.ReportEventTypes = true
 	return v
 }
