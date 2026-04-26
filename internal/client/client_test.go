@@ -159,3 +159,19 @@ func TestResetIdentity_NoopWhenAbsent(t *testing.T) {
 		t.Errorf("ResetIdentity with no files should not error, got: %v", err)
 	}
 }
+
+func TestStoreToken_PersistsToken(t *testing.T) {
+	c, home := newTestClient(t)
+
+	if err := c.StoreToken("my-gateway-token"); err != nil {
+		t.Fatalf("StoreToken: %v", err)
+	}
+	tokenPath := filepath.Join(testIdentityDir(home), "device-token")
+	data, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatalf("reading token file: %v", err)
+	}
+	if got := string(data); got != "my-gateway-token" {
+		t.Errorf("stored token = %q, want %q", got, "my-gateway-token")
+	}
+}

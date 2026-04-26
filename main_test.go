@@ -39,9 +39,12 @@ func seedToken(t *testing.T, home, token string) {
 	}
 }
 
-func tokenExists(home string) bool {
-	_, err := os.Stat(filepath.Join(testIdentityDir(home), "device-token"))
-	return err == nil
+func readToken(home string) string {
+	data, err := os.ReadFile(filepath.Join(testIdentityDir(home), "device-token"))
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func TestPromptAuthFix(t *testing.T) {
@@ -49,44 +52,43 @@ func TestPromptAuthFix(t *testing.T) {
 		name       string
 		input      string
 		wantResult bool
-		// wantToken: whether the token file should still exist after the call.
-		wantToken bool
+		wantToken  string // expected stored token ("" = absent)
 	}{
 		{
 			name:       "choice 1 clears token and returns true",
 			input:      "1\n",
 			wantResult: true,
-			wantToken:  false,
+			wantToken:  "",
 		},
 		{
 			name:       "empty input defaults to clear token",
 			input:      "\n",
 			wantResult: true,
-			wantToken:  false,
+			wantToken:  "",
 		},
 		{
 			name:       "choice 2 resets identity and returns true",
 			input:      "2\n",
 			wantResult: true,
-			wantToken:  false,
+			wantToken:  "",
 		},
 		{
 			name:       "choice 3 quits without modification",
 			input:      "3\n",
 			wantResult: false,
-			wantToken:  true,
+			wantToken:  "old-token",
 		},
 		{
 			name:       "unknown choice quits without modification",
 			input:      "x\n",
 			wantResult: false,
-			wantToken:  true,
+			wantToken:  "old-token",
 		},
 		{
 			name:       "EOF returns false",
 			input:      "",
 			wantResult: false,
-			wantToken:  true,
+			wantToken:  "old-token",
 		},
 	}
 
@@ -100,12 +102,51 @@ func TestPromptAuthFix(t *testing.T) {
 			if got != tt.wantResult {
 				t.Errorf("promptAuthFix returned %v, want %v", got, tt.wantResult)
 			}
-			if tokenExists(home) != tt.wantToken {
-				if tt.wantToken {
-					t.Error("expected token file to remain but it was removed")
-				} else {
-					t.Error("expected token file to be removed but it still exists")
-				}
+			if gotToken := readToken(home); gotToken != tt.wantToken {
+				t.Errorf("stored token = %q, want %q", gotToken, tt.wantToken)
+			}
+		})
+	}
+}
+
+func TestPromptForToken(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantResult bool
+		wantToken  string
+	}{
+		{
+			name:       "stores provided token and returns true",
+			input:      "my-gateway-token\n",
+			wantResult: true,
+			wantToken:  "my-gateway-token",
+		},
+		{
+			name:       "empty input returns false",
+			input:      "\n",
+			wantResult: false,
+			wantToken:  "",
+		},
+		{
+			name:       "EOF returns false",
+			input:      "",
+			wantResult: false,
+			wantToken:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, home := newTestClient(t)
+
+			got := promptForToken(c, strings.NewReader(tt.input))
+
+			if got != tt.wantResult {
+				t.Errorf("promptForToken returned %v, want %v", got, tt.wantResult)
+			}
+			if gotToken := readToken(home); gotToken != tt.wantToken {
+				t.Errorf("stored token = %q, want %q", gotToken, tt.wantToken)
 			}
 		})
 	}

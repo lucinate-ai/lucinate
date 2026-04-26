@@ -317,6 +317,12 @@ func (c *Client) ResetIdentity() error {
 	return c.store.Reset()
 }
 
+// StoreToken saves a new device token. Use this after clearing a stale token
+// to seed the gateway auth token before retrying the connection.
+func (c *Client) StoreToken(token string) error {
+	return c.store.SaveDeviceToken(token)
+}
+
 // GW returns the underlying gateway client (for direct RPC access).
 func (c *Client) GW() *gateway.Client { return c.gw }
 

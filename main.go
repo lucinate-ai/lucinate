@@ -53,6 +53,88 @@ func promptAuthFix(c *client.Client, in io.Reader) bool {
 	}
 }
 
+// promptForToken asks the user to enter the gateway auth token. Some gateways
+// require a pre-shared token for any connection, including fresh device
+// registrations. Returns true if a token was stored and a retry should be
+// attempted.
+func promptForToken(c *client.Client, in io.Reader) bool {
+	fmt.Fprintln(os.Stderr, "This gateway requires an auth token for connections.")
+	fmt.Fprintln(os.Stderr, "Enter the gateway auth token (ask your gateway operator if needed):")
+	fmt.Fprint(os.Stderr, "Token: ")
+
+	scanner := bufio.NewScanner(in)
+	if !scanner.Scan() {
+		return false
+	}
+	token := strings.TrimSpace(scanner.Text())
+	if token == "" {
+		return false
+	}
+	if err := c.StoreToken(token); err != nil {
+		fmt.Fprintf(os.Stderr, "error storing token: %v\n", err)
+		return false
+	}
+	fmt.Fprintln(os.Stderr, "Token stored. Retrying...")
+	return true
+}
+
+const connectTimeout = 15 * time.Second
+
+// connectWithAuth connects to the gateway, handling auth errors interactively:
+//
+//  1. Initial connect attempt.
+//  2. "token mismatch" → clear/reset → retry (works for gateways without auth.token).
+//  3. "token missing" → prompt for gateway auth token → retry (needed when the
+//     gateway requires a pre-shared token, either on first connect or after a
+//     clear/reset).
+func connectWithAuth(c *client.Client, in io.Reader) error {
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+
+	err := c.Connect(ctx)
+	if err == nil {
+		return nil
+	}
+
+	// Token mismatch: stored token is invalid — offer to clear/reset, then retry.
+	if isTokenMismatch(err) {
+		fmt.Fprintf(os.Stderr, "connection error: %v\n\n", err)
+		if !promptAuthFix(c, in) {
+			return err
+		}
+		ctx2, cancel2 := context.WithTimeout(context.Background(), connectTimeout)
+		defer cancel2()
+		err = c.Connect(ctx2)
+		if err == nil {
+			return nil
+		}
+		// Fall through: the retry may have produced "token missing" if this
+		// gateway requires a pre-shared auth token.
+	}
+
+	// Token missing: gateway requires an auth token that the client doesn't have.
+	// This covers both first-time connections and post-clear/reset retries.
+	if isTokenMissing(err) {
+		fmt.Fprintf(os.Stderr, "connection error: %v\n\n", err)
+		if !promptForToken(c, in) {
+			return err
+		}
+		ctx3, cancel3 := context.WithTimeout(context.Background(), connectTimeout)
+		defer cancel3()
+		return c.Connect(ctx3)
+	}
+
+	return err
+}
+
+func isTokenMismatch(err error) bool {
+	return strings.Contains(err.Error(), "gateway token mismatch")
+}
+
+func isTokenMissing(err error) bool {
+	return strings.Contains(err.Error(), "gateway token missing")
+}
+
 func main() {
 	fs := flag.NewFlagSet("lucinate", flag.ExitOnError)
 	showVersion := fs.Bool("version", false, "print version and exit")
@@ -77,24 +159,9 @@ func main() {
 	}
 	defer c.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	if err := c.Connect(ctx); err != nil {
-		if !strings.Contains(err.Error(), "gateway token mismatch") {
-			fmt.Fprintf(os.Stderr, "connection error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Fprintf(os.Stderr, "connection error: %v\n\n", err)
-		if !promptAuthFix(c, os.Stdin) {
-			os.Exit(1)
-		}
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel2()
-		if err := c.Connect(ctx2); err != nil {
-			fmt.Fprintf(os.Stderr, "connection error: %v\n", err)
-			os.Exit(1)
-		}
+	if err := connectWithAuth(c, os.Stdin); err != nil {
+		fmt.Fprintf(os.Stderr, "connection error: %v\n", err)
+		os.Exit(1)
 	}
 
 	app := tui.NewApp(c)
