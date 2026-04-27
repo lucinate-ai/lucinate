@@ -18,6 +18,68 @@ import (
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
+// connectionBadge returns a short status string for the chat header when the
+// gateway connection is not in the steady-state Connected condition. Returns
+// empty when connected so the header stays clean.
+func connectionBadge(s ConnStateMsg) string {
+	switch s.Status {
+	case client.StatusDisconnected:
+		return headerBadgeWarnStyle.Render("⚠ disconnected")
+	case client.StatusReconnecting:
+		if s.Attempt > 1 {
+			return headerBadgeWarnStyle.Render(fmt.Sprintf("⟳ reconnecting (attempt %d)", s.Attempt))
+		}
+		return headerBadgeWarnStyle.Render("⟳ reconnecting")
+	case client.StatusAuthFailed:
+		return headerBadgeErrStyle.Render("✖ auth failed — restart")
+	default:
+		return ""
+	}
+}
+
+// applyConnState updates the chat view in response to a connection-state
+// transition: stores the new state, and on Connected→non-Connected
+// transitions during a streaming reply, clears the stale streaming
+// placeholder so the input is usable again.
+func (m *chatModel) applyConnState(next ConnStateMsg) {
+	prev := m.connState
+	m.connState = next
+
+	switch next.Status {
+	case client.StatusDisconnected:
+		// Only emit the system note on a real Connected→Disconnected edge,
+		// not on an initial state push at startup.
+		if prev.Status == client.StatusConnected {
+			// Drop the stale spinner placeholder if a turn was in flight.
+			// The gateway will not deliver any further deltas after a restart;
+			// holding the placeholder forever would lock the input.
+			m.removeThinkingPlaceholder()
+			m.sending = false
+			m.runID = ""
+			m.messages = append(m.messages, chatMessage{
+				role:    "system",
+				content: "Lost gateway connection — attempting to reconnect…",
+			})
+			m.updateViewport()
+		}
+	case client.StatusConnected:
+		if prev.Status == client.StatusDisconnected || prev.Status == client.StatusReconnecting {
+			m.messages = append(m.messages, chatMessage{
+				role:    "system",
+				content: "Reconnected to gateway.",
+			})
+			m.updateViewport()
+		}
+	case client.StatusAuthFailed:
+		errLine := "Reconnect failed: gateway rejected the device token. Quit (Ctrl+C) and restart to re-authenticate."
+		if next.Err != nil {
+			errLine = fmt.Sprintf("Reconnect failed (%v). Quit (Ctrl+C) and restart to re-authenticate.", next.Err)
+		}
+		m.messages = append(m.messages, chatMessage{role: "system", errMsg: errLine})
+		m.updateViewport()
+	}
+}
+
 const inputHeight = 3
 
 // spinnerFrames cycles the streaming-response placeholder through a braille
@@ -51,6 +113,7 @@ type chatModel struct {
 	pendingConfirm   *pendingConfirmation
 	historyLimit     int
 	thinkingLevel    string // current thinking level; "" means not set / using gateway default
+	connState        ConnStateMsg
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -667,6 +730,9 @@ func (m chatModel) View() string {
 	}
 	if m.thinkingLevel != "" && m.thinkingLevel != "off" {
 		left += " · think:" + m.thinkingLevel
+	}
+	if badge := connectionBadge(m.connState); badge != "" {
+		left += " · " + badge
 	}
 	right := ""
 	if m.stats != nil {

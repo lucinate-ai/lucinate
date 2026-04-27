@@ -128,11 +128,11 @@ func connectWithAuth(c *client.Client, in io.Reader) error {
 }
 
 func isTokenMismatch(err error) bool {
-	return strings.Contains(err.Error(), "gateway token mismatch")
+	return err != nil && strings.Contains(err.Error(), "gateway token mismatch")
 }
 
 func isTokenMissing(err error) bool {
-	return strings.Contains(err.Error(), "gateway token missing")
+	return err != nil && strings.Contains(err.Error(), "gateway token missing")
 }
 
 func main() {
@@ -174,6 +174,14 @@ func main() {
 			p.Send(tui.GatewayEventMsg(ev))
 		}
 	}()
+
+	// Watch the gateway connection and reconnect if it drops (e.g. gateway
+	// restart). The supervisor pushes state transitions to the TUI.
+	supervisorCtx, stopSupervisor := context.WithCancel(context.Background())
+	defer stopSupervisor()
+	go c.Supervise(supervisorCtx, func(s client.ConnState) {
+		p.Send(tui.ConnStateMsg{Status: s.Status, Attempt: s.Attempt, Err: s.Err})
+	})
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

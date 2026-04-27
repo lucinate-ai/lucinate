@@ -52,6 +52,18 @@ var (
 			Foreground(errClr).
 			Bold(true)
 
+	// Connection-status badge styles, sized to read against the purple
+	// header background where the badge is rendered.
+	headerBadgeWarnStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#1A0033")).
+				Background(accent)
+	headerBadgeErrStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#FFFFFF")).
+				Background(lipgloss.Color("#B00020")).
+				Padding(0, 1)
+
 	// Input area border for exec mode.
 	execBorderStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/a3tai/openclaw-go/gateway"
 	"github.com/a3tai/openclaw-go/identity"
@@ -20,6 +21,7 @@ import (
 // Client wraps the gateway SDK client and bridges events to a channel
 // for consumption by the bubbletea event loop.
 type Client struct {
+	mu     sync.RWMutex
 	gw     *gateway.Client
 	events chan protocol.Event
 	cfg    *config.Config
@@ -83,9 +85,54 @@ func sanitiseHost(host string) string {
 
 // Connect establishes a WebSocket connection to the gateway.
 func (c *Client) Connect(ctx context.Context) error {
+	return c.dial(ctx)
+}
+
+// Reconnect tears down the current gateway client and dials a fresh one.
+// The events channel is preserved so existing TUI consumers keep working.
+func (c *Client) Reconnect(ctx context.Context) error {
+	c.mu.Lock()
+	old := c.gw
+	c.gw = nil
+	c.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+	return c.dial(ctx)
+}
+
+// dial loads identity, builds options, and performs the SDK handshake.
+func (c *Client) dial(ctx context.Context) error {
+	opts, err := c.buildOptions()
+	if err != nil {
+		return err
+	}
+
+	gw := gateway.NewClient(opts...)
+	if err := gw.Connect(ctx, c.cfg.WSURL); err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	c.mu.Lock()
+	c.gw = gw
+	c.mu.Unlock()
+
+	// Save device token if issued.
+	if hello := gw.Hello(); hello != nil && hello.Auth != nil && hello.Auth.DeviceToken != "" {
+		if err := c.store.SaveDeviceToken(hello.Auth.DeviceToken); err != nil {
+			log.Printf("warning: failed to save device token: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// buildOptions assembles the gateway SDK options for a connection attempt.
+// Called on every (re)connect so any newly-saved device token is picked up.
+func (c *Client) buildOptions() ([]gateway.Option, error) {
 	id, err := c.store.LoadOrGenerate()
 	if err != nil {
-		return fmt.Errorf("identity: %w", err)
+		return nil, fmt.Errorf("identity: %w", err)
 	}
 
 	deviceToken := c.store.LoadDeviceToken()
@@ -107,26 +154,24 @@ func (c *Client) Connect(ctx context.Context) error {
 				// drop event if channel is full
 			}
 		}),
+		gateway.WithIdentity(id, deviceToken),
 	}
+	return opts, nil
+}
 
-	// Include device identity for authentication.
-	opts = append(opts, gateway.WithIdentity(id, deviceToken))
-
-	c.gw = gateway.NewClient(opts...)
-
-	if err := c.gw.Connect(ctx, c.cfg.WSURL); err != nil {
-		return fmt.Errorf("connect: %w", err)
+// Done returns a channel that is closed when the current gateway connection
+// terminates (clean close, network drop, or gateway restart). Returns a
+// pre-closed channel if there is no active connection.
+func (c *Client) Done() <-chan struct{} {
+	c.mu.RLock()
+	gw := c.gw
+	c.mu.RUnlock()
+	if gw == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
 	}
-
-	// Save device token if issued.
-	hello := c.gw.Hello()
-	if hello != nil && hello.Auth != nil && hello.Auth.DeviceToken != "" {
-		if err := c.store.SaveDeviceToken(hello.Auth.DeviceToken); err != nil {
-			log.Printf("warning: failed to save device token: %v", err)
-		}
-	}
-
-	return nil
+	return gw.Done()
 }
 
 // Events returns the channel of gateway events.
@@ -134,15 +179,24 @@ func (c *Client) Events() <-chan protocol.Event {
 	return c.events
 }
 
+// gw returns the current gateway client under read-lock. Callers must
+// handle nil (returned only before the first Connect succeeds).
+func (c *Client) currentGW() *gateway.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.gw
+}
+
 // ListAgents returns the list of available agents.
 func (c *Client) ListAgents(ctx context.Context) (*protocol.AgentsListResult, error) {
-	return c.gw.AgentsList(ctx)
+	return c.currentGW().AgentsList(ctx)
 }
 
 // CreateAgent provisions a new agent via the gateway API and seeds an
 // IDENTITY.md file for it.
 func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error {
-	result, err := c.gw.AgentsCreate(ctx, protocol.AgentsCreateParams{
+	gw := c.currentGW()
+	result, err := gw.AgentsCreate(ctx, protocol.AgentsCreateParams{
 		Name:      name,
 		Workspace: workspace,
 	})
@@ -152,7 +206,7 @@ func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error 
 
 	// Seed IDENTITY.md so the agent has a name.
 	identity := fmt.Sprintf("# Identity\n\nName: %s\n", name)
-	if _, err := c.gw.AgentsFilesSet(ctx, protocol.AgentsFilesSetParams{
+	if _, err := gw.AgentsFilesSet(ctx, protocol.AgentsFilesSetParams{
 		AgentID: result.AgentID,
 		Name:    "IDENTITY.md",
 		Content: identity,
@@ -168,7 +222,7 @@ func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error 
 func (c *Client) SessionsList(ctx context.Context, agentID string) (json.RawMessage, error) {
 	includeTitles := true
 	includeLastMsg := true
-	return c.gw.SessionsList(ctx, protocol.SessionsListParams{
+	return c.currentGW().SessionsList(ctx, protocol.SessionsListParams{
 		AgentID:              agentID,
 		IncludeDerivedTitles: &includeTitles,
 		IncludeLastMessage:   &includeLastMsg,
@@ -178,7 +232,7 @@ func (c *Client) SessionsList(ctx context.Context, agentID string) (json.RawMess
 // CreateSession creates or resumes a session for the given agent and returns
 // the gateway-assigned session key.
 func (c *Client) CreateSession(ctx context.Context, agentID, key string) (string, error) {
-	raw, err := c.gw.SessionsCreate(ctx, protocol.SessionsCreateParams{
+	raw, err := c.currentGW().SessionsCreate(ctx, protocol.SessionsCreateParams{
 		Key:     key,
 		AgentID: agentID,
 	})
@@ -196,7 +250,7 @@ func (c *Client) CreateSession(ctx context.Context, agentID, key string) (string
 
 // ChatSend sends a chat message and returns the initial ack.
 func (c *Client) ChatSend(ctx context.Context, sessionKey, message, idemKey string) (*protocol.ChatSendResult, error) {
-	return c.gw.ChatSend(ctx, protocol.ChatSendParams{
+	return c.currentGW().ChatSend(ctx, protocol.ChatSendParams{
 		SessionKey:     sessionKey,
 		Message:        message,
 		IdempotencyKey: idemKey,
@@ -205,7 +259,7 @@ func (c *Client) ChatSend(ctx context.Context, sessionKey, message, idemKey stri
 
 // ChatHistory retrieves recent chat history for a session.
 func (c *Client) ChatHistory(ctx context.Context, sessionKey string, limit int) (json.RawMessage, error) {
-	return c.gw.ChatHistory(ctx, protocol.ChatHistoryParams{
+	return c.currentGW().ChatHistory(ctx, protocol.ChatHistoryParams{
 		SessionKey: sessionKey,
 		Limit:      &limit,
 	})
@@ -214,7 +268,7 @@ func (c *Client) ChatHistory(ctx context.Context, sessionKey string, limit int) 
 // SessionUsage retrieves usage data for a session.
 func (c *Client) SessionUsage(ctx context.Context, sessionKey string) (json.RawMessage, error) {
 	includeContext := true
-	return c.gw.SessionsUsage(ctx, protocol.SessionsUsageParams{
+	return c.currentGW().SessionsUsage(ctx, protocol.SessionsUsageParams{
 		Key:                  sessionKey,
 		IncludeContextWeight: &includeContext,
 	})
@@ -222,12 +276,12 @@ func (c *Client) SessionUsage(ctx context.Context, sessionKey string) (json.RawM
 
 // ModelsList returns the available models.
 func (c *Client) ModelsList(ctx context.Context) (*protocol.ModelsListResult, error) {
-	return c.gw.ModelsList(ctx)
+	return c.currentGW().ModelsList(ctx)
 }
 
 // SessionPatchModel changes the model for a session.
 func (c *Client) SessionPatchModel(ctx context.Context, sessionKey, modelID string) error {
-	return c.gw.SessionsPatch(ctx, protocol.SessionsPatchParams{
+	return c.currentGW().SessionsPatch(ctx, protocol.SessionsPatchParams{
 		Key:   sessionKey,
 		Model: &modelID,
 	})
@@ -235,7 +289,7 @@ func (c *Client) SessionPatchModel(ctx context.Context, sessionKey, modelID stri
 
 // SessionPatchThinking sets the thinking level for a session.
 func (c *Client) SessionPatchThinking(ctx context.Context, sessionKey, level string) error {
-	return c.gw.SessionsPatch(ctx, protocol.SessionsPatchParams{
+	return c.currentGW().SessionsPatch(ctx, protocol.SessionsPatchParams{
 		Key:           sessionKey,
 		ThinkingLevel: &level,
 	})
@@ -246,7 +300,7 @@ func (c *Client) SessionPatchThinking(ctx context.Context, sessionKey, level str
 // and the decision arrives asynchronously via an exec.approval.resolved event.
 func (c *Client) ExecRequest(ctx context.Context, command, sessionKey string) (*protocol.ExecApprovalRequestResult, error) {
 	twoPhase := true
-	return c.gw.ExecApprovalRequest(ctx, protocol.ExecApprovalRequestParams{
+	return c.currentGW().ExecApprovalRequest(ctx, protocol.ExecApprovalRequestParams{
 		Command:    command,
 		SessionKey: &sessionKey,
 		TwoPhase:   &twoPhase,
@@ -255,7 +309,7 @@ func (c *Client) ExecRequest(ctx context.Context, command, sessionKey string) (*
 
 // ExecResolve approves or denies a pending exec approval.
 func (c *Client) ExecResolve(ctx context.Context, id, decision string) (*protocol.ExecApprovalResolveResult, error) {
-	return c.gw.ExecApprovalResolve(ctx, protocol.ExecApprovalResolveParams{
+	return c.currentGW().ExecApprovalResolve(ctx, protocol.ExecApprovalResolveParams{
 		ID:       id,
 		Decision: decision,
 	})
@@ -263,7 +317,7 @@ func (c *Client) ExecResolve(ctx context.Context, id, decision string) (*protoco
 
 // ChatAbort aborts a running chat turn.
 func (c *Client) ChatAbort(ctx context.Context, sessionKey, runID string) error {
-	return c.gw.ChatAbort(ctx, protocol.ChatAbortParams{
+	return c.currentGW().ChatAbort(ctx, protocol.ChatAbortParams{
 		SessionKey: sessionKey,
 		RunID:      runID,
 	})
@@ -271,13 +325,13 @@ func (c *Client) ChatAbort(ctx context.Context, sessionKey, runID string) error 
 
 // SessionCompact compacts (summarises) the session context.
 func (c *Client) SessionCompact(ctx context.Context, sessionKey string) error {
-	return c.gw.SessionsCompact(ctx, protocol.SessionsCompactParams{Key: sessionKey})
+	return c.currentGW().SessionsCompact(ctx, protocol.SessionsCompactParams{Key: sessionKey})
 }
 
 // SessionDelete deletes a session and its transcript.
 func (c *Client) SessionDelete(ctx context.Context, sessionKey string) error {
 	deleteTranscript := true
-	return c.gw.SessionsDelete(ctx, protocol.SessionsDeleteParams{
+	return c.currentGW().SessionsDelete(ctx, protocol.SessionsDeleteParams{
 		Key:              sessionKey,
 		DeleteTranscript: &deleteTranscript,
 	})
@@ -285,7 +339,7 @@ func (c *Client) SessionDelete(ctx context.Context, sessionKey string) error {
 
 // GatewayHealth retrieves the gateway health snapshot.
 func (c *Client) GatewayHealth(ctx context.Context) (*protocol.HealthEvent, error) {
-	raw, err := c.gw.Health(ctx)
+	raw, err := c.currentGW().Health(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("health: %w", err)
 	}
@@ -299,7 +353,11 @@ func (c *Client) GatewayHealth(ctx context.Context) (*protocol.HealthEvent, erro
 // HelloUptimeMs returns the gateway uptime in milliseconds from the connect
 // handshake, or 0 if not connected.
 func (c *Client) HelloUptimeMs() int64 {
-	if h := c.gw.Hello(); h != nil {
+	gw := c.currentGW()
+	if gw == nil {
+		return 0
+	}
+	if h := gw.Hello(); h != nil {
 		return h.Snapshot.UptimeMs
 	}
 	return 0
@@ -324,12 +382,18 @@ func (c *Client) StoreToken(token string) error {
 }
 
 // GW returns the underlying gateway client (for direct RPC access).
-func (c *Client) GW() *gateway.Client { return c.gw }
+// May return nil if no connection has been established yet, or briefly
+// during a reconnect cycle.
+func (c *Client) GW() *gateway.Client { return c.currentGW() }
 
 // Close closes the gateway connection.
 func (c *Client) Close() error {
-	if c.gw != nil {
-		return c.gw.Close()
+	c.mu.Lock()
+	gw := c.gw
+	c.gw = nil
+	c.mu.Unlock()
+	if gw != nil {
+		return gw.Close()
 	}
 	return nil
 }

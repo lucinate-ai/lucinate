@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/a3tai/openclaw-go/protocol"
 
+	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
@@ -181,3 +182,12 @@ type sessionClearedMsg struct {
 
 // spinnerTickMsg advances the streaming-response placeholder animation.
 type spinnerTickMsg struct{}
+
+// ConnStateMsg carries a gateway connection-state transition from the
+// reconnect supervisor into the bubbletea event loop. Exported so main.go
+// can dispatch it via p.Send().
+type ConnStateMsg struct {
+	Status  client.ConnStatus
+	Attempt int
+	Err     error
+}

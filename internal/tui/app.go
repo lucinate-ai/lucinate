@@ -81,6 +81,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatModel.prefs = msg.prefs
 		return m, nil
 
+	case ConnStateMsg:
+		m.chatModel.applyConnState(msg)
+		return m, nil
+
 	case showSessionsMsg:
 		m.sessionsModel = newSessionsModel(m.client, msg.agentID, msg.agentName, msg.modelID, msg.mainKey)
 		m.sessionsModel.setSize(m.width, m.height)

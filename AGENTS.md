@@ -24,7 +24,7 @@ lucinate is a TUI chat client for the OpenClaw gateway, built with bubbletea.
 ### Packages
 
 - **`internal/config`** — Loads `OPENCLAW_GATEWAY_URL` from env/`.env` file. Auto-derives WebSocket URL from HTTP URL (`https` → `wss`).
-- **`internal/client`** — Wraps the `openclaw-go` gateway SDK. Manages WebSocket connection, device identity (`~/.lucinate/identity/<endpoint>/`), and bridges gateway events to a buffered channel for the TUI event loop.
+- **`internal/client`** — Wraps the `openclaw-go` gateway SDK. Manages WebSocket connection, device identity (`~/.lucinate/identity/<endpoint>/`), and bridges gateway events to a buffered channel for the TUI event loop. A `Supervise` goroutine reconnects with exponential backoff if the WebSocket drops (gateway restart, network blip).
 - **`internal/tui`** — Bubbletea TUI with two views: agent selection (`selectModel`) and chat (`chatModel`). Chat supports streaming responses with markdown rendering via glamour.
 
 ### Flow

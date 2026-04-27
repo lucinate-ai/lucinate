@@ -40,10 +40,20 @@ The spinner also appears while the model is thinking before any response deltas 
 
 The header line shows:
 
-- **Left:** agent name · model ID (last path component) · thinking level (if set and not `off`)
+- **Left:** agent name · model ID (last path component) · thinking level (if set and not `off`) · connection status (only when not connected)
 - **Right:** token summary (input / output / cache) · total cost
 
 Stats are loaded on init and refreshed after each message exchange via `loadStats()`. The header is re-rendered on every `statsLoadedMsg`. Token and cost values come from `client.SessionUsage()`.
+
+The connection-status badge is rendered in the error colour and only appears when the gateway connection is degraded:
+
+| Badge | Meaning |
+|---|---|
+| `⚠ disconnected` | The supervisor has just observed the WebSocket close; reconnect not yet attempted. |
+| `⟳ reconnecting` (or `attempt N`) | A reconnect attempt is in progress. The attempt counter is shown from the second attempt onwards. |
+| `✖ auth failed — restart` | The gateway rejected the device token after restart. The supervisor has stopped retrying — Ctrl+C and re-run `lucinate` so the interactive auth recovery flow can run on stdin. |
+
+A matching one-line system message is also added to the chat scrollback on disconnect (`Lost gateway connection — attempting to reconnect…`) and on recovery (`Reconnected to gateway.`) so the event is visible even after the badge clears. See [authentication.md](authentication.md#reconnect-after-disconnection) for the full lifecycle.
 
 ## History depth
 

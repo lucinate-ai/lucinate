@@ -52,6 +52,15 @@ When the initial connect fails with an auth error, `connectWithAuth` in `main.go
 
 Both flows read from `os.Stdin`, so they only trigger in an interactive terminal. Non-interactive callers will see the original error and exit.
 
+## Reconnect after disconnection
+
+Once the TUI is running, a supervisor in `internal/client/supervisor.go` watches the gateway connection (`Client.Done()`) and reconnects automatically if it drops — for example, when the gateway is restarted.
+
+- **Backoff schedule:** 1s, 2s, 4s, 8s, 15s, then 30s for every subsequent attempt. Each attempt has a 15s connect timeout (matching `connectTimeout` for the initial connect).
+- **State surface:** the supervisor pushes `tui.ConnStateMsg` into the bubbletea program. The chat header shows `⚠ disconnected`, `⟳ reconnecting (attempt N)`, or `✖ auth failed — restart`. A one-line system message is added to the chat scrollback on disconnect and on recovery.
+- **In-flight streams:** if a reply was streaming when the connection dropped, the placeholder is cleared so the input is usable again. The gateway has no resume protocol for an interrupted run; the partial reply is abandoned.
+- **Auth failures:** if the gateway rejects the device token after restart (`gateway token mismatch` / `token missing`), the supervisor stops retrying. The chat banner instructs the user to quit (Ctrl+C) and restart so the interactive `connectWithAuth` flow can prompt for a fix — that flow needs `os.Stdin`, which bubbletea owns once the TUI is up.
+
 ## Scopes
 
 The client connects with operator-level scopes: `ScopeOperatorRead`, `ScopeOperatorWrite`, `ScopeOperatorAdmin`, and `ScopeOperatorApprovals`. These are set in `internal/client/client.go` and are required for session management, exec approval, and agent administration.
