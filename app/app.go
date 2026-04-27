@@ -78,6 +78,23 @@ type RunOptions struct {
 	// program then ignores. The CLI relies on mouse tracking for
 	// selection and should leave it false.
 	DisableMouse bool
+
+	// OnInputFocusChanged, if non-nil, is invoked whenever the active
+	// view's preferred input mode changes. wantsInput is true when the
+	// active view has a focused free-form text input (the chat
+	// textarea, the new-agent form fields) and false when only
+	// navigation keys are expected (the agent list, the session
+	// browser, the config view). The callback fires once during start-up
+	// with the initial state so the embedder need not assume a default,
+	// and again on every subsequent transition.
+	//
+	// Embedders on platforms with an on-screen keyboard use this to
+	// surface it only when the program actually wants typing, instead
+	// of pinning it permanently and losing screen real estate. The
+	// callback runs from a tea.Cmd goroutine — embedders that touch UI
+	// on a main thread should trampoline accordingly. The CLI leaves
+	// it nil.
+	OnInputFocusChanged func(wantsInput bool)
 }
 
 // Program wraps a Bubble Tea program with the lucinate model and a
@@ -104,8 +121,9 @@ func New(opts RunOptions) (*Program, error) {
 	}
 
 	model := tui.NewApp(opts.Client, tui.AppOptions{
-		HideInputArea: opts.HideInputArea,
-		DisableMouse:  opts.DisableMouse,
+		HideInputArea:       opts.HideInputArea,
+		DisableMouse:        opts.DisableMouse,
+		OnInputFocusChanged: opts.OnInputFocusChanged,
 	})
 	teaOpts := []tea.ProgramOption{
 		tea.WithInput(in),

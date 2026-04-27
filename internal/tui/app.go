@@ -25,6 +25,11 @@ const (
 type AppOptions struct {
 	HideInputArea bool
 	DisableMouse  bool
+
+	// OnInputFocusChanged, if non-nil, is invoked whenever the active
+	// view's preferred input mode changes. See app.RunOptions for the
+	// full rationale; this is the unexported plumbing.
+	OnInputFocusChanged func(wantsInput bool)
 }
 
 // AppModel is the root bubbletea model.
@@ -40,17 +45,22 @@ type AppModel struct {
 	height        int
 	hideInput     bool
 	disableMouse  bool
+
+	onInputFocusChanged func(bool)
+	lastWantsInput      bool
+	inputFocusReported  bool
 }
 
 // NewApp creates the root application model.
 func NewApp(c *client.Client, opts AppOptions) AppModel {
 	return AppModel{
-		state:        viewSelect,
-		selectModel:  newSelectModel(c),
-		client:       c,
-		prefs:        config.LoadPreferences(),
-		hideInput:    opts.HideInputArea,
-		disableMouse: opts.DisableMouse,
+		state:               viewSelect,
+		selectModel:         newSelectModel(c),
+		client:              c,
+		prefs:               config.LoadPreferences(),
+		hideInput:           opts.HideInputArea,
+		disableMouse:        opts.DisableMouse,
+		onInputFocusChanged: opts.OnInputFocusChanged,
 	}
 }
 
@@ -59,6 +69,53 @@ func (m AppModel) Init() tea.Cmd {
 }
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	return next.maybeNotifyInputFocus(cmd)
+}
+
+// computeWantsInput reports whether the active view currently has a focused
+// text-input widget that expects free-form typing (the chat textarea, the
+// new-agent form fields). Embedders use this signal to decide whether to
+// surface their on-screen keyboard. List- and viewport-only views (agent
+// list, sessions, config) return false: they only need the platform's
+// existing navigation affordances.
+func (m AppModel) computeWantsInput() bool {
+	switch m.state {
+	case viewChat:
+		return true
+	case viewSelect:
+		return m.selectModel.subState == subStateCreate
+	}
+	return false
+}
+
+// maybeNotifyInputFocus invokes the OnInputFocusChanged callback whenever
+// the computed input-focus state differs from the last value reported. The
+// first call after Init always fires so embedders see the startup state
+// without having to assume a default. The callback runs from a tea.Cmd so
+// the bubbletea event loop is not blocked by embedder work.
+func (m AppModel) maybeNotifyInputFocus(cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.onInputFocusChanged == nil {
+		return m, cmd
+	}
+	wants := m.computeWantsInput()
+	if m.inputFocusReported && wants == m.lastWantsInput {
+		return m, cmd
+	}
+	m.lastWantsInput = wants
+	m.inputFocusReported = true
+	cb := m.onInputFocusChanged
+	notify := func() tea.Msg {
+		cb(wants)
+		return nil
+	}
+	if cmd == nil {
+		return m, notify
+	}
+	return m, tea.Batch(cmd, notify)
+}
+
+func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
