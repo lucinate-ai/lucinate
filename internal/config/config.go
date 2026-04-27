@@ -23,11 +23,17 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("OPENCLAW_GATEWAY_URL is required")
 	}
 
+	return New(gatewayURL)
+}
+
+// New builds a Config from a gateway URL, deriving the matching WebSocket
+// endpoint. Useful for embedders that obtain the gateway URL from somewhere
+// other than the OPENCLAW_GATEWAY_URL environment variable.
+func New(gatewayURL string) (*Config, error) {
 	wsURL, err := deriveWSURL(gatewayURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid OPENCLAW_GATEWAY_URL: %w", err)
+		return nil, fmt.Errorf("invalid gateway URL: %w", err)
 	}
-
 	return &Config{
 		GatewayURL: gatewayURL,
 		WSURL:      wsURL,

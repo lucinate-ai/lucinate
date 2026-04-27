@@ -11,7 +11,7 @@ import (
 
 func newTestConfigModel() configModel {
 	prefs := config.DefaultPreferences()
-	m := newConfigModel(prefs)
+	m := newConfigModel(prefs, false)
 	m.setSize(80, 30)
 	return m
 }
@@ -45,7 +45,7 @@ func TestConfigModel_View_CheckedByDefault(t *testing.T) {
 
 func TestConfigModel_View_UncheckedWhenDisabled(t *testing.T) {
 	prefs := config.Preferences{CompletionBell: false}
-	m := newConfigModel(prefs)
+	m := newConfigModel(prefs, false)
 	view := m.View()
 	if !strings.Contains(view, "[ ]") {
 		t.Error("expected unchecked checkbox when CompletionBell is false")
@@ -75,7 +75,7 @@ func TestConfigModel_SpaceTogglesOff(t *testing.T) {
 
 func TestConfigModel_SpaceTogglesOn(t *testing.T) {
 	prefs := config.Preferences{CompletionBell: false}
-	m := newConfigModel(prefs)
+	m := newConfigModel(prefs, false)
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: ' '})
 	if !m.items[0].checked {
@@ -168,7 +168,7 @@ func TestConfigModel_HistoryLimit_LeftDecreases(t *testing.T) {
 
 func TestConfigModel_HistoryLimit_RespectsMin(t *testing.T) {
 	prefs := config.Preferences{CompletionBell: true, HistoryLimit: 10}
-	m := newConfigModel(prefs)
+	m := newConfigModel(prefs, false)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
@@ -182,7 +182,7 @@ func TestConfigModel_HistoryLimit_RespectsMin(t *testing.T) {
 
 func TestConfigModel_HistoryLimit_RespectsMax(t *testing.T) {
 	prefs := config.Preferences{CompletionBell: true, HistoryLimit: 500}
-	m := newConfigModel(prefs)
+	m := newConfigModel(prefs, false)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})

@@ -99,13 +99,16 @@ type sessionsModel struct {
 	mainKey   string
 	loading   bool
 	err       error
+	hideHints bool
 }
 
-func newSessionsModel(c *client.Client, agentID, agentName, modelID, mainKey string) sessionsModel {
+func newSessionsModel(c *client.Client, agentID, agentName, modelID, mainKey string, hideHints bool) sessionsModel {
 	l := list.New(nil, sessionDelegate{}, 0, 0)
 	l.Title = "Sessions"
 	l.SetShowStatusBar(false)
-	l.SetShowHelp(true)
+	// Same rationale as selectModel: hide the list widget's keyboard
+	// footer when the embedder is rendering its own action surface.
+	l.SetShowHelp(!hideHints)
 	l.Styles.Title = headerStyle
 	l.SetFilteringEnabled(false)
 
@@ -117,6 +120,7 @@ func newSessionsModel(c *client.Client, agentID, agentName, modelID, mainKey str
 		modelID:   modelID,
 		mainKey:   mainKey,
 		loading:   true,
+		hideHints: hideHints,
 	}
 }
 
@@ -263,6 +267,8 @@ func (m *sessionsModel) skipHeaders(dir int) {
 }
 
 func (m sessionsModel) handleKey(msg tea.KeyPressMsg) (sessionsModel, tea.Cmd) {
+	// Cursor navigation stays inline — these are intrinsic list controls,
+	// not discoverable view-level commands.
 	switch msg.String() {
 	case "up", "k":
 		m.list, _ = m.list.Update(msg)
@@ -287,8 +293,42 @@ func (m sessionsModel) handleKey(msg tea.KeyPressMsg) (sessionsModel, tea.Cmd) {
 				}
 			}
 		}
+	}
 
-	case "n":
+	// Discoverable shortcuts route through TriggerAction so the help
+	// line and the keystroke share a single source of truth (Actions()).
+	for _, a := range m.Actions() {
+		if a.Key == msg.String() {
+			return m.TriggerAction(a.ID)
+		}
+	}
+
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+// Actions returns the discoverable, view-level commands the session
+// browser currently exposes. Loading/error transitions are reflected
+// because the list is recomputed on every Update tick.
+func (m sessionsModel) Actions() []Action {
+	var actions []Action
+	if !m.loading && m.err == nil {
+		actions = append(actions, Action{ID: "new-session", Label: "New session", Key: "n"})
+	}
+	actions = append(actions, Action{ID: "back", Label: "Back", Key: "esc"})
+	if m.err != nil {
+		actions = append(actions, Action{ID: "retry", Label: "Retry", Key: "r"})
+	}
+	return actions
+}
+
+// TriggerAction invokes the named action. Both keystrokes (via
+// handleKey) and embedder calls (via Program.TriggerAction) reach the
+// same dispatcher.
+func (m sessionsModel) TriggerAction(id string) (sessionsModel, tea.Cmd) {
+	switch id {
+	case "new-session":
 		if m.loading || m.err != nil {
 			return m, nil
 		}
@@ -306,33 +346,33 @@ func (m sessionsModel) handleKey(msg tea.KeyPressMsg) (sessionsModel, tea.Cmd) {
 				err:        err,
 			}
 		}
-
-	case "esc":
+	case "back":
 		return m, func() tea.Msg { return goBackFromSessionsMsg{} }
-
-	case "r":
-		if m.err != nil {
-			m.loading = true
-			m.err = nil
-			return m, m.loadSessions()
+	case "retry":
+		if m.err == nil {
+			return m, nil
 		}
+		m.loading = true
+		m.err = nil
+		return m, m.loadSessions()
 	}
-
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 func (m sessionsModel) View() string {
 	if m.loading {
 		return "\n  Loading sessions...\n"
 	}
+	hints := ""
+	if !m.hideHints {
+		hints = helpStyle.Render(renderActionHints(m.Actions()))
+	}
 	if m.err != nil {
 		var b strings.Builder
 		b.WriteString("\n")
 		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
 		b.WriteString("\n\n")
-		b.WriteString(helpStyle.Render("  Press 'r' to retry, Esc to go back"))
+		b.WriteString(hints)
 		b.WriteString("\n")
 		return b.String()
 	}
@@ -342,11 +382,11 @@ func (m sessionsModel) View() string {
 		b.WriteString(headerStyle.Render(" Sessions "))
 		b.WriteString("\n\n")
 		b.WriteString("  No sessions found.\n\n")
-		b.WriteString(helpStyle.Render("  n: new session | Esc: back"))
+		b.WriteString(hints)
 		b.WriteString("\n")
 		return b.String()
 	}
-	return m.list.View() + "\n" + helpStyle.Render("  n: new session | Esc: back")
+	return m.list.View() + "\n" + hints
 }
 
 func (m *sessionsModel) setSize(w, h int) {

@@ -74,7 +74,7 @@ func (a selectModelAdapter) View() tea.View {
 // rendering tests, wrapped in an adapter.
 func newRenderingChatModel(t *testing.T, agentName string) chatModelAdapter {
 	t.Helper()
-	m := newChatModel(nil, "session-key", "", agentName, "", config.DefaultPreferences())
+	m := newChatModel(nil, "session-key", "", agentName, "", config.DefaultPreferences(), false)
 	m.setSize(120, 40)
 	return chatModelAdapter{inner: m}
 }
@@ -256,7 +256,7 @@ func TestRender_ChatView_RemoteExecModeHelpText(t *testing.T) {
 // newLoadedSelectAdapter returns a selectModelAdapter with agents already loaded.
 func newLoadedSelectAdapter(t *testing.T, agents ...protocol.AgentSummary) selectModelAdapter {
 	t.Helper()
-	m := newSelectModel(nil)
+	m := newSelectModel(nil, false)
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -293,7 +293,7 @@ func TestRender_SelectView_ShowsCreateHint(t *testing.T) {
 }
 
 func TestRender_SelectView_LoadingState(t *testing.T) {
-	m := newSelectModel(nil)
+	m := newSelectModel(nil, false)
 	m.setSize(120, 40)
 	adapter := selectModelAdapter{inner: m}
 
@@ -317,7 +317,7 @@ func TestRender_SelectView_CreateFormLabels(t *testing.T) {
 }
 
 func TestRender_SelectView_ErrorStateShowsRetryHint(t *testing.T) {
-	m := newSelectModel(nil)
+	m := newSelectModel(nil, false)
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{err: errString("gateway unreachable")})
 	adapter := selectModelAdapter{inner: m}
@@ -325,7 +325,7 @@ func TestRender_SelectView_ErrorStateShowsRetryHint(t *testing.T) {
 	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
 	defer finishProgram(t, tm)
 
-	waitForContains(t, tm.Output(), "gateway unreachable", "'r' to retry")
+	waitForContains(t, tm.Output(), "gateway unreachable", "r: retry")
 }
 
 // sessionsModelAdapter wraps sessionsModel so it satisfies tea.Model for teatest.
@@ -352,7 +352,7 @@ func (a sessionsModelAdapter) View() tea.View {
 // newLoadedSessionsAdapter returns a sessionsModelAdapter with sessions already loaded.
 func newLoadedSessionsAdapter(t *testing.T, sessions ...sessionItem) sessionsModelAdapter {
 	t.Helper()
-	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key")
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false)
 	m.setSize(120, 40)
 	m, _ = m.Update(sessionsLoadedMsg{sessions: sessions})
 	return sessionsModelAdapter{inner: m}
@@ -382,7 +382,7 @@ func TestRender_SessionsView_ShowsCreateHint(t *testing.T) {
 }
 
 func TestRender_SessionsView_LoadingState(t *testing.T) {
-	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key")
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false)
 	m.setSize(120, 40)
 	adapter := sessionsModelAdapter{inner: m}
 
@@ -402,7 +402,7 @@ func TestRender_SessionsView_EmptyState(t *testing.T) {
 }
 
 func TestRender_SessionsView_ErrorState(t *testing.T) {
-	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key")
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false)
 	m.setSize(120, 40)
 	m, _ = m.Update(sessionsLoadedMsg{err: errString("network timeout")})
 	adapter := sessionsModelAdapter{inner: m}
@@ -410,7 +410,7 @@ func TestRender_SessionsView_ErrorState(t *testing.T) {
 	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
 	defer finishProgram(t, tm)
 
-	waitForContains(t, tm.Output(), "network timeout", "'r' to retry")
+	waitForContains(t, tm.Output(), "network timeout", "r: retry")
 }
 
 // errString is a tiny error helper so tests don't need to import "errors".

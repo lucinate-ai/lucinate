@@ -18,6 +18,20 @@ import (
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
+// IdentityStore abstracts persistence of the device keypair and device token.
+//
+// The default filesystem implementation is provided by the openclaw-go
+// identity package (*identity.Store satisfies this interface). Alternative
+// implementations can be supplied via NewWithIdentityStore so the gateway
+// client logic stays decoupled from any particular storage backend.
+type IdentityStore interface {
+	LoadOrGenerate() (*identity.Identity, error)
+	LoadDeviceToken() string
+	SaveDeviceToken(token string) error
+	ClearDeviceToken() error
+	Reset() error
+}
+
 // Client wraps the gateway SDK client and bridges events to a channel
 // for consumption by the bubbletea event loop.
 type Client struct {
@@ -25,10 +39,11 @@ type Client struct {
 	gw     *gateway.Client
 	events chan protocol.Event
 	cfg    *config.Config
-	store  *identity.Store
+	store  IdentityStore
 }
 
-// New creates a new client from the given config.
+// New creates a new client from the given config, using the default
+// per-endpoint filesystem identity store at ~/.lucinate/identity/<host>/.
 func New(cfg *config.Config) (*Client, error) {
 	identityDir, err := identityDirForEndpoint(cfg.GatewayURL)
 	if err != nil {
@@ -40,11 +55,19 @@ func New(cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("identity store: %w", err)
 	}
 
+	return NewWithIdentityStore(cfg, store), nil
+}
+
+// NewWithIdentityStore creates a new client using a caller-supplied identity
+// store. This entry point lets embedders persist the device keypair somewhere
+// other than the default filesystem location (for example, in tests, or in
+// alternative host environments).
+func NewWithIdentityStore(cfg *config.Config, store IdentityStore) *Client {
 	return &Client{
 		events: make(chan protocol.Event, 256),
 		cfg:    cfg,
 		store:  store,
-	}, nil
+	}
 }
 
 // identityDirForEndpoint returns a per-endpoint identity directory under

@@ -114,6 +114,7 @@ type chatModel struct {
 	historyLimit     int
 	thinkingLevel    string // current thinking level; "" means not set / using gateway default
 	connState        ConnStateMsg
+	hideInput        bool // when true, the textarea + help line are not rendered; the textarea model still receives input bytes
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -152,7 +153,7 @@ func (m *chatModel) ensureSpinnerTicking() tea.Cmd {
 	return spinnerTickCmd()
 }
 
-func newChatModel(c *client.Client, sessionKey, agentID, agentName, modelID string, prefs config.Preferences) chatModel {
+func newChatModel(c *client.Client, sessionKey, agentID, agentName, modelID string, prefs config.Preferences, hideInput bool) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Focus()
@@ -182,6 +183,7 @@ func newChatModel(c *client.Client, sessionKey, agentID, agentName, modelID stri
 		modelID:      modelID,
 		prefs:        prefs,
 		historyLimit: prefs.HistoryLimit,
+		hideInput:    hideInput,
 	}
 }
 
@@ -711,6 +713,9 @@ func (m *chatModel) setSize(w, h int) {
 	helpH := 1
 	borderH := 2
 	vpHeight := h - inputHeight - headerH - helpH - borderH - 2
+	if m.hideInput {
+		vpHeight = h - headerH - helpH - 2
+	}
 
 	m.viewport.SetWidth(w)
 	m.viewport.SetHeight(vpHeight)
@@ -759,9 +764,6 @@ func (m chatModel) View() string {
 	} else if isLocalExec {
 		borderStyle = localExecBorderStyle
 	}
-	input := borderStyle.
-		Width(m.width - 4).
-		Render(m.textarea.View())
 
 	var help string
 	if isRemoteExec {
@@ -772,6 +774,8 @@ func (m chatModel) View() string {
 		hint := m.slashCommandHint(m.textarea.Value())
 		if hint != "" {
 			help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", m.textarea.Value(), hint))
+		} else if m.hideInput {
+			help = helpStyle.Render(" /help: commands")
 		} else {
 			helpText := " enter: send | alt+enter: newline | /help: commands"
 			if n := len(m.pendingMessages); n > 0 {
@@ -780,6 +784,19 @@ func (m chatModel) View() string {
 			help = helpStyle.Render(helpText)
 		}
 	}
+
+	if m.hideInput {
+		return lipgloss.JoinVertical(
+			lipgloss.Left,
+			header,
+			m.viewport.View(),
+			help,
+		)
+	}
+
+	input := borderStyle.
+		Width(m.width - 4).
+		Render(m.textarea.View())
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,

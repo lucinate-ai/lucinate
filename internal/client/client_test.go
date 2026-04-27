@@ -5,8 +5,32 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/a3tai/openclaw-go/identity"
+
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
+
+var _ IdentityStore = (*identity.Store)(nil)
+
+type fakeIdentityStore struct {
+	token string
+}
+
+func (f *fakeIdentityStore) LoadOrGenerate() (*identity.Identity, error) { return &identity.Identity{}, nil }
+func (f *fakeIdentityStore) LoadDeviceToken() string                     { return f.token }
+func (f *fakeIdentityStore) SaveDeviceToken(t string) error              { f.token = t; return nil }
+func (f *fakeIdentityStore) ClearDeviceToken() error                     { f.token = ""; return nil }
+func (f *fakeIdentityStore) Reset() error                                { f.token = ""; return nil }
+
+func TestNewWithIdentityStore(t *testing.T) {
+	c := NewWithIdentityStore(&config.Config{}, &fakeIdentityStore{})
+	if c == nil {
+		t.Fatal("expected non-nil client")
+	}
+	if c.store == nil {
+		t.Fatal("expected store to be set")
+	}
+}
 
 func TestSanitiseHost(t *testing.T) {
 	tests := []struct {

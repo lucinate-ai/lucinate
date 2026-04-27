@@ -7,7 +7,7 @@ import (
 )
 
 func newTestSessionsModel() sessionsModel {
-	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key")
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false)
 	m.setSize(120, 40)
 	return m
 }

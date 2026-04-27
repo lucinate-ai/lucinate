@@ -10,11 +10,9 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
-
+	"github.com/lucinate-ai/lucinate/app"
 	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/config"
-	"github.com/lucinate-ai/lucinate/internal/tui"
 	"github.com/lucinate-ai/lucinate/internal/version"
 )
 
@@ -164,26 +162,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	app := tui.NewApp(c)
-	p := tea.NewProgram(app)
-
-	// Pump gateway events into the bubbletea program from a dedicated goroutine.
-	// This is more reliable than a cmd-chain that must be re-issued after each event.
-	go func() {
-		for ev := range c.Events() {
-			p.Send(tui.GatewayEventMsg(ev))
-		}
-	}()
-
-	// Watch the gateway connection and reconnect if it drops (e.g. gateway
-	// restart). The supervisor pushes state transitions to the TUI.
-	supervisorCtx, stopSupervisor := context.WithCancel(context.Background())
-	defer stopSupervisor()
-	go c.Supervise(supervisorCtx, func(s client.ConnState) {
-		p.Send(tui.ConnStateMsg{Status: s.Status, Attempt: s.Attempt, Err: s.Err})
-	})
-
-	if _, err := p.Run(); err != nil {
+	if err := app.Run(context.Background(), app.RunOptions{Client: c}); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

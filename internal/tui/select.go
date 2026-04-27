@@ -70,12 +70,13 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // selectModel is the agent selection view.
 type selectModel struct {
-	list     list.Model
-	client   *client.Client
-	loading  bool
-	err      error
-	mainKey  string
-	selected bool
+	list      list.Model
+	client    *client.Client
+	loading   bool
+	err       error
+	mainKey   string
+	selected  bool
+	hideHints bool
 
 	// Create-agent form state.
 	subState       selectSubState
@@ -95,18 +96,24 @@ type agentsLoadedMsg struct {
 	err    error
 }
 
-func newSelectModel(c *client.Client) selectModel {
+func newSelectModel(c *client.Client, hideHints bool) selectModel {
 	l := list.New(nil, agentDelegate{}, 0, 0)
 	l.Title = "Select an agent"
 	l.SetShowStatusBar(false)
-	l.SetShowHelp(true)
+	// The bubbles list widget renders its own keyboard-hint footer
+	// ("↑/k up · ↓/j down · q quit · ? more"). Embedders that surface
+	// actions through native controls suppress every hint line — those
+	// keys typically aren't reachable from the host's input surface
+	// anyway.
+	l.SetShowHelp(!hideHints)
 	l.Styles.Title = headerStyle
 	l.SetFilteringEnabled(false)
 
 	return selectModel{
-		list:    l,
-		client:  c,
-		loading: true,
+		list:      l,
+		client:    c,
+		loading:   true,
+		hideHints: hideHints,
 	}
 }
 
@@ -247,32 +254,71 @@ func (m selectModel) handleKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 		return m.handleCreateKey(msg)
 	}
 
-	// List sub-state keys.
-	switch msg.String() {
-	case "enter":
+	// Enter is intrinsic list navigation (select the highlighted item)
+	// rather than a discoverable view-level command, so it stays inline.
+	if msg.String() == "enter" {
 		if !m.loading && m.err == nil {
-			if item, ok := m.list.SelectedItem().(agentItem); ok {
+			if _, ok := m.list.SelectedItem().(agentItem); ok {
 				m.selected = true
-				_ = item
 				return m, nil
 			}
 		}
-	case "n":
-		if !m.loading && m.err == nil {
-			cmd := m.initCreateForm()
-			return m, cmd
-		}
-	case "r":
-		if m.err != nil {
-			m.loading = true
-			m.err = nil
-			return m, m.loadAgents()
+	}
+
+	// Discoverable shortcuts route through TriggerAction so the help
+	// line and the keystroke share a single source of truth (Actions()).
+	for _, a := range m.Actions() {
+		if a.Key == msg.String() {
+			return m.TriggerAction(a.ID)
 		}
 	}
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
+}
+
+// Actions returns the discoverable, view-level commands the agent
+// picker currently exposes. The TUI auto-renders the help line from
+// this list and dispatches matching keystrokes through TriggerAction;
+// embedders render the same list as buttons.
+//
+// The create-agent sub-state has its own modal Tab/Enter/Esc
+// interactions and intentionally exposes no actions — those keys are
+// inherent form navigation, not discoverable commands.
+func (m selectModel) Actions() []Action {
+	if m.subState != subStateList {
+		return nil
+	}
+	var actions []Action
+	if !m.loading && m.err == nil {
+		actions = append(actions, Action{ID: "new-agent", Label: "New agent", Key: "n"})
+	}
+	if m.err != nil {
+		actions = append(actions, Action{ID: "retry", Label: "Retry", Key: "r"})
+	}
+	return actions
+}
+
+// TriggerAction invokes the named action. Both keystrokes (via
+// handleKey) and embedder calls (via Program.TriggerAction) reach the
+// same dispatcher so logic is not duplicated.
+func (m selectModel) TriggerAction(id string) (selectModel, tea.Cmd) {
+	switch id {
+	case "new-agent":
+		if m.loading || m.err != nil {
+			return m, nil
+		}
+		return m, m.initCreateForm()
+	case "retry":
+		if m.err == nil {
+			return m, nil
+		}
+		m.loading = true
+		m.err = nil
+		return m, m.loadAgents()
+	}
+	return m, nil
 }
 
 func (m selectModel) handleCreateKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
@@ -345,19 +391,30 @@ func (m selectModel) View() string {
 	if m.loading {
 		return "\n  Connecting to gateway...\n"
 	}
+	hints := m.renderHints()
 	if m.err != nil {
 		var b strings.Builder
 		b.WriteString("\n")
 		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
 		b.WriteString("\n\n")
-		b.WriteString(helpStyle.Render("  Press 'r' to retry, 'q' to quit"))
+		b.WriteString(hints)
 		b.WriteString("\n")
 		return b.String()
 	}
 	if m.subState == subStateCreate {
 		return m.viewCreateForm()
 	}
-	return m.list.View() + "\n" + helpStyle.Render("  n: new agent")
+	return m.list.View() + "\n" + hints
+}
+
+// renderHints emits the inline action-hint help line, or the empty
+// string when the embedder has signalled (via HideActionHints) that it
+// will surface the same actions through native controls.
+func (m selectModel) renderHints() string {
+	if m.hideHints {
+		return ""
+	}
+	return helpStyle.Render(renderActionHints(m.Actions()))
 }
 
 func (m selectModel) viewCreateForm() string {
