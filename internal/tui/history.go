@@ -80,13 +80,15 @@ func fetchHistory(cl *client.Client, sessionKey string, renderer *glamour.TermRe
 			}
 		}
 		rendered := false
+		raw := ""
 		if role == "assistant" && renderer != nil && looksLikeMarkdown(text) {
 			if out, err := renderer.Render(text); err == nil {
+				raw = text
 				text = strings.TrimSpace(out)
 				rendered = true
 			}
 		}
-		msgs = append(msgs, chatMessage{role: role, content: text, thinking: thinking, rendered: rendered})
+		msgs = append(msgs, chatMessage{role: role, content: text, raw: raw, thinking: thinking, rendered: rendered})
 	}
 	return msgs, nil
 }

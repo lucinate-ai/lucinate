@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/olekukonko/tablewriter"
 )
 
@@ -21,19 +22,12 @@ func (m *chatModel) updateViewport() {
 			b.WriteString(statusStyle.Render(sep))
 
 		case "user":
-			label := m.prefixLabel("You")
-			prefix := userPrefixStyle.Render(label)
-			prefixIndent := strings.Repeat(" ", len(label))
-			b.WriteString(prefix)
-			body := wordWrap(msg.content, contentWidth-len(label))
+			prefixIndent, wrapWidth := m.writePrefix(&b, userPrefixStyle, "You")
+			body := wordWrap(msg.content, wrapWidth)
 			b.WriteString(indentMultiline(body, prefixIndent))
 
 		case "assistant":
-			label := m.prefixLabel(m.agentName)
-			prefix := assistantPrefixStyle.Render(label)
-			prefixIndent := strings.Repeat(" ", len(label))
-			b.WriteString(prefix)
-			wrapWidth := contentWidth - len(label)
+			prefixIndent, wrapWidth := m.writePrefix(&b, assistantPrefixStyle, m.agentName)
 			if msg.errMsg != "" {
 				body := wordWrap(msg.errMsg, wrapWidth)
 				b.WriteString(errorStyle.Render(indentMultiline(body, prefixIndent)))
@@ -52,7 +46,13 @@ func (m *chatModel) updateViewport() {
 					b.WriteString(cursorStyle.Render(spinnerFrames[m.spinnerFrame%len(spinnerFrames)]))
 				} else if msg.rendered {
 					// Glamour-rendered content is already wrapped and contains ANSI codes.
-					b.WriteString(indentMultiline(msg.content, prefixIndent))
+					content := msg.content
+					if m.narrowLayout() {
+						// In stacked layout, strip glamour's left margin from each
+						// line so the body sits flush under the prefix.
+						content = stripLeadingSpacesPerLine(content)
+					}
+					b.WriteString(indentMultiline(content, prefixIndent))
 				} else {
 					body := wordWrap(msg.content, wrapWidth)
 					b.WriteString(indentMultiline(body, prefixIndent))
@@ -72,11 +72,8 @@ func (m *chatModel) updateViewport() {
 	// shadows to distinguish them from confirmed messages.
 	for _, text := range m.pendingMessages {
 		b.WriteString("\n")
-		label := m.prefixLabel("You")
-		prefix := pendingPrefixStyle.Render(label)
-		prefixIndent := strings.Repeat(" ", len(label))
-		b.WriteString(prefix)
-		body := wordWrap(text, contentWidth-len(label))
+		prefixIndent, wrapWidth := m.writePrefix(&b, pendingPrefixStyle, "You")
+		body := wordWrap(text, wrapWidth)
 		b.WriteString(pendingBodyStyle.Render(indentMultiline(body, prefixIndent)))
 	}
 
@@ -91,6 +88,32 @@ func (m *chatModel) updateViewport() {
 
 	m.viewport.SetContent(content)
 	m.viewport.GotoBottom()
+}
+
+// narrowBodyMinWidth is the minimum body column width below which the inline
+// prefix layout flips to a stacked layout with the prefix on its own line.
+const narrowBodyMinWidth = 60
+
+// narrowLayout reports whether the viewport is too narrow for an inline
+// prefix to leave enough room for the message body.
+func (m *chatModel) narrowLayout() bool {
+	return (m.width - 4) - m.prefixWidth() < narrowBodyMinWidth
+}
+
+// writePrefix renders the message prefix into b and returns the per-continuation
+// indent and the wrap width for the message body. In narrow mode the prefix is
+// followed by a literal newline (written outside the styled Render call to avoid
+// lipgloss right-padding the trailing empty line) so the body stacks beneath.
+func (m *chatModel) writePrefix(b *strings.Builder, style lipgloss.Style, name string) (indent string, wrapWidth int) {
+	contentWidth := m.width - 4
+	if m.narrowLayout() {
+		b.WriteString(style.Render(name + ":"))
+		b.WriteString("\n")
+		return "", contentWidth
+	}
+	label := m.prefixLabel(name)
+	b.WriteString(style.Render(label))
+	return strings.Repeat(" ", len(label)), contentWidth - len(label)
 }
 
 // prefixWidth returns the shared width used for message prefixes so message
@@ -222,6 +245,46 @@ func indentMultiline(s, indent string) string {
 		b.WriteString(line)
 	}
 	return b.String()
+}
+
+// stripLeadingSpacesPerLine drops leading ASCII spaces from each line while
+// preserving any ANSI escape sequences that precede them. Glamour adds a left
+// document margin to its rendered output; in narrow stacked layout we want the
+// body flush against column 0 so it lines up under the prefix.
+func stripLeadingSpacesPerLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		var sb strings.Builder
+		j := 0
+		seenContent := false
+		for j < len(line) {
+			c := line[j]
+			if c == 0x1b {
+				k := j + 1
+				if k < len(line) && line[k] == '[' {
+					k++
+					for k < len(line) && !((line[k] >= 0x40) && (line[k] <= 0x7e)) {
+						k++
+					}
+					if k < len(line) {
+						k++
+					}
+				}
+				sb.WriteString(line[j:k])
+				j = k
+				continue
+			}
+			if !seenContent && c == ' ' {
+				j++
+				continue
+			}
+			seenContent = true
+			sb.WriteByte(c)
+			j++
+		}
+		lines[i] = sb.String()
+	}
+	return strings.Join(lines, "\n")
 }
 
 // isTableLine returns true if the line appears to be part of a rendered table.

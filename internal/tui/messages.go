@@ -10,6 +10,7 @@ import (
 type chatMessage struct {
 	role          string // "user", "assistant", "system", or "separator"
 	content       string
+	raw           string // original markdown source when rendered is true; used to re-render on resize
 	thinking      string // reasoning/intermediate thought content from the model
 	streaming     bool
 	awaitingDelta bool // true for the pre-response spinner placeholder, before any delta arrives

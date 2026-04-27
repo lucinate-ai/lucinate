@@ -245,6 +245,37 @@ func TestUpdateViewport_BottomAnchoring(t *testing.T) {
 
 func TestUpdateViewport_IndentsWrappedContentAfterPrefix(t *testing.T) {
 	vp := viewport.New()
+	vp.SetWidth(80)
+	vp.SetHeight(20)
+	m := &chatModel{
+		viewport:  vp,
+		width:     80,
+		agentName: "main",
+		messages: []chatMessage{
+			{role: "user", content: strings.Repeat("alpha ", 20) + "gamma"},
+			{role: "assistant", content: "line one\nline two", rendered: true},
+		},
+	}
+
+	m.updateViewport()
+	view := ansi.Strip(m.viewport.View())
+
+	if !strings.Contains(view, "You:  alpha") {
+		t.Fatalf("expected first user line with prefix, got %q", view)
+	}
+	if !strings.Contains(view, "\n      ") {
+		t.Fatalf("expected wrapped user continuation to be indented, got %q", view)
+	}
+	if !strings.Contains(view, "main: line one") {
+		t.Fatalf("expected first assistant line with prefix, got %q", view)
+	}
+	if !strings.Contains(view, "\n      line two") {
+		t.Fatalf("expected assistant continuation to be indented, got %q", view)
+	}
+}
+
+func TestUpdateViewport_NarrowLayoutStacksPrefixAboveBody(t *testing.T) {
+	vp := viewport.New()
 	vp.SetWidth(20)
 	vp.SetHeight(20)
 	m := &chatModel{
@@ -258,18 +289,65 @@ func TestUpdateViewport_IndentsWrappedContentAfterPrefix(t *testing.T) {
 	}
 
 	m.updateViewport()
-	view := ansi.Strip(m.viewport.View())
+	// Strip ANSI and right-trim each viewport line so we can match logical
+	// content without the viewport's per-line trailing-space padding.
+	lines := strings.Split(ansi.Strip(m.viewport.View()), "\n")
+	for i, l := range lines {
+		lines[i] = strings.TrimRight(l, " ")
+	}
+	view := strings.Join(lines, "\n")
 
-	if !strings.Contains(view, "You:  alpha beta") {
-		t.Fatalf("expected first user line with prefix, got %q", view)
+	if !strings.Contains(view, "You:\nalpha beta gamma") {
+		t.Fatalf("expected stacked user prefix above body, got %q", view)
 	}
-	if !strings.Contains(view, "\n      gamma") {
-		t.Fatalf("expected wrapped user continuation to be indented, got %q", view)
+	if !strings.Contains(view, "main:\nline one\nline two") {
+		t.Fatalf("expected stacked assistant prefix above body, got %q", view)
 	}
-	if !strings.Contains(view, "main: line one") {
-		t.Fatalf("expected first assistant line with prefix, got %q", view)
+}
+
+func TestStripLeadingSpacesPerLine(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "  hello\n  world", "hello\nworld"},
+		{"no_leading", "hello\nworld", "hello\nworld"},
+		{"ansi_then_spaces", "\x1b[0m  hello\n\x1b[31m  world\x1b[0m", "\x1b[0mhello\n\x1b[31mworld\x1b[0m"},
+		{"interior_spaces_preserved", "  a b\n  c d", "a b\nc d"},
+		{"empty_lines", "\n  hi\n", "\nhi\n"},
 	}
-	if !strings.Contains(view, "\n      line two") {
-		t.Fatalf("expected assistant continuation to be indented, got %q", view)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := stripLeadingSpacesPerLine(tt.in); got != tt.want {
+				t.Errorf("stripLeadingSpacesPerLine(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNarrowLayout_Threshold(t *testing.T) {
+	tests := []struct {
+		name       string
+		agentName  string
+		width      int
+		wantNarrow bool
+	}{
+		{"wide_short_agent", "main", 100, false},
+		{"narrow_short_agent", "main", 30, true},
+		{"boundary_short_agent_narrow", "main", 69, true},
+		{"boundary_short_agent_wide", "main", 70, false},
+		{"wide_long_agent", "longagentname", 100, false},
+		{"narrow_long_agent", "longagentname", 70, true},
+		{"zero_width", "main", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &chatModel{agentName: tt.agentName, width: tt.width}
+			if got := m.narrowLayout(); got != tt.wantNarrow {
+				t.Errorf("narrowLayout() width=%d agent=%q = %v, want %v",
+					tt.width, tt.agentName, got, tt.wantNarrow)
+			}
+		})
 	}
 }

@@ -617,8 +617,13 @@ func (m *chatModel) setSize(w, h int) {
 	m.width = w
 	m.height = h
 
-	// Recreate the glamour renderer with the new wrap width.
-	wrapWidth := w - 4 - m.prefixWidth() // contentWidth minus aligned prefix
+	// Recreate the glamour renderer with the new wrap width. In narrow mode the
+	// body uses the full content width (no inline prefix), so size accordingly.
+	contentWidth := w - 4
+	wrapWidth := contentWidth - m.prefixWidth()
+	if m.narrowLayout() {
+		wrapWidth = contentWidth
+	}
 	if wrapWidth < 20 {
 		wrapWidth = 20
 	}
@@ -628,6 +633,15 @@ func (m *chatModel) setSize(w, h int) {
 	)
 	if err == nil {
 		m.renderer = renderer
+		// Re-render any previously glamour-rendered messages so markdown
+		// reflows when the terminal is resized.
+		for i := range m.messages {
+			if m.messages[i].rendered && m.messages[i].raw != "" {
+				if out, rerr := m.renderer.Render(m.messages[i].raw); rerr == nil {
+					m.messages[i].content = strings.TrimSpace(out)
+				}
+			}
+		}
 	}
 
 	headerH := 1
