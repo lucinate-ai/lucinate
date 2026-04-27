@@ -30,6 +30,11 @@ type AppOptions struct {
 	// view's preferred input mode changes. See app.RunOptions for the
 	// full rationale; this is the unexported plumbing.
 	OnInputFocusChanged func(wantsInput bool)
+
+	// OnActionsChanged, if non-nil, is invoked whenever the active
+	// view's set of exposed Actions changes. See app.RunOptions for
+	// the full rationale; this is the unexported plumbing.
+	OnActionsChanged func(actions []Action)
 }
 
 // AppModel is the root bubbletea model.
@@ -49,6 +54,10 @@ type AppModel struct {
 	onInputFocusChanged func(bool)
 	lastWantsInput      bool
 	inputFocusReported  bool
+
+	onActionsChanged func([]Action)
+	lastActions      []Action
+	actionsReported  bool
 }
 
 // NewApp creates the root application model.
@@ -61,6 +70,7 @@ func NewApp(c *client.Client, opts AppOptions) AppModel {
 		hideInput:           opts.HideInputArea,
 		disableMouse:        opts.DisableMouse,
 		onInputFocusChanged: opts.OnInputFocusChanged,
+		onActionsChanged:    opts.OnActionsChanged,
 	}
 }
 
@@ -70,7 +80,76 @@ func (m AppModel) Init() tea.Cmd {
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
-	return next.maybeNotifyInputFocus(cmd)
+	nextModel, cmd := next.maybeNotifyInputFocus(cmd)
+	next = nextModel.(AppModel)
+	return next.maybeNotifyActions(cmd)
+}
+
+// Actions returns the discoverable, view-level commands the active
+// view currently exposes. AppModel re-publishes the slice on every
+// transition through OnActionsChanged so embedders can rebuild their
+// action UI without polling.
+func (m AppModel) Actions() []Action {
+	switch m.state {
+	case viewSelect:
+		return m.selectModel.Actions()
+	case viewSessions:
+		return m.sessionsModel.Actions()
+	case viewConfig:
+		return m.configModel.Actions()
+	}
+	return nil
+}
+
+// TriggerAction routes an embedder-issued action invocation to the
+// active view. Both keystrokes (handled inside each view's KeyPressMsg
+// switch) and external triggers (Program.TriggerAction) go through the
+// view's TriggerAction so the work lives in one place.
+func (m AppModel) TriggerAction(id string) (AppModel, tea.Cmd) {
+	switch m.state {
+	case viewSelect:
+		var cmd tea.Cmd
+		m.selectModel, cmd = m.selectModel.TriggerAction(id)
+		return m, cmd
+	case viewSessions:
+		var cmd tea.Cmd
+		m.sessionsModel, cmd = m.sessionsModel.TriggerAction(id)
+		return m, cmd
+	case viewConfig:
+		var cmd tea.Cmd
+		m.configModel, cmd = m.configModel.TriggerAction(id)
+		return m, cmd
+	}
+	return m, nil
+}
+
+// maybeNotifyActions invokes OnActionsChanged whenever the computed
+// actions slice differs from the last value reported. Mirrors
+// maybeNotifyInputFocus: the first call after Init always fires so
+// embedders see the startup list, and the callback runs from a tea.Cmd
+// so the bubbletea event loop is not blocked by embedder work.
+func (m AppModel) maybeNotifyActions(cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.onActionsChanged == nil {
+		return m, cmd
+	}
+	actions := m.Actions()
+	if m.actionsReported && actionsEqual(actions, m.lastActions) {
+		return m, cmd
+	}
+	// Snapshot the slice so a downstream mutation by the next Update
+	// can't be observed retroactively through lastActions.
+	snapshot := append([]Action(nil), actions...)
+	m.lastActions = snapshot
+	m.actionsReported = true
+	cb := m.onActionsChanged
+	notify := func() tea.Msg {
+		cb(snapshot)
+		return nil
+	}
+	if cmd == nil {
+		return m, notify
+	}
+	return m, tea.Batch(cmd, notify)
 }
 
 // computeWantsInput reports whether the active view currently has a focused
@@ -192,6 +271,9 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
+
+	case TriggerActionMsg:
+		return m.TriggerAction(msg.ID)
 
 	case tea.KeyPressMsg:
 		switch msg.String() {

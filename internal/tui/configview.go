@@ -93,9 +93,32 @@ func (m configModel) Update(msg tea.Msg) (configModel, tea.Cmd) {
 					return prefsUpdatedMsg{prefs: prefs}
 				}
 			}
-		case "esc":
-			return m, func() tea.Msg { return goBackFromConfigMsg{} }
+		default:
+			// Discoverable shortcuts route through TriggerAction so the
+			// help line and the keystroke share a single source of truth.
+			for _, a := range m.Actions() {
+				if a.Key == msg.String() {
+					return m.TriggerAction(a.ID)
+				}
+			}
 		}
+	}
+	return m, nil
+}
+
+// Actions returns the discoverable, view-level commands the config
+// view exposes. The space/←/→ controls are intentionally not actions —
+// they operate on the focused row, not the screen as a whole, and would
+// not translate cleanly into named buttons on mobile.
+func (m configModel) Actions() []Action {
+	return []Action{{ID: "back", Label: "Back", Key: "esc"}}
+}
+
+// TriggerAction invokes the named action.
+func (m configModel) TriggerAction(id string) (configModel, tea.Cmd) {
+	switch id {
+	case "back":
+		return m, func() tea.Msg { return goBackFromConfigMsg{} }
 	}
 	return m, nil
 }
@@ -138,7 +161,14 @@ func (m configModel) View() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  space: toggle · ←/→: adjust · esc: back"))
+	// Item-level controls (space, ←/→) stay hand-rendered alongside the
+	// auto-rendered screen-level actions (back) so both surfaces are
+	// visible without forcing them into the actions abstraction.
+	hint := "  space: toggle · ←/→: adjust"
+	if h := renderActionHints(m.Actions()); h != "" {
+		hint += " ·" + strings.TrimPrefix(h, " ")
+	}
+	b.WriteString(helpStyle.Render(hint))
 
 	return b.String()
 }

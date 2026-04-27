@@ -325,7 +325,7 @@ func TestRender_SelectView_ErrorStateShowsRetryHint(t *testing.T) {
 	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
 	defer finishProgram(t, tm)
 
-	waitForContains(t, tm.Output(), "gateway unreachable", "'r' to retry")
+	waitForContains(t, tm.Output(), "gateway unreachable", "r: retry")
 }
 
 // sessionsModelAdapter wraps sessionsModel so it satisfies tea.Model for teatest.
@@ -410,7 +410,7 @@ func TestRender_SessionsView_ErrorState(t *testing.T) {
 	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
 	defer finishProgram(t, tm)
 
-	waitForContains(t, tm.Output(), "network timeout", "'r' to retry")
+	waitForContains(t, tm.Output(), "network timeout", "r: retry")
 }
 
 // errString is a tiny error helper so tests don't need to import "errors".

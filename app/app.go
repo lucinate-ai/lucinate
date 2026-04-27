@@ -95,6 +95,21 @@ type RunOptions struct {
 	// on a main thread should trampoline accordingly. The CLI leaves
 	// it nil.
 	OnInputFocusChanged func(wantsInput bool)
+
+	// OnActionsChanged, if non-nil, is invoked whenever the active
+	// view's set of exposed Actions changes. The active view is the
+	// authoritative source of its discoverable, view-level commands
+	// (e.g. "new agent", "back", "retry"); the desktop TUI renders
+	// these as inline help and dispatches the bound key, while
+	// embedders typically render them as buttons whose tap calls back
+	// in via Program.TriggerAction.
+	//
+	// The callback fires once at start-up with the initial list and
+	// again on every transition. It runs from a tea.Cmd goroutine, so
+	// embedders that touch UI on a main thread should trampoline
+	// accordingly. The CLI leaves it nil — its inline help is the
+	// surface that matters there.
+	OnActionsChanged func(actions []Action)
 }
 
 // Program wraps a Bubble Tea program with the lucinate model and a
@@ -124,6 +139,7 @@ func New(opts RunOptions) (*Program, error) {
 		HideInputArea:       opts.HideInputArea,
 		DisableMouse:        opts.DisableMouse,
 		OnInputFocusChanged: opts.OnInputFocusChanged,
+		OnActionsChanged:    opts.OnActionsChanged,
 	})
 	teaOpts := []tea.ProgramOption{
 		tea.WithInput(in),
@@ -197,6 +213,16 @@ func (p *Program) Resize(cols, rows int) {
 // goroutine. The corresponding Run call will return shortly afterwards.
 func (p *Program) Quit() {
 	p.tp.Quit()
+}
+
+// TriggerAction invokes the named action on the active view. Embedders
+// pass the ID of one of the actions the program most recently published
+// via OnActionsChanged. Safe to call from any goroutine; a no-op if the
+// program has already exited or the active view does not recognise the
+// ID (the latter typically means the embedder's UI is one transition
+// behind the program — not an error).
+func (p *Program) TriggerAction(id string) {
+	p.tp.Send(tui.TriggerActionMsg{ID: id})
 }
 
 // Run is a convenience wrapper that constructs a Program and runs it to

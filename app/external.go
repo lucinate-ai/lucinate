@@ -8,12 +8,18 @@ import (
 
 	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/tui"
 )
 
 // IdentityStore is the persistence interface for the device keypair and
 // device token. Type-aliased here so embedders do not need to import
 // internal packages.
 type IdentityStore = client.IdentityStore
+
+// Action mirrors tui.Action so embedders can read the slice published
+// through RunOptions.OnActionsChanged without importing the internal
+// tui package.
+type Action = tui.Action
 
 // Identity is the loaded device identity. Re-exported so embedders that
 // implement IdentityStore can return values of this type.
