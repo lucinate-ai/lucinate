@@ -327,9 +327,9 @@ func (m connectionsModel) handleFormKey(msg tea.KeyPressMsg) (connectionsModel, 
 		m.subState = subStateConnList
 		return m, nil
 	case "tab":
-		return m, m.advanceFocus(1)
+		return m.advanceFocus(1)
 	case "shift+tab":
-		return m, m.advanceFocus(-1)
+		return m.advanceFocus(-1)
 	case "left", "right":
 		// Type-radio navigation: cycle through ConnectionType options
 		// when the radio is focused.
@@ -345,11 +345,13 @@ func (m connectionsModel) handleFormKey(msg tea.KeyPressMsg) (connectionsModel, 
 
 // advanceFocus moves the focused-field index by delta, wrapping at
 // either end and updating the textinput Focus/Blur flags so the cursor
-// renders on the right field.
-func (m connectionsModel) advanceFocus(delta int) tea.Cmd {
+// renders on the right field. Returns the mutated model along with the
+// focus command — Bubble Tea value receivers can't mutate the caller's
+// state, so the index update must round-trip through the return value.
+func (m connectionsModel) advanceFocus(delta int) (connectionsModel, tea.Cmd) {
 	fields := m.formFields()
 	if len(fields) == 0 {
-		return nil
+		return m, nil
 	}
 	m.focusedField = (m.focusedField + delta + len(fields)) % len(fields)
 	m.nameInput.Blur()
@@ -357,13 +359,13 @@ func (m connectionsModel) advanceFocus(delta int) tea.Cmd {
 	m.modelInput.Blur()
 	switch fields[m.focusedField] {
 	case formFieldName:
-		return m.nameInput.Focus()
+		return m, m.nameInput.Focus()
 	case formFieldURL:
-		return m.urlInput.Focus()
+		return m, m.urlInput.Focus()
 	case formFieldModel:
-		return m.modelInput.Focus()
+		return m, m.modelInput.Focus()
 	}
-	return nil
+	return m, nil
 }
 
 // cycleType rotates the formType through AllConnectionTypes in either
