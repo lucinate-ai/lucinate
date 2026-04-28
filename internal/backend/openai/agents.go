@@ -332,13 +332,21 @@ func slugify(s string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// DefaultIdentity is the placeholder body used when the user accepts
-// the suggestion on the create form. Users can edit it on disk later.
-const DefaultIdentity = `Name: New agent
+// DefaultIdentity returns the placeholder IDENTITY.md body used when
+// the user accepts the suggestion on the create form. The agent's
+// chosen name is interpolated as the Name: header so the model
+// addresses itself by the right label from turn one. Users can edit
+// the file on disk later.
+func DefaultIdentity(name string) string {
+	if name == "" {
+		name = "New agent"
+	}
+	return "Name: " + name + `
 
 Role: A helpful assistant. Replace this with a description of who this
 agent is and what it's for.
 `
+}
 
 // DefaultSoul is the placeholder body for SOUL.md.
 const DefaultSoul = `Tone: Friendly, direct, no fluff.

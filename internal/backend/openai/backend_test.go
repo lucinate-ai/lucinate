@@ -141,8 +141,11 @@ func TestBackend_CreateAgentUsesDefaultsWhenBlank(t *testing.T) {
 	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "blank"}); err != nil {
 		t.Fatalf("CreateAgent: %v", err)
 	}
-	if got := b.store.LoadIdentity("blank"); got != DefaultIdentity {
-		t.Errorf("identity not defaulted: %q", got)
+	if got := b.store.LoadIdentity("blank"); got != DefaultIdentity("blank") {
+		t.Errorf("identity not defaulted with name: %q", got)
+	}
+	if !strings.Contains(b.store.LoadIdentity("blank"), "Name: blank") {
+		t.Errorf("identity Name header should use the agent name, got:\n%s", b.store.LoadIdentity("blank"))
 	}
 	if got := b.store.LoadSoul("blank"); got != DefaultSoul {
 		t.Errorf("soul not defaulted: %q", got)

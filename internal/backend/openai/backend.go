@@ -184,7 +184,7 @@ func (b *Backend) ListAgents(ctx context.Context) (*protocol.AgentsListResult, e
 func (b *Backend) CreateAgent(ctx context.Context, params backend.CreateAgentParams) error {
 	identity := params.Identity
 	if identity == "" {
-		identity = DefaultIdentity
+		identity = DefaultIdentity(params.Name)
 	}
 	soul := params.Soul
 	if soul == "" {
