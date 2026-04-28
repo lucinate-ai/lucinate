@@ -60,6 +60,18 @@ test-integration:
 test-integration-teardown:
 	./test/integration/teardown.sh
 
+.PHONY: test-integration-openai-setup
+test-integration-openai-setup:
+	./test/integration/setup-openai.sh
+
+.PHONY: test-integration-openai
+test-integration-openai:
+	go test -tags integration_openai -count=1 -v ./internal/backend/openai/
+
+.PHONY: test-integration-openai-teardown
+test-integration-openai-teardown:
+	./test/integration/teardown-openai.sh
+
 .PHONY: demo
 demo: build
 	PATH="$(CURDIR):$(PATH)" vhs docs/demo.tape

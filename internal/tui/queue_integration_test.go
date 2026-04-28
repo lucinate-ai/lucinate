@@ -17,6 +17,7 @@ import (
 	"charm.land/glamour/v2"
 	"github.com/joho/godotenv"
 
+	openclawBackend "github.com/lucinate-ai/lucinate/internal/backend/openclaw"
 	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
@@ -74,7 +75,7 @@ func newIntegrationChatModel(t *testing.T, c *client.Client) *chatModel {
 	)
 	m := chatModel{
 		viewport:   viewport.New(),
-		client:     c,
+		backend:    openclawBackend.New(c),
 		sessionKey: sessionKey,
 		agentName:  agentName,
 		renderer:   renderer,

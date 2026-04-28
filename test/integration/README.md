@@ -224,3 +224,80 @@ docker run --rm --add-host=host.docker.internal:host-gateway alpine \
 This is expected with a real LLM. Integration tests should assert on protocol
 structure (message ordering, event types, session lifecycle) rather than on
 response content. Keep LLM-dependent assertions to smoke-test level.
+
+---
+
+## OpenAI-compatible backend (Ollama)
+
+Exercises lucinate's OpenAI-compatible backend talking **directly** to
+Ollama — no OpenClaw gateway, no Docker. The simplest possible shape.
+
+```
+┌──────────────── macOS host ─────────────────┐
+│                                             │
+│  go test -tags integration_openai           │
+│      │                                      │
+│      ▼ http://localhost:11434/v1            │
+│  Ollama (Metal-accelerated on host)         │
+│  Model: qwen2.5:0.5b (default)              │
+└─────────────────────────────────────────────┘
+```
+
+### Prerequisites
+
+| Requirement | Install                                     |
+|-------------|---------------------------------------------|
+| Ollama      | `brew install ollama`                       |
+| Go 1.22+    | https://go.dev/dl/                          |
+
+No Docker required.
+
+### Quick start
+
+```bash
+make test-integration-openai-setup
+make test-integration-openai
+make test-integration-openai-teardown
+```
+
+### Choosing a different model
+
+```bash
+MODEL=llama3.2:1b make test-integration-openai-setup
+```
+
+| Model            | Size    | Notes                                         |
+|------------------|---------|-----------------------------------------------|
+| `qwen2.5:0.5b`   | ~400 MB | **Default** — fastest, sub-second first token |
+| `llama3.2:1b`    | ~1.3 GB | Better instruction-following, ~1–2 s first token |
+| `qwen2.5:1.5b`   | ~1 GB   | Compromise between size and quality           |
+
+### What `setup-openai.sh` does
+
+1. Checks prereqs (`ollama`, `go`).
+2. Starts `ollama serve` in the background if not already running.
+3. Pulls the test model.
+4. Warms the model with a single `/api/generate` so the first test isn't
+   paying the lazy-load cost.
+5. Probes the wiring end-to-end via `test/integration/openai/probe/`.
+6. Writes `.env.openai` with `LUCINATE_OPENAI_BASE_URL` and
+   `LUCINATE_OPENAI_DEFAULT_MODEL`.
+
+### What `teardown-openai.sh` does
+
+Removes `.env.openai`. Ollama is left running — it's a host-side
+service the developer may want for non-test work.
+
+### Test scope
+
+The OpenAI integration tests live in
+`internal/backend/openai/integration_test.go` under the
+`//go:build integration_openai` build tag. They exercise:
+
+- `Connect` against the live endpoint
+- `ModelsList` returns the expected models
+- `ChatSend` streams deltas and lands on a `final` event
+- `ChatAbort` mid-stream emits an `aborted` event
+- `SessionPatchModel` persists to disk
+- Local agent state is written under a `t.TempDir()`-scoped HOME so the
+  tests don't pollute `~/.lucinate/agents/`
