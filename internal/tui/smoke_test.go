@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
@@ -22,6 +22,10 @@ import (
 // drive itself end-to-end on Linux; this test exercises the same
 // AppModel.update code path the program would hit on the host.
 func TestStartupSmoke_NoPanicOnInitialWindowSize(t *testing.T) {
+	noopFactory := func(*config.Connection) (backend.Backend, error) {
+		return nil, nil
+	}
+
 	cases := []struct {
 		name  string
 		setup func() AppModel
@@ -30,10 +34,8 @@ func TestStartupSmoke_NoPanicOnInitialWindowSize(t *testing.T) {
 			name: "managed mode, no connections — picker entry",
 			setup: func() AppModel {
 				return NewApp(nil, AppOptions{
-					Store: &config.Connections{},
-					ClientFactory: func(*config.Connection) (*client.Client, error) {
-						return nil, nil
-					},
+					Store:          &config.Connections{},
+					BackendFactory: noopFactory,
 				})
 			},
 		},
@@ -41,16 +43,18 @@ func TestStartupSmoke_NoPanicOnInitialWindowSize(t *testing.T) {
 			name: "managed mode, initial connection — connecting entry",
 			setup: func() AppModel {
 				store := &config.Connections{}
-				conn, err := store.Add("home", config.ConnTypeOpenClaw, "https://home.example.com")
+				conn, err := store.Add(config.ConnectionFields{
+					Name: "home",
+					Type: config.ConnTypeOpenClaw,
+					URL:  "https://home.example.com",
+				})
 				if err != nil {
 					t.Fatalf("seed: %v", err)
 				}
 				return NewApp(nil, AppOptions{
-					Store:   store,
-					Initial: conn,
-					ClientFactory: func(*config.Connection) (*client.Client, error) {
-						return nil, nil
-					},
+					Store:          store,
+					Initial:        conn,
+					BackendFactory: noopFactory,
 				})
 			},
 		},
