@@ -76,11 +76,14 @@ A future enhancement is to back this with the OS keychain (Keychain on macOS, li
 
 `internal/tui/connections.go` implements the picker. The form has a fixed type radio plus type-conditional fields:
 
-| Type     | Fields                                       |
-|----------|----------------------------------------------|
-| OpenClaw | Type, Name, Gateway URL                      |
-| OpenAI   | Type, Name, Base URL, Default model (optional) |
+| Preset   | Persisted Type | Fields                                            |
+|----------|----------------|---------------------------------------------------|
+| OpenClaw | `openclaw`     | Type, Name, Gateway URL                           |
+| OpenAI   | `openai`       | Type, Name, Base URL, Default model (optional)    |
+| Ollama   | `openai`       | Type, Name, Base URL, Default model (optional)    |
 
-Tab cycles through the visible fields only. ←/→ on the type radio cycles through `AllConnectionTypes`; the URL placeholder updates to match the selected type. Edit forms drop the radio entirely (type is immutable post-create) and start focus on the name field.
+The picker offers three presets but only two persisted types — Ollama is an opinionated OpenAI preset that pre-fills `Name = ollama` and `Base URL = http://localhost:11434/v1`. Switching to Ollama and away clears the prefill so the user isn't stranded with localhost in a gateway URL field.
+
+Tab cycles through the visible fields only. ←/→ on the type radio cycles through the presets; the URL placeholder, name suggestion, and model field tracking update to match. Edit forms drop the radio entirely (type is immutable post-create) and start focus on the name field. Edited connections show the persisted type as a dimmed read-only label — Ollama-created connections render as "OpenAI-compatible" on edit because the Ollama preset isn't distinguishable post-save.
 
 Delete confirmation is exposed as a sub-state with confirm/cancel pairs in `Actions()`, so native-platform embedders render them as buttons rather than relying on inline `y/n` keys.

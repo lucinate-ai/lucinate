@@ -167,30 +167,80 @@ func TestConnectionsModel_EnterEmitsPickedMsg(t *testing.T) {
 	}
 }
 
-func TestConnectionsModel_TypeCycleUpdatesFormType(t *testing.T) {
+func TestConnectionsModel_TypeCycleUpdatesPreset(t *testing.T) {
 	store := &config.Connections{}
 	m := newConnectionsModel(store, false)
 	m, _ = m.TriggerAction("new-connection")
 
-	if m.formType != config.ConnTypeOpenClaw {
-		t.Fatalf("expected initial type OpenClaw, got %q", m.formType)
+	if m.formPreset != presetOpenClaw {
+		t.Fatalf("expected initial preset OpenClaw, got %v", m.formPreset)
 	}
 
-	// Type radio is focused at index 0 — Right cycles to OpenAI.
+	// Right cycles OpenClaw → OpenAI.
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
-	if m.formType != config.ConnTypeOpenAI {
-		t.Errorf("expected OpenAI after Right, got %q", m.formType)
-	}
-	// URL placeholder should track the selected type so the hint
-	// matches what the user is typing.
-	if !strings.Contains(m.urlInput.Placeholder, "11434") {
-		t.Errorf("URL placeholder did not update for OpenAI: %q", m.urlInput.Placeholder)
+	if m.formPreset != presetOpenAI {
+		t.Errorf("expected OpenAI after Right, got %v", m.formPreset)
 	}
 
-	// Right again wraps back to OpenClaw.
+	// Right again cycles OpenAI → Ollama, prefilling the URL and name.
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
-	if m.formType != config.ConnTypeOpenClaw {
-		t.Errorf("expected wrap to OpenClaw, got %q", m.formType)
+	if m.formPreset != presetOllama {
+		t.Errorf("expected Ollama after second Right, got %v", m.formPreset)
+	}
+	if m.urlInput.Value() != "http://localhost:11434/v1" {
+		t.Errorf("Ollama preset did not prefill URL: %q", m.urlInput.Value())
+	}
+	if m.nameInput.Value() != "ollama" {
+		t.Errorf("Ollama preset did not prefill name: %q", m.nameInput.Value())
+	}
+
+	// Right again wraps back to OpenClaw and clears the Ollama
+	// prefill so the user isn't stuck with localhost in a gateway
+	// URL field.
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.formPreset != presetOpenClaw {
+		t.Errorf("expected wrap to OpenClaw, got %v", m.formPreset)
+	}
+	if m.urlInput.Value() != "" {
+		t.Errorf("expected URL cleared on switch away from Ollama, got %q", m.urlInput.Value())
+	}
+	if m.nameInput.Value() != "" {
+		t.Errorf("expected name cleared on switch away from Ollama, got %q", m.nameInput.Value())
+	}
+}
+
+func TestConnectionsModel_OllamaPresetPersistsAsOpenAI(t *testing.T) {
+	store := &config.Connections{}
+	m := newConnectionsModel(store, false)
+	m, _ = m.TriggerAction("new-connection")
+
+	// OpenClaw → OpenAI → Ollama.
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.formPreset != presetOllama {
+		t.Fatalf("expected Ollama preset, got %v", m.formPreset)
+	}
+
+	m.modelInput.SetValue("qwen2.5:0.5b")
+	m, _ = m.submitForm()
+	if m.formErr != "" {
+		t.Fatalf("submit error: %s", m.formErr)
+	}
+	if len(store.Connections) != 1 {
+		t.Fatalf("expected 1 connection, got %d", len(store.Connections))
+	}
+	got := store.Connections[0]
+	if got.Type != config.ConnTypeOpenAI {
+		t.Errorf("Ollama preset should persist as OpenAI, got %q", got.Type)
+	}
+	if got.URL != "http://localhost:11434/v1" {
+		t.Errorf("URL = %q", got.URL)
+	}
+	if got.Name != "ollama" {
+		t.Errorf("Name = %q", got.Name)
+	}
+	if got.DefaultModel != "qwen2.5:0.5b" {
+		t.Errorf("DefaultModel = %q", got.DefaultModel)
 	}
 }
 

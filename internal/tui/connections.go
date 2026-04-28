@@ -73,11 +73,16 @@ type connectionsModel struct {
 	// Form state shared by add and edit. The form has a fixed
 	// type-radio at the top (always rendered, focusable on add and
 	// read-only on edit since type is immutable) plus 2-3 text fields
-	// that vary by selected type:
+	// that vary by selected preset:
 	//   OpenClaw → Name, Gateway URL
 	//   OpenAI   → Name, Base URL, Default model
+	//   Ollama   → Name, Base URL (preset to localhost:11434/v1), Default model
+	//
+	// Ollama is an opinionated alias for OpenAI: it stores
+	// Type=OpenAI on disk but fills sensible defaults on the form
+	// for the most common local-LLM setup.
 	editingID    string
-	formType     config.ConnectionType
+	formPreset   formPreset
 	nameInput    textinput.Model
 	urlInput     textinput.Model
 	modelInput   textinput.Model
@@ -102,8 +107,57 @@ const (
 	formFieldType formField = iota // type radio (only on add)
 	formFieldName
 	formFieldURL
-	formFieldModel // OpenAI only
+	formFieldModel // OpenAI/Ollama only
 )
+
+// formPreset is the picker-only enum that drives the type radio.
+// Multiple presets can map to the same persisted ConnectionType —
+// Ollama is just an opinionated OpenAI preset with the
+// localhost:11434/v1 endpoint pre-filled.
+type formPreset int
+
+const (
+	presetOpenClaw formPreset = iota
+	presetOpenAI
+	presetOllama
+)
+
+// allFormPresets is the picker's display order.
+var allFormPresets = []formPreset{presetOpenClaw, presetOpenAI, presetOllama}
+
+// label returns the user-visible name in the type radio.
+func (p formPreset) label() string {
+	switch p {
+	case presetOpenClaw:
+		return "OpenClaw"
+	case presetOpenAI:
+		return "OpenAI-compatible"
+	case presetOllama:
+		return "Ollama"
+	}
+	return ""
+}
+
+// connectionType returns the ConnectionType this preset persists as.
+func (p formPreset) connectionType() config.ConnectionType {
+	switch p {
+	case presetOpenClaw:
+		return config.ConnTypeOpenClaw
+	default:
+		return config.ConnTypeOpenAI
+	}
+}
+
+// presetForConnection returns the picker preset that best matches an
+// existing connection — used when entering the edit form. Ollama
+// connections aren't distinguishable from generic OpenAI ones
+// post-save, so edit always falls back to OpenAI for type=openai.
+func presetForConnection(conn config.Connection) formPreset {
+	if conn.Type == config.ConnTypeOpenClaw {
+		return presetOpenClaw
+	}
+	return presetOpenAI
+}
 
 func newConnectionsModel(store *config.Connections, hideHints bool) connectionsModel {
 	l := list.New(nil, connectionDelegate{}, 0, 0)
@@ -250,7 +304,7 @@ func (m *connectionsModel) enterFormForNew() {
 	m.subState = subStateConnForm
 	m.editingID = ""
 	m.formErr = ""
-	m.formType = config.ConnTypeOpenClaw
+	m.formPreset = presetOpenClaw
 	m.focusedField = 0
 
 	m.nameInput = textinput.New()
@@ -259,18 +313,19 @@ func (m *connectionsModel) enterFormForNew() {
 
 	m.urlInput = textinput.New()
 	m.urlInput.CharLimit = 256
-	m.applyTypeDefaults()
 
 	m.modelInput = textinput.New()
 	m.modelInput.Placeholder = "llama3.2"
 	m.modelInput.CharLimit = 128
+
+	m.applyPresetDefaults(presetOpenClaw)
 }
 
 func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
 	m.subState = subStateConnForm
 	m.editingID = conn.ID
 	m.formErr = ""
-	m.formType = conn.Type
+	m.formPreset = presetForConnection(conn)
 	// Edit forms drop the type radio from formFields() entirely
 	// (type is immutable post-create), so the name field sits at
 	// index 0 of the focus order.
@@ -289,28 +344,53 @@ func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
 	m.modelInput.CharLimit = 128
 }
 
-// applyTypeDefaults updates the URL placeholder when the selected
-// type changes so the user sees a hint that matches the chosen
-// backend.
-func (m *connectionsModel) applyTypeDefaults() {
-	switch m.formType {
-	case config.ConnTypeOpenAI:
-		m.urlInput.Placeholder = "http://localhost:11434/v1"
+// applyPresetDefaults updates the URL placeholder for the new
+// preset, and (for the Ollama preset only) pre-fills the URL and
+// suggests a default name when the user hasn't typed anything yet.
+// We never overwrite user-entered text — switching back to OpenClaw
+// after typing in Ollama mode keeps whatever's in the URL field.
+func (m *connectionsModel) applyPresetDefaults(prev formPreset) {
+	switch m.formPreset {
+	case presetOllama:
+		const ollamaURL = "http://localhost:11434/v1"
+		m.urlInput.Placeholder = ollamaURL
+		// Auto-fill the URL only if the user hasn't typed anything,
+		// or if they had previously selected Ollama and are
+		// returning to it after toggling away.
+		if m.urlInput.Value() == "" {
+			m.urlInput.SetValue(ollamaURL)
+		}
+		if m.nameInput.Value() == "" {
+			m.nameInput.SetValue("ollama")
+		}
+	case presetOpenAI:
+		m.urlInput.Placeholder = "https://api.openai.com/v1"
 	default:
 		m.urlInput.Placeholder = "https://gateway.example.com"
+	}
+	// If the previous preset was Ollama and its prefilled URL is
+	// still in the field, clear it on switch so the new preset's
+	// placeholder is what the user sees.
+	if prev == presetOllama && m.formPreset != presetOllama {
+		if m.urlInput.Value() == "http://localhost:11434/v1" {
+			m.urlInput.SetValue("")
+		}
+		if m.nameInput.Value() == "ollama" {
+			m.nameInput.SetValue("")
+		}
 	}
 }
 
 // formFields returns the focusable inputs for the current form
 // state, in tab order. Type is included only on add; the model field
-// is included only when type=OpenAI.
+// is included only for OpenAI-shaped presets.
 func (m connectionsModel) formFields() []formField {
 	fields := []formField{}
 	if m.editingID == "" {
 		fields = append(fields, formFieldType)
 	}
 	fields = append(fields, formFieldName, formFieldURL)
-	if m.formType == config.ConnTypeOpenAI {
+	if m.formPreset.connectionType() == config.ConnTypeOpenAI {
 		fields = append(fields, formFieldModel)
 	}
 	return fields
@@ -334,10 +414,10 @@ func (m connectionsModel) handleFormKey(msg tea.KeyPressMsg) (connectionsModel, 
 	case "shift+tab":
 		return m.advanceFocus(-1)
 	case "left", "right":
-		// Type-radio navigation: cycle through ConnectionType options
-		// when the radio is focused.
+		// Type-radio navigation: cycle through preset options when
+		// the radio is focused.
 		if m.currentField() == formFieldType {
-			m.cycleType(msg.String() == "right")
+			m.cyclePreset(msg.String() == "right")
 			return m, nil
 		}
 	case "enter":
@@ -371,14 +451,15 @@ func (m connectionsModel) advanceFocus(delta int) (connectionsModel, tea.Cmd) {
 	return m, nil
 }
 
-// cycleType rotates the formType through AllConnectionTypes in either
-// direction. Adjusts URL placeholder via applyTypeDefaults so the
-// hint stays accurate.
-func (m *connectionsModel) cycleType(forward bool) {
-	types := config.AllConnectionTypes
+// cyclePreset rotates the formPreset through allFormPresets in
+// either direction, applying the new preset's defaults so the URL
+// placeholder, name suggestion, and model field tracking stay in
+// sync as the user toggles.
+func (m *connectionsModel) cyclePreset(forward bool) {
+	prev := m.formPreset
 	idx := 0
-	for i, t := range types {
-		if t == m.formType {
+	for i, p := range allFormPresets {
+		if p == prev {
 			idx = i
 			break
 		}
@@ -387,8 +468,8 @@ func (m *connectionsModel) cycleType(forward bool) {
 	if !forward {
 		step = -1
 	}
-	m.formType = types[(idx+step+len(types))%len(types)]
-	m.applyTypeDefaults()
+	m.formPreset = allFormPresets[(idx+step+len(allFormPresets))%len(allFormPresets)]
+	m.applyPresetDefaults(prev)
 }
 
 func (m connectionsModel) updateForm(msg tea.Msg) (connectionsModel, tea.Cmd) {
@@ -413,7 +494,7 @@ func (m connectionsModel) submitForm() (connectionsModel, tea.Cmd) {
 
 	fields := config.ConnectionFields{
 		Name:         name,
-		Type:         m.formType,
+		Type:         m.formPreset.connectionType(),
 		URL:          url,
 		DefaultModel: strings.TrimSpace(m.modelInput.Value()),
 	}
@@ -520,21 +601,27 @@ func (m connectionsModel) viewForm() string {
 		b.WriteString(helpStyle.Render("  (← →)"))
 	}
 	b.WriteString("\n")
+	// On edit the type radio is read-only — only the active preset
+	// is rendered (and dimmed) since the others are unreachable.
+	presets := allFormPresets
+	if m.editingID != "" {
+		presets = []formPreset{m.formPreset}
+	}
 	b.WriteString("  ")
-	for i, t := range config.AllConnectionTypes {
+	for i, p := range presets {
 		marker := "( )"
-		if t == m.formType {
+		if p == m.formPreset {
 			marker = "(•)"
 		}
-		label := t.Label()
-		if m.editingID == "" && m.currentField() == formFieldType && t == m.formType {
+		label := p.label()
+		if m.editingID == "" && m.currentField() == formFieldType && p == m.formPreset {
 			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accent).Render(marker + " " + label))
-		} else if m.editingID != "" && t != m.formType {
+		} else if m.editingID != "" {
 			b.WriteString(helpStyle.Render(marker + " " + label))
 		} else {
 			b.WriteString(marker + " " + label)
 		}
-		if i < len(config.AllConnectionTypes)-1 {
+		if i < len(presets)-1 {
 			b.WriteString("   ")
 		}
 	}
@@ -544,13 +631,13 @@ func (m connectionsModel) viewForm() string {
 	b.WriteString("  " + m.nameInput.View() + "\n\n")
 
 	urlLabel := "Gateway URL:"
-	if m.formType == config.ConnTypeOpenAI {
+	if m.formPreset.connectionType() == config.ConnTypeOpenAI {
 		urlLabel = "Base URL:"
 	}
 	b.WriteString("  " + urlLabel + "\n")
 	b.WriteString("  " + m.urlInput.View() + "\n\n")
 
-	if m.formType == config.ConnTypeOpenAI {
+	if m.formPreset.connectionType() == config.ConnTypeOpenAI {
 		b.WriteString("  Default model (optional):\n")
 		b.WriteString("  " + m.modelInput.View() + "\n\n")
 	}
