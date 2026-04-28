@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/lucinate-ai/lucinate/app"
 	"github.com/lucinate-ai/lucinate/internal/backend"
@@ -52,6 +53,10 @@ func backendFactory(conn *config.Connection) (backend.Backend, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Apply the user-configured WebSocket handshake deadline to
+		// every (re)dial so slow backends don't trip the SDK's default.
+		prefs := config.LoadPreferences()
+		c.SetConnectTimeout(time.Duration(prefs.ConnectTimeoutSeconds) * time.Second)
 		return openclawBackend.New(c), nil
 	case config.ConnTypeOpenAI:
 		apiKey := config.GetAPIKey(conn.ID)

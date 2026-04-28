@@ -105,18 +105,20 @@ func TestConfigModel_EscGoesBack(t *testing.T) {
 
 func TestConfigModel_CursorNavigation(t *testing.T) {
 	m := newTestConfigModel()
-	// Two items now: cursor starts at 0, can move to 1.
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.cursor != 1 {
-		t.Errorf("expected cursor 1 after down, got %d", m.cursor)
+	last := len(m.items) - 1
+	for i := 0; i < last; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	if m.cursor != last {
+		t.Errorf("expected cursor %d after stepping to end, got %d", last, m.cursor)
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.cursor != 1 {
-		t.Errorf("expected cursor 1 at end, got %d", m.cursor)
+	if m.cursor != last {
+		t.Errorf("expected cursor %d clamped at end, got %d", last, m.cursor)
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.cursor != 0 {
-		t.Errorf("expected cursor 0, got %d", m.cursor)
+	if m.cursor != last-1 {
+		t.Errorf("expected cursor %d, got %d", last-1, m.cursor)
 	}
 }
 
@@ -205,6 +207,35 @@ func TestConfigModel_SpaceNoOpOnIntItem(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd for space on int item")
+	}
+}
+
+func TestConfigModel_ConnectTimeout_RightIncreases(t *testing.T) {
+	m := newTestConfigModel()
+	idx := -1
+	for i, it := range m.items {
+		if it.key == "connectTimeoutSeconds" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("connectTimeoutSeconds item not present")
+	}
+	for i := 0; i < idx; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	initial := m.items[idx].value
+	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if m.items[idx].value != initial+m.items[idx].step {
+		t.Errorf("expected value %d after right, got %d", initial+m.items[idx].step, m.items[idx].value)
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd to save preferences")
+	}
+	pMsg := cmd().(prefsUpdatedMsg)
+	if pMsg.prefs.ConnectTimeoutSeconds != initial+m.items[idx].step {
+		t.Errorf("expected ConnectTimeoutSeconds %d, got %d", initial+m.items[idx].step, pMsg.prefs.ConnectTimeoutSeconds)
 	}
 }
 
