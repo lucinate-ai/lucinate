@@ -128,6 +128,32 @@ func TestAgentStore_SystemPromptOmitsEmptyParts(t *testing.T) {
 	}
 }
 
+// TestAgentStore_SystemPromptSoulOnly covers the third branch of
+// SystemPrompt — IDENTITY.md is empty (or whitespace) but SOUL.md has
+// content. Users hit this when they delete IDENTITY.md by hand to
+// drop the persona while keeping the working-style preamble.
+func TestAgentStore_SystemPromptSoulOnly(t *testing.T) {
+	store := newTestStore(t)
+	meta, _ := store.Create("agent", "   \n  ", "be terse", "")
+
+	prompt := store.SystemPrompt(meta.ID)
+	if strings.Contains(prompt, "# Identity") {
+		t.Errorf("whitespace-only identity should not produce heading, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "# Soul") || !strings.Contains(prompt, "be terse") {
+		t.Errorf("expected soul heading and body, got:\n%s", prompt)
+	}
+}
+
+func TestAgentStore_SystemPromptEmpty(t *testing.T) {
+	store := newTestStore(t)
+	meta, _ := store.Create("agent", "", "", "")
+
+	if got := store.SystemPrompt(meta.ID); got != "" {
+		t.Errorf("expected empty prompt when both files are empty, got %q", got)
+	}
+}
+
 func TestAgentStore_ListSortsByUpdatedDesc(t *testing.T) {
 	store := newTestStore(t)
 	a, _ := store.Create("alpha", "", "", "")

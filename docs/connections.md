@@ -4,14 +4,17 @@ A connection is a saved target lucinate can connect to (URL + type + auth identi
 
 ## Connection types
 
-Two backend types ship today; both implement `backend.Backend` (`internal/backend/backend.go`) so the chat / sessions / commands views are backend-agnostic.
+Two backend types ship today; both implement `backend.Backend` (`internal/backend/backend.go`) so the chat / sessions / commands views are backend-agnostic. Backend-specific behaviour (capabilities, agent storage, auth) is documented in dedicated files:
+
+- [backend_openclaw.md](backend_openclaw.md) — full capability surface, device-token auth, server-side agents
+- [backend_openai.md](backend_openai.md) — `/v1/chat/completions` streaming, on-disk agents (IDENTITY.md + SOUL.md), API-key auth
 
 | Type      | URL shape                              | Auth                                   | Agent storage                 |
 |-----------|----------------------------------------|----------------------------------------|-------------------------------|
 | OpenClaw  | `https://`/`http://`/`wss://`/`ws://` (WS endpoint derived) | Ed25519 device pairing                 | Server-side on the gateway   |
-| OpenAI    | `http(s)://host/v1`                    | Optional `Authorization: Bearer <key>` | Local — see [agent storage](#openai-agent-storage) below |
+| OpenAI    | `http(s)://host/v1`                    | Optional `Authorization: Bearer <key>` | Local under `~/.lucinate/agents/<conn-id>/<agent-id>/` |
 
-`AllConnectionTypes` (`internal/config/connections.go`) drives the picker form's type radio. Adding a third backend means: implementing `backend.Backend`, extending the enum, dispatching in `backendFactory` (`main.go`), and adjusting the form's type-conditional rendering.
+`AllConnectionTypes` (`internal/config/connections.go`) drives the picker form's type radio. Adding a third backend means: implementing `backend.Backend`, extending the enum, dispatching in `backendFactory` (`main.go`), adjusting the form's type-conditional rendering, and writing a `backend_<name>.md` doc for it.
 
 ## Startup decision tree
 
@@ -48,21 +51,6 @@ Legacy mode (`AppOptions.Backend != nil`, no `Store`) is for native-platform emb
 - `api key required` (HTTP 401/403 from any `/v1` request) → API-key text prompt; submission stores via `APIKeyAuth.StoreAPIKey`.
 
 The submission flow dispatches on `connectingModel.authNeed` rather than on Go interface assertion: the OpenClaw wrapper implements both `DeviceTokenAuth` and `APIKeyAuth`, so a naive type-switch would always pick the first arm. See `connecting.go` `case "enter":` for the dispatch.
-
-## OpenAI agent storage
-
-OpenAI-compat connections store agents on disk because the `/v1` shape has no agent concept. Each agent owns a directory under `~/.lucinate/agents/<connection-id>/<agent-id>/` containing:
-
-| File           | Purpose                                                       |
-|----------------|---------------------------------------------------------------|
-| `agent.json`   | Metadata: id, name, default model, created/updated timestamps |
-| `IDENTITY.md`  | Who the agent is (markdown — user-editable)                   |
-| `SOUL.md`      | Tone / values / working style (markdown — user-editable)      |
-| `history.jsonl`| Append-only transcript, one JSON message per line             |
-
-`AgentStore.SystemPrompt(agentID)` (`internal/backend/openai/agents.go`) concatenates IDENTITY.md and SOUL.md at runtime to form the system prompt, so a user can edit either file between sessions without going through the TUI. Defaults seed the create form (`DefaultIdentity`, `DefaultSoul`) for rapid agent creation.
-
-Agent ≡ session 1:1 on this backend — there's no session browser sub-list, the agent ID *is* the session key. `/reset` clears `history.jsonl` (via `SessionDelete`); the agent itself stays.
 
 ## Secrets storage
 

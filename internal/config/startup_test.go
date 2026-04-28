@@ -169,6 +169,55 @@ func TestResolveEntryConnection_OpenAIEnvAutoAdds(t *testing.T) {
 	}
 }
 
+// TestResolveEntryConnection_OpenAIEnvMatchesExisting covers the
+// match-then-reuse arm of step 2: when LUCINATE_OPENAI_BASE_URL points
+// at an already-saved OpenAI connection, the resolver returns that
+// entry instead of adding a duplicate.
+func TestResolveEntryConnection_OpenAIEnvMatchesExisting(t *testing.T) {
+	withHomeDir(t)
+	t.Setenv("OPENCLAW_GATEWAY_URL", "")
+
+	var seed Connections
+	conn, _ := seed.Add(ConnectionFields{
+		Name:         "ollama",
+		Type:         ConnTypeOpenAI,
+		URL:          "http://localhost:11434/v1",
+		DefaultModel: "llama3.2",
+	})
+	if err := SaveConnections(seed); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "http://localhost:11434/v1/")
+	got := ResolveEntryConnection()
+	if got.ShowPicker || got.Connection == nil {
+		t.Fatalf("expected matched OpenAI connection, got %+v", got)
+	}
+	if got.Connection.ID != conn.ID {
+		t.Errorf("expected reused entry %q, got %q", conn.ID, got.Connection.ID)
+	}
+	if len(got.Store.Connections) != 1 {
+		t.Errorf("store should not have grown, has %d entries", len(got.Store.Connections))
+	}
+}
+
+// TestResolveEntryConnection_OpenClawEnvBeatsOpenAIEnv pins the
+// precedence: when both env vars are set, the OpenClaw branch wins
+// because it runs first in the resolution order.
+func TestResolveEntryConnection_OpenClawEnvBeatsOpenAIEnv(t *testing.T) {
+	withHomeDir(t)
+	t.Setenv("OPENCLAW_GATEWAY_URL", "https://gw.example.com")
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "http://localhost:11434/v1")
+
+	got := ResolveEntryConnection()
+	if got.ShowPicker || got.Connection == nil {
+		t.Fatalf("expected an auto-added connection, got %+v", got)
+	}
+	if got.Connection.Type != ConnTypeOpenClaw {
+		t.Errorf("expected OpenClaw to win, got Type=%q URL=%q", got.Connection.Type, got.Connection.URL)
+	}
+}
+
 func TestResolveEntryConnection_InvalidEnvURLFallsThrough(t *testing.T) {
 	withHomeDir(t)
 	t.Setenv("OPENCLAW_GATEWAY_URL", "ftp://nope.example.com")
