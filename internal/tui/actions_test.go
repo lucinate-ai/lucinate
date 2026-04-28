@@ -106,9 +106,9 @@ func TestConfigModel_Actions(t *testing.T) {
 // don't make the test brittle.
 func TestHideActionHints_Suppresses(t *testing.T) {
 	t.Run("select", func(t *testing.T) {
-		shown := newSelectModel(nil, false, false)
+		shown := newSelectModel(nil, false, false, nil)
 		shown.loading = false
-		hidden := newSelectModel(nil, true, false)
+		hidden := newSelectModel(nil, true, false, nil)
 		hidden.loading = false
 		if !strings.Contains(shown.View(), "n: new agent") {
 			t.Fatalf("expected hint with hideHints=false, got: %q", shown.View())
@@ -118,9 +118,9 @@ func TestHideActionHints_Suppresses(t *testing.T) {
 		}
 	})
 	t.Run("sessions", func(t *testing.T) {
-		shown := newSessionsModel(nil, "a", "A", "m", "k", false)
+		shown := newSessionsModel(nil, "a", "A", "m", "k", false, nil)
 		shown.loading = false
-		hidden := newSessionsModel(nil, "a", "A", "m", "k", true)
+		hidden := newSessionsModel(nil, "a", "A", "m", "k", true, nil)
 		hidden.loading = false
 		if !strings.Contains(shown.View(), "esc: back") {
 			t.Fatalf("expected hint with hideHints=false, got: %q", shown.View())

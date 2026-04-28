@@ -84,6 +84,7 @@ type AppModel struct {
 	sessionsModel     sessionsModel
 	configModel       configModel
 	backend           backend.Backend
+	activeConn        *config.Connection // the connection backend belongs to; rendered in status bars
 	store             *config.Connections
 	backendFactory    BackendFactory
 	onBackendChanged  func(backend.Backend)
@@ -131,9 +132,10 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 
 	switch {
 	case !managed:
-		// Legacy: jump straight into the agent picker.
+		// Legacy: jump straight into the agent picker. No active
+		// connection — embedders manage that elsewhere.
 		m.state = viewSelect
-		m.selectModel = newSelectModel(b, opts.HideActionHints, managed)
+		m.selectModel = newSelectModel(b, opts.HideActionHints, managed, nil)
 	case opts.Initial != nil:
 		// Managed with an initial pick: try to connect first, surface
 		// errors / auth modals from there.
@@ -369,6 +371,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			go cb(nil)
 		}
 		m.backend = nil
+		m.activeConn = nil
 		m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints)
 		m.connectionsModel.setSize(m.width, m.height)
 		m.state = viewConnections
@@ -411,13 +414,13 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		return m, nil
 
 	case showSessionsMsg:
-		m.sessionsModel = newSessionsModel(m.backend, msg.agentID, msg.agentName, msg.modelID, msg.mainKey, m.hideActionHints)
+		m.sessionsModel = newSessionsModel(m.backend, msg.agentID, msg.agentName, msg.modelID, msg.mainKey, m.hideActionHints, m.activeConn)
 		m.sessionsModel.setSize(m.width, m.height)
 		m.state = viewSessions
 		return m, m.sessionsModel.Init()
 
 	case sessionSelectedMsg:
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput)
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn))
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -428,7 +431,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.sessionsModel.loading = false
 			return m, nil
 		}
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput)
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn))
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -443,7 +446,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.state = viewSelect
 			return m, nil
 		}
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput)
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn))
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -626,12 +629,13 @@ func (m AppModel) handleConnectResult(msg connectResultMsg) (AppModel, tea.Cmd) 
 			m.store.MarkUsed(msg.connection.ID)
 		}
 		m.backend = msg.backend
+		m.activeConn = msg.connection
 		if m.onBackendChanged != nil {
 			cb := m.onBackendChanged
 			b := msg.backend
 			go cb(b) // blocking send; do off the event loop
 		}
-		m.selectModel = newSelectModel(msg.backend, m.hideActionHints, m.managed)
+		m.selectModel = newSelectModel(msg.backend, m.hideActionHints, m.managed, m.activeConn)
 		m.selectModel.setSize(m.width, m.height)
 		m.state = viewSelect
 		var cmd tea.Cmd = m.selectModel.Init()
