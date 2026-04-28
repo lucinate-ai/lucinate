@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // agentItem is a list item for the agent picker.
@@ -91,6 +92,11 @@ type selectModel struct {
 	// defaults: IDENTITY/SOUL markdown for the OpenAI-compat case).
 	useWorkspace bool
 
+	// activeConn is rendered as a thin status row above the picker
+	// so the user always sees which connection is in scope. May be
+	// nil for legacy embedders without a connections store.
+	activeConn *config.Connection
+
 	// Create-agent form state.
 	subState       selectSubState
 	nameInput      textinput.Model
@@ -114,8 +120,10 @@ type agentsLoadedMsg struct {
 // to the connections picker without first entering a chat session.
 // The backend's Capabilities.AgentWorkspace flag drives whether the
 // create-agent form renders the workspace field — this is read off b
-// here so the picker doesn't have to keep asking.
-func newSelectModel(b backend.Backend, hideHints, showConnections bool) selectModel {
+// here so the picker doesn't have to keep asking. activeConn (when
+// non-nil) is rendered as a thin status row at the top of the view
+// so the user can see which connection is in scope.
+func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeConn *config.Connection) selectModel {
 	useWorkspace := false
 	if b != nil {
 		useWorkspace = b.Capabilities().AgentWorkspace
@@ -139,6 +147,7 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool) selectMo
 		hideHints:       hideHints,
 		showConnections: showConnections,
 		useWorkspace:    useWorkspace,
+		activeConn:      activeConn,
 	}
 }
 
@@ -438,8 +447,10 @@ func (m selectModel) View() string {
 		return "\n  Connecting to gateway...\n"
 	}
 	hints := m.renderHints()
+	banner := renderConnectionBanner(m.activeConn)
 	if m.err != nil {
 		var b strings.Builder
+		b.WriteString(banner)
 		b.WriteString("\n")
 		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
 		b.WriteString("\n\n")
@@ -448,9 +459,9 @@ func (m selectModel) View() string {
 		return b.String()
 	}
 	if m.subState == subStateCreate {
-		return m.viewCreateForm()
+		return banner + m.viewCreateForm()
 	}
-	return m.list.View() + "\n" + hints
+	return banner + m.list.View() + "\n" + hints
 }
 
 // renderHints emits the inline action-hint help line, or the empty

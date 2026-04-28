@@ -95,6 +95,7 @@ type chatModel struct {
 	textarea         textarea.Model
 	messages         []chatMessage
 	backend          backend.Backend
+	connName         string // active connection name, rendered in the header bar
 	sessionKey       string
 	agentID          string
 	agentName        string
@@ -154,7 +155,7 @@ func (m *chatModel) ensureSpinnerTicking() tea.Cmd {
 	return spinnerTickCmd()
 }
 
-func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID string, prefs config.Preferences, hideInput bool) chatModel {
+func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID string, prefs config.Preferences, hideInput bool, connName string) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Focus()
@@ -177,6 +178,7 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 		viewport:     vp,
 		textarea:     ta,
 		backend:      b,
+		connName:     connName,
 		sessionKey:   sessionKey,
 		agentID:      agentID,
 		agentName:    agentName,
@@ -732,7 +734,11 @@ func (m *chatModel) setSize(w, h int) {
 }
 
 func (m chatModel) View() string {
-	left := fmt.Sprintf(" lucinate — %s", m.agentName)
+	left := " lucinate"
+	if m.connName != "" {
+		left += " · " + m.connName
+	}
+	left += fmt.Sprintf(" — %s", m.agentName)
 	if m.modelID != "" {
 		model := m.modelID
 		if i := strings.LastIndex(model, "/"); i >= 0 {

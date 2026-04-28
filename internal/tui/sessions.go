@@ -14,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // sessionItem is a list item for the session browser.
@@ -91,18 +92,19 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 
 // sessionsModel is the session browser view.
 type sessionsModel struct {
-	list      list.Model
-	backend   backend.Backend
-	agentID   string
-	agentName string
-	modelID   string
-	mainKey   string
-	loading   bool
-	err       error
-	hideHints bool
+	list       list.Model
+	backend    backend.Backend
+	agentID    string
+	agentName  string
+	modelID    string
+	mainKey    string
+	loading    bool
+	err        error
+	hideHints  bool
+	activeConn *config.Connection // rendered above the session list — see renderConnectionBanner.
 }
 
-func newSessionsModel(b backend.Backend, agentID, agentName, modelID, mainKey string, hideHints bool) sessionsModel {
+func newSessionsModel(b backend.Backend, agentID, agentName, modelID, mainKey string, hideHints bool, activeConn *config.Connection) sessionsModel {
 	l := list.New(nil, sessionDelegate{}, 0, 0)
 	l.Title = "Sessions"
 	l.SetShowStatusBar(false)
@@ -113,14 +115,15 @@ func newSessionsModel(b backend.Backend, agentID, agentName, modelID, mainKey st
 	l.SetFilteringEnabled(false)
 
 	return sessionsModel{
-		list:      l,
-		backend:   b,
-		agentID:   agentID,
-		agentName: agentName,
-		modelID:   modelID,
-		mainKey:   mainKey,
-		loading:   true,
-		hideHints: hideHints,
+		list:       l,
+		backend:    b,
+		agentID:    agentID,
+		agentName:  agentName,
+		modelID:    modelID,
+		mainKey:    mainKey,
+		loading:    true,
+		hideHints:  hideHints,
+		activeConn: activeConn,
 	}
 }
 
@@ -367,8 +370,10 @@ func (m sessionsModel) View() string {
 	if !m.hideHints {
 		hints = helpStyle.Render(renderActionHints(m.Actions()))
 	}
+	banner := renderConnectionBanner(m.activeConn)
 	if m.err != nil {
 		var b strings.Builder
+		b.WriteString(banner)
 		b.WriteString("\n")
 		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
 		b.WriteString("\n\n")
@@ -378,6 +383,7 @@ func (m sessionsModel) View() string {
 	}
 	if len(m.list.Items()) == 0 {
 		var b strings.Builder
+		b.WriteString(banner)
 		b.WriteString("\n")
 		b.WriteString(headerStyle.Render(" Sessions "))
 		b.WriteString("\n\n")
@@ -386,7 +392,7 @@ func (m sessionsModel) View() string {
 		b.WriteString("\n")
 		return b.String()
 	}
-	return m.list.View() + "\n" + hints
+	return banner + m.list.View() + "\n" + hints
 }
 
 func (m *sessionsModel) setSize(w, h int) {

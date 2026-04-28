@@ -100,4 +100,10 @@ var (
 	// Help text.
 	helpStyle = lipgloss.NewStyle().
 			Foreground(subtle)
+
+	// Connection status bar — a thin dim row above non-chat views
+	// telling the user which connection is in scope. The chat view
+	// folds the same info into its own header bar.
+	connBannerStyle = lipgloss.NewStyle().
+			Foreground(subtle)
 )
