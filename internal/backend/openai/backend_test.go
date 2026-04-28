@@ -221,6 +221,96 @@ func TestBackend_ChatSendStreamsDeltasAndFinal(t *testing.T) {
 	}
 }
 
+// TestBackend_ChatSendSkipsMalformedSSEChunks pushes the streaming
+// parser past three "weird" lines that an OpenAI-compatible server
+// might emit:
+//
+//   - a non-`data: ` prefix line (e.g. an SSE comment or `event: …`)
+//   - a `data: ` line with non-JSON body (truncated chunk)
+//   - a `data: ` line with valid JSON but no `choices` (provider
+//     keep-alives sometimes send `{"id":"..."}` without choices)
+//
+// All three should be skipped silently — the run completes with the
+// content from the well-formed chunks intact, and the final event
+// fires.
+func TestBackend_ChatSendSkipsMalformedSSEChunks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.Error(w, "wrong path", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		// Comment / event line — no `data: ` prefix.
+		fmt.Fprint(w, ": keep-alive\n\n")
+		fmt.Fprint(w, "event: ping\n\n")
+		flusher.Flush()
+		// Valid first chunk.
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"Hel"}}]}`+"\n\n")
+		flusher.Flush()
+		// Truncated JSON.
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"`+"\n\n")
+		flusher.Flush()
+		// Valid JSON but no choices.
+		fmt.Fprint(w, `data: {"id":"keepalive-1"}`+"\n\n")
+		flusher.Flush()
+		// Valid second chunk.
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"lo"}}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"}); err != nil {
+		t.Fatalf("ChatSend: %v", err)
+	}
+
+	// emitDelta encodes the full assistant text as a JSON string in
+	// ChatEvent.Message. Decode and compare.
+	deltaText := func(ev protocol.ChatEvent) string {
+		var s string
+		_ = json.Unmarshal(ev.Message, &s)
+		return s
+	}
+
+	first := parseChat(t, drainEvent(t, b.events))
+	if first.State != "delta" || deltaText(first) != "Hel" {
+		t.Fatalf("first delta: state=%s body=%q", first.State, deltaText(first))
+	}
+	second := parseChat(t, drainEvent(t, b.events))
+	if second.State != "delta" || deltaText(second) != "Hello" {
+		t.Fatalf("second delta: state=%s body=%q", second.State, deltaText(second))
+	}
+	final := parseChat(t, drainEvent(t, b.events))
+	if final.State != "final" {
+		t.Fatalf("expected final, got state=%s err=%q", final.State, final.ErrorMessage)
+	}
+	var finalMsg struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(final.Message, &finalMsg); err != nil {
+		t.Fatalf("decode final message: %v", err)
+	}
+	if len(finalMsg.Content) == 0 || finalMsg.Content[0].Text != "Hello" {
+		t.Errorf("final body = %+v, want Hello", finalMsg.Content)
+	}
+
+	msgs, _ := b.store.LoadHistory("a", 0)
+	if len(msgs) != 2 {
+		t.Fatalf("expected user+assistant in history, got %d", len(msgs))
+	}
+	if msgs[1].Content != "Hello" {
+		t.Errorf("persisted assistant content = %q", msgs[1].Content)
+	}
+}
+
 func TestBackend_ChatSendErrorEmitsErrorEvent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "rate limited", http.StatusTooManyRequests)

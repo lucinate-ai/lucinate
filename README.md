@@ -5,7 +5,7 @@
 <h1 align="center">lucinate — the terminal-native AI chat client</h1>
 
 <p align="center">
-  Chat with your <a href="https://github.com/openclaw/openclaw">OpenClaw</a> agents from the terminal. Streaming responses, markdown rendering, no mouse required.
+  Chat with your <a href="https://github.com/openclaw/openclaw">OpenClaw</a> agents — or any OpenAI-compatible endpoint, including <a href="https://ollama.com">Ollama</a>, vLLM, LM Studio, and OpenAI itself — from the terminal. Streaming responses, markdown rendering, no mouse required.
 </p>
 
 <p align="center">
@@ -20,14 +20,15 @@ No file browsers, no task boards, no dashboards. Just chat.
 
 ### Highlights
 
-- **Chat with your OpenClaw agents** from the terminal, with streaming responses, conversation history, and multi-agent support
-- **Create agents** directly from the TUI
+- **Multiple backends** — connect to an [OpenClaw](https://github.com/openclaw/openclaw) gateway, or any OpenAI-compatible endpoint ([Ollama](https://ollama.com), vLLM, LM Studio, llamafile, OpenAI proper). Switch between saved connections with `/connections`.
+- **Streaming responses, conversation history, and multi-agent support**
+- **Create agents** directly from the TUI — gateway-managed for OpenClaw, or local `IDENTITY.md` + `SOUL.md` markdown for OpenAI-compatible backends
 - **Markdown rendering** for assistant messages
 - **Shell commands** — run locally with `!` or remotely on the gateway with `!!`
 - **Message queueing** so you can keep typing while the agent is responding
 - **Local agent skills** loaded from `~/.agents/skills/` as slash commands
-- **Live token/cost stats** in the header bar
-- **Thinking level control** via `/think` — tune reasoning depth per session
+- **Live token/cost stats** in the header bar (OpenClaw)
+- **Thinking level control** via `/think` — tune reasoning depth per session (OpenClaw)
 
 ## Install
 
@@ -57,8 +58,8 @@ On first launch lucinate opens a **Connections** picker so you can add a backend
 
 Two connection types are supported:
 
-- **OpenClaw** — connect to an OpenClaw gateway over WebSocket. Auth uses Ed25519 device pairing.
-- **OpenAI-compatible** — connect to any `/v1/chat/completions` endpoint (Ollama, vLLM, LM Studio, llamafile, OpenAI proper). Agents are stored locally as IDENTITY.md + SOUL.md markdown under `~/.lucinate/agents/<connection-id>/<agent-id>/`, composed into the system prompt at runtime.
+- **OpenClaw** — connect to an OpenClaw gateway over WebSocket. Auth uses Ed25519 device pairing. See [docs/backend_openclaw.md](docs/backend_openclaw.md).
+- **OpenAI-compatible** — connect to any `/v1/chat/completions` endpoint (Ollama, vLLM, LM Studio, llamafile, OpenAI proper). Agents are stored locally as IDENTITY.md + SOUL.md markdown under `~/.lucinate/agents/<connection-id>/<agent-id>/`, composed into the system prompt at runtime. See [docs/backend_openai.md](docs/backend_openai.md).
 
 Prefer env vars? Either is recognised on first run and auto-added as a connection:
 
@@ -141,18 +142,18 @@ Type these in the chat input. Tab autocompletes partial commands.
 | `/help` | Show available commands |
 | `/agents` | Return to agent picker |
 | `/clear` | Clear chat display |
-| `/compact` | Compact session context (with confirmation) |
+| `/compact` | Compact session context (with confirmation) — OpenClaw only |
 | `/config` | Open preferences |
-| `/connections` | Switch gateway connection |
+| `/connections` | Switch backend connection |
 | `/model` | List available models |
 | `/model <name>` | Switch model (fuzzy match) |
 | `/reset` | Delete session and start fresh (with confirmation) |
 | `/sessions` | Browse and restore previous sessions |
 | `/skills` | List available agent skills |
-| `/stats` | Show token usage and cost breakdown |
-| `/status` | Show gateway health and agent status |
-| `/think` | Show current thinking level |
-| `/think <level>` | Set thinking level (`off`, `minimal`, `low`, `medium`, `high`) |
+| `/stats` | Show token usage and cost breakdown — OpenClaw only |
+| `/status` | Show gateway health and agent status — OpenClaw only |
+| `/think` | Show current thinking level — OpenClaw only |
+| `/think <level>` | Set thinking level (`off`, `minimal`, `low`, `medium`, `high`) — OpenClaw only |
 | `/quit`, `/exit` | Quit lucinate |
 
 ## Shell commands

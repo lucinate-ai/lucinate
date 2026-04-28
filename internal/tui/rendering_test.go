@@ -130,6 +130,38 @@ func TestRender_ChatView_HeaderShowsAgentName(t *testing.T) {
 	waitForContains(t, tm.Output(), "lucinate", "scout")
 }
 
+// TestRender_ChatView_HeaderShowsConnectionName verifies the chat
+// header renders the connection name when one is supplied — the
+// "lucinate · <conn> — <agent>" shape that lets users tell which
+// connection they're chatting against.
+func TestRender_ChatView_HeaderShowsConnectionName(t *testing.T) {
+	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "ollama-local")
+	m.setSize(120, 40)
+	adapter := chatModelAdapter{inner: m}
+
+	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
+	defer finishProgram(t, tm)
+
+	waitForContains(t, tm.Output(), "lucinate", "ollama-local", "scout")
+}
+
+// TestChatModel_HeaderOmitsConnectionWhenBlank locks in that legacy
+// embedders without a connection store still render a clean header
+// — no leading separator, no empty " · " fragment.
+func TestChatModel_HeaderOmitsConnectionWhenBlank(t *testing.T) {
+	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "")
+	m.setSize(120, 40)
+	out := ansi.Strip(m.View())
+	if strings.Contains(out, " · ") && !strings.Contains(out, "scout · ") {
+		// Allow the agent · model separator when modelID is set; here it's blank,
+		// so any " · " in the title bar is a leak from the connName branch.
+		header := strings.SplitN(out, "\n", 2)[0]
+		if strings.Contains(header, " · ") {
+			t.Errorf("blank connName leaked a separator into the header: %q", header)
+		}
+	}
+}
+
 func TestRender_ChatView_QueuedCountShownInHelpBar(t *testing.T) {
 	adapter := newRenderingChatModel(t, "main")
 	adapter.inner.sending = true

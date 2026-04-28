@@ -72,4 +72,6 @@ The client connects with operator-level scopes: `ScopeOperatorRead`, `ScopeOpera
 | Path | Contents |
 |---|---|
 | `~/.lucinate/identity/<endpoint>/` | Ed25519 keypair and device token (per gateway endpoint) |
+| `~/.lucinate/secrets/secrets.json` | OpenAI-compat API keys, keyed by connection ID (mode 0600) — see [connections.md](connections.md#secrets-storage) |
+| `~/.lucinate/connections.json` | Saved connection records — see [connections.md](connections.md) |
 | `~/.lucinate/config.json` | UI preferences — not authentication-related |

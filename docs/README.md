@@ -6,9 +6,10 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 
 | Document | Covers |
 |---|---|
-| [connections.md](connections.md) | Connection types (OpenClaw, OpenAI-compat), picker, startup decision tree, capability negotiation, secrets, agent storage |
+| [connections.md](connections.md) | Connection types overview, picker, startup decision tree, capability negotiation, secrets |
+| [backend_openclaw.md](backend_openclaw.md) | OpenClaw backend: capability surface, skill catalog injection, device-token auth |
+| [backend_openai.md](backend_openai.md) | OpenAI-compat backend: SSE streaming, on-disk agent storage, IDENTITY.md/SOUL.md composition |
 | [authentication.md](authentication.md) | Device pairing, Ed25519 identity, gateway connection and token lifecycle |
-| [connections.md](connections.md) | Connections picker, persisted connection store, startup decision tree, lifecycle |
 | [agents.md](agents.md) | Agent picker, auto-selection, agent creation |
 | [sessions.md](sessions.md) | Session lifecycle, session browser, compact/reset, message queueing |
 | [commands.md](commands.md) | Slash command dispatch, all built-in commands, tab completion, confirmation pattern |

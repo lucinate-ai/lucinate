@@ -15,7 +15,7 @@ Unrecognised slash commands fall through to a skill-name lookup. If no skill mat
 | `/agents` | Return to the agent picker by emitting `goBackMsg{}` |
 | `/cancel` | Cancel the in-progress response (also triggered by Escape) — see [chat-ux.md](chat-ux.md) |
 | `/clear` | Wipe `m.messages` from the local display (does not affect gateway history) |
-| `/compact` | Compact the session context — see [sessions.md](sessions.md#compact-and-reset) |
+| `/compact` | Compact the session context — see [sessions.md](sessions.md#compact-and-reset) — **OpenClaw only** |
 | `/config` | Open the preferences view by emitting `showConfigMsg{}` |
 | `/connections` | Open the connections picker mid-session, tearing down the active backend — see [connections.md](connections.md) |
 | `/exit`, `/quit` | Exit via `tea.Quit` |
@@ -25,9 +25,12 @@ Unrecognised slash commands fall through to a skill-name lookup. If no skill mat
 | `/reset` | Delete the session and start fresh — see [sessions.md](sessions.md#compact-and-reset) |
 | `/sessions` | Open the session browser — see [sessions.md](sessions.md#session-browser) |
 | `/skills` | List discovered skills — see [skills.md](skills.md) |
-| `/stats` | Show a token usage and cost table for the current session |
-| `/think` | Show the current thinking level |
-| `/think <level>` | Set the thinking level — see [chat-ux.md](chat-ux.md#thinking-levels) |
+| `/stats` | Show a token usage and cost table for the current session — **OpenClaw only** |
+| `/status` | Show backend status — **OpenClaw only** |
+| `/think` | Show the current thinking level — **OpenClaw only** |
+| `/think <level>` | Set the thinking level — see [chat-ux.md](chat-ux.md#thinking-levels) — **OpenClaw only** |
+
+Backend-only commands render a "not available on this connection" system message on connections that don't support them — see [connections.md](connections.md#capability-negotiation).
 
 ### /model
 
