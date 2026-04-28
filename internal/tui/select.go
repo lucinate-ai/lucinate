@@ -70,13 +70,19 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // selectModel is the agent selection view.
 type selectModel struct {
-	list      list.Model
-	backend   backend.Backend
-	loading   bool
-	err       error
-	mainKey   string
-	selected  bool
-	hideHints bool
+	list             list.Model
+	backend          backend.Backend
+	loading          bool
+	err              error
+	mainKey          string
+	selected         bool
+	hideHints        bool
+	// showConnections enables the "Connections" action so the user
+	// can jump back to the connections picker from the agent list
+	// without going through chat first. Only meaningful in managed
+	// mode — legacy embedders that own the connection lifecycle
+	// themselves leave this false.
+	showConnections bool
 
 	// Create-agent form state.
 	subState       selectSubState
@@ -96,7 +102,10 @@ type agentsLoadedMsg struct {
 	err    error
 }
 
-func newSelectModel(b backend.Backend, hideHints bool) selectModel {
+// newSelectModel constructs the agent picker. showConnections=true
+// surfaces the "Connections" action so managed-mode users can return
+// to the connections picker without first entering a chat session.
+func newSelectModel(b backend.Backend, hideHints, showConnections bool) selectModel {
 	l := list.New(nil, agentDelegate{}, 0, 0)
 	l.Title = "Select an agent"
 	l.SetShowStatusBar(false)
@@ -110,10 +119,11 @@ func newSelectModel(b backend.Backend, hideHints bool) selectModel {
 	l.SetFilteringEnabled(false)
 
 	return selectModel{
-		list:      l,
-		backend:   b,
-		loading:   true,
-		hideHints: hideHints,
+		list:            l,
+		backend:         b,
+		loading:         true,
+		hideHints:       hideHints,
+		showConnections: showConnections,
 	}
 }
 
@@ -300,6 +310,9 @@ func (m selectModel) Actions() []Action {
 	if m.err != nil {
 		actions = append(actions, Action{ID: "retry", Label: "Retry", Key: "r"})
 	}
+	if m.showConnections {
+		actions = append(actions, Action{ID: "connections", Label: "Connections", Key: "c"})
+	}
 	return actions
 }
 
@@ -320,6 +333,8 @@ func (m selectModel) TriggerAction(id string) (selectModel, tea.Cmd) {
 		m.loading = true
 		m.err = nil
 		return m, m.loadAgents()
+	case "connections":
+		return m, func() tea.Msg { return showConnectionsMsg{} }
 	}
 	return m, nil
 }

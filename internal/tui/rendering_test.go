@@ -256,7 +256,7 @@ func TestRender_ChatView_RemoteExecModeHelpText(t *testing.T) {
 // newLoadedSelectAdapter returns a selectModelAdapter with agents already loaded.
 func newLoadedSelectAdapter(t *testing.T, agents ...protocol.AgentSummary) selectModelAdapter {
 	t.Helper()
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -293,7 +293,7 @@ func TestRender_SelectView_ShowsCreateHint(t *testing.T) {
 }
 
 func TestRender_SelectView_LoadingState(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	m.setSize(120, 40)
 	adapter := selectModelAdapter{inner: m}
 
@@ -317,7 +317,7 @@ func TestRender_SelectView_CreateFormLabels(t *testing.T) {
 }
 
 func TestRender_SelectView_ErrorStateShowsRetryHint(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{err: errString("gateway unreachable")})
 	adapter := selectModelAdapter{inner: m}

@@ -9,7 +9,7 @@ import (
 )
 
 func TestSelectModel_AutoSelectSingleAgent(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 
 	msg := agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -39,7 +39,7 @@ func TestSelectModel_AutoSelectSingleAgent(t *testing.T) {
 }
 
 func TestSelectModel_NoAutoSelectMultipleAgents(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 
 	msg := agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -60,7 +60,7 @@ func TestSelectModel_NoAutoSelectMultipleAgents(t *testing.T) {
 }
 
 func TestSelectModel_NoAutoSelectOnError(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 
 	msg := agentsLoadedMsg{
 		err: fmt.Errorf("connection failed"),
@@ -77,7 +77,7 @@ func TestSelectModel_NoAutoSelectOnError(t *testing.T) {
 }
 
 func TestSelectModel_CreateFormActivation(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	// Simulate agents loaded so the list is ready.
 	m.loading = false
 
@@ -89,7 +89,7 @@ func TestSelectModel_CreateFormActivation(t *testing.T) {
 }
 
 func TestSelectModel_CreateFormCancel(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	m.loading = false
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
 	if m.subState != subStateCreate {
@@ -104,7 +104,7 @@ func TestSelectModel_CreateFormCancel(t *testing.T) {
 }
 
 func TestSelectModel_CreateFormNotActivatedWhileLoading(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	// loading is true by default
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
@@ -157,7 +157,7 @@ func TestValidateName(t *testing.T) {
 }
 
 func TestSelectModel_WorkspaceAutoSuggest(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	m.loading = false
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
 
@@ -180,7 +180,7 @@ func TestSelectModel_WorkspaceAutoSuggest(t *testing.T) {
 }
 
 func TestSelectModel_WorkspaceManualEditStopsAutoSuggest(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	m.loading = false
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
 
@@ -199,7 +199,7 @@ func TestSelectModel_WorkspaceManualEditStopsAutoSuggest(t *testing.T) {
 }
 
 func TestSelectModel_AgentCreatedSuccess(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	m.subState = subStateCreate
 	m.creating = true
 
@@ -222,7 +222,7 @@ func TestSelectModel_AgentCreatedSuccess(t *testing.T) {
 }
 
 func TestSelectModel_AgentCreatedError(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	m.subState = subStateCreate
 	m.creating = true
 
@@ -242,7 +242,7 @@ func TestSelectModel_AgentCreatedError(t *testing.T) {
 }
 
 func TestSelectModel_AutoSelectNewAgent(t *testing.T) {
-	m := newSelectModel(nil, false)
+	m := newSelectModel(nil, false, false)
 	m.newAgentID = "new-agent"
 
 	m, _ = m.Update(agentsLoadedMsg{
@@ -268,5 +268,41 @@ func TestSelectModel_AutoSelectNewAgent(t *testing.T) {
 	}
 	if m.newAgentID != "" {
 		t.Error("expected newAgentID to be cleared")
+	}
+}
+
+func TestSelectModel_ConnectionsActionOnlyInManagedMode(t *testing.T) {
+	legacy := newSelectModel(nil, false, false)
+	for _, a := range legacy.Actions() {
+		if a.ID == "connections" {
+			t.Errorf("legacy mode should not expose connections action, got %+v", legacy.Actions())
+		}
+	}
+
+	managed := newSelectModel(nil, false, true)
+	// Loaded state — no error — so the new-agent action is also
+	// present. Find the connections action.
+	var found *Action
+	for i, a := range managed.Actions() {
+		if a.ID == "connections" {
+			found = &managed.Actions()[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("managed mode should expose connections action, got %+v", managed.Actions())
+	}
+	if found.Key != "c" {
+		t.Errorf("expected key 'c', got %q", found.Key)
+	}
+}
+
+func TestSelectModel_ConnectionsActionEmitsShowConnections(t *testing.T) {
+	m := newSelectModel(nil, false, true)
+	_, cmd := m.TriggerAction("connections")
+	if cmd == nil {
+		t.Fatal("expected cmd from connections action")
+	}
+	if _, ok := cmd().(showConnectionsMsg); !ok {
+		t.Errorf("expected showConnectionsMsg, got %T", cmd())
 	}
 }

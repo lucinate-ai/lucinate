@@ -133,7 +133,7 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 	case !managed:
 		// Legacy: jump straight into the agent picker.
 		m.state = viewSelect
-		m.selectModel = newSelectModel(b, opts.HideActionHints)
+		m.selectModel = newSelectModel(b, opts.HideActionHints, managed)
 	case opts.Initial != nil:
 		// Managed with an initial pick: try to connect first, surface
 		// errors / auth modals from there.
@@ -631,7 +631,7 @@ func (m AppModel) handleConnectResult(msg connectResultMsg) (AppModel, tea.Cmd) 
 			b := msg.backend
 			go cb(b) // blocking send; do off the event loop
 		}
-		m.selectModel = newSelectModel(msg.backend, m.hideActionHints)
+		m.selectModel = newSelectModel(msg.backend, m.hideActionHints, m.managed)
 		m.selectModel.setSize(m.width, m.height)
 		m.state = viewSelect
 		var cmd tea.Cmd = m.selectModel.Init()
