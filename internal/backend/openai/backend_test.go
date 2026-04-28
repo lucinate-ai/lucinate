@@ -186,7 +186,7 @@ func TestBackend_ChatSendStreamsDeltasAndFinal(t *testing.T) {
 		t.Fatalf("CreateAgent: %v", err)
 	}
 
-	if _, err := b.ChatSend(context.Background(), "a", "hi", "idem"); err != nil {
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"}); err != nil {
 		t.Fatalf("ChatSend: %v", err)
 	}
 
@@ -226,7 +226,7 @@ func TestBackend_ChatSendErrorEmitsErrorEvent(t *testing.T) {
 
 	b := newBackend(t, srv)
 	_ = b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"})
-	if _, err := b.ChatSend(context.Background(), "a", "hi", "idem"); err != nil {
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"}); err != nil {
 		t.Fatal(err)
 	}
 	ev := parseChat(t, drainEvent(t, b.events))
@@ -246,7 +246,7 @@ func TestBackend_ChatSendUnauthorisedEmitsAPIKeyMessage(t *testing.T) {
 
 	b := newBackend(t, srv)
 	_ = b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"})
-	_, _ = b.ChatSend(context.Background(), "a", "hi", "idem")
+	_, _ = b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"})
 	ev := parseChat(t, drainEvent(t, b.events))
 	if !strings.Contains(ev.ErrorMessage, "api key required") {
 		t.Errorf("expected api-key error message, got %q", ev.ErrorMessage)
@@ -259,7 +259,7 @@ func TestBackend_ChatSendRequiresModel(t *testing.T) {
 
 	b := newBackend(t, srv)
 	_ = b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a"})
-	if _, err := b.ChatSend(context.Background(), "a", "hi", "idem"); err == nil {
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"}); err == nil {
 		t.Error("expected error for missing model")
 	}
 }
@@ -356,5 +356,95 @@ func TestBackend_StoreAPIKeyUsedInSubsequentRequests(t *testing.T) {
 	}
 	if got != "Bearer secret-123" {
 		t.Errorf("Authorization = %q", got)
+	}
+}
+
+func TestSkillCatalogSystemMessage(t *testing.T) {
+	t.Run("renders entries", func(t *testing.T) {
+		got := skillCatalogSystemMessage([]backend.SkillCatalogEntry{
+			{Name: "review", Description: "Code review"},
+			{Name: "commit", Description: "Write a commit message"},
+		})
+		if got == "" {
+			t.Fatal("expected a non-empty system message")
+		}
+		if !strings.Contains(got, "Available agent skills") {
+			t.Errorf("missing header: %q", got)
+		}
+		if !strings.Contains(got, "- review: Code review") {
+			t.Errorf("missing review entry: %q", got)
+		}
+		if strings.Contains(got, "System:") {
+			// Crucial: OpenAI uses a real role:system message body,
+			// not the OpenClaw System:-prefix kludge.
+			t.Errorf("OpenAI catalog should not contain System: prefix: %q", got)
+		}
+	})
+
+	t.Run("nil and empty return empty string", func(t *testing.T) {
+		if got := skillCatalogSystemMessage(nil); got != "" {
+			t.Errorf("nil → %q", got)
+		}
+		if got := skillCatalogSystemMessage([]backend.SkillCatalogEntry{{Name: ""}}); got != "" {
+			t.Errorf("blank entry → %q", got)
+		}
+	})
+}
+
+func TestBackend_ChatSend_PassesSkillsAsRealSystemMessage(t *testing.T) {
+	type capturedRequest struct {
+		Messages []chatRequestMessage `json:"messages"`
+	}
+	var captured capturedRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_, _ = io.WriteString(w, `{"data":[]}`)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{
+		Message: "hello",
+		Skills: []backend.SkillCatalogEntry{
+			{Name: "review", Description: "Code review"},
+		},
+	}); err != nil {
+		t.Fatalf("ChatSend: %v", err)
+	}
+	// Drain the synthetic final/aborted event so the run goroutine
+	// finishes before the test ends.
+	select {
+	case <-b.events:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream completion")
+	}
+
+	var systemBodies []string
+	for _, m := range captured.Messages {
+		if m.Role == "system" {
+			systemBodies = append(systemBodies, m.Content)
+		}
+	}
+	foundCatalog := false
+	for _, body := range systemBodies {
+		if strings.Contains(body, "Available agent skills") && strings.Contains(body, "- review:") {
+			foundCatalog = true
+			break
+		}
+	}
+	if !foundCatalog {
+		t.Errorf("expected a role:system message containing the skill catalog, got system bodies: %+v", systemBodies)
 	}
 }

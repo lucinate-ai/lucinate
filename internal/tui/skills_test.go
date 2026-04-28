@@ -168,49 +168,29 @@ func TestSkillActivation(t *testing.T) {
 	}
 }
 
-func TestWithSkillCatalog(t *testing.T) {
+func TestCatalogParams_ConvertsSkills(t *testing.T) {
 	m := newSlashTestModel()
 	m.skills = []agentSkill{
 		{Name: "review", Description: "Code review"},
+		{Name: "commit", Description: "Write a commit message"},
 	}
 
-	// First call should prepend catalog.
-	result := m.withSkillCatalog("hello")
-	if !contains(result, "System:") {
-		t.Error("first message should contain skill catalog")
+	got := m.catalogParams()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 catalog entries, got %d", len(got))
 	}
-	if !contains(result, "hello") {
-		t.Error("first message should contain original text")
+	if got[0].Name != "review" || got[0].Description != "Code review" {
+		t.Errorf("first entry: %+v", got[0])
 	}
-
-	// Second call should not prepend.
-	result2 := m.withSkillCatalog("world")
-	if contains(result2, "System:") {
-		t.Error("second message should not contain skill catalog")
-	}
-	if result2 != "world" {
-		t.Errorf("second message = %q, want %q", result2, "world")
+	if got[1].Name != "commit" || got[1].Description != "Write a commit message" {
+		t.Errorf("second entry: %+v", got[1])
 	}
 }
 
-func TestWithSkillCatalog_NoSkills(t *testing.T) {
+func TestCatalogParams_NoSkillsReturnsNil(t *testing.T) {
 	m := newSlashTestModel()
-	result := m.withSkillCatalog("hello")
-	if result != "hello" {
-		t.Errorf("expected unmodified text with no skills, got %q", result)
-	}
-}
-
-func TestWithSkillCatalog_EmptyCatalog(t *testing.T) {
-	m := newSlashTestModel()
-	// Skills with empty names produce an empty catalog block.
-	m.skills = []agentSkill{{Name: "", Description: "no name"}}
-	result := m.withSkillCatalog("hello")
-	if result != "hello" {
-		t.Errorf("expected unmodified text when catalog is empty, got %q", result)
-	}
-	if m.skillCatalogSent {
-		t.Error("skillCatalogSent should not be set when catalog is empty")
+	if got := m.catalogParams(); got != nil {
+		t.Errorf("expected nil when no skills loaded, got %+v", got)
 	}
 }
 

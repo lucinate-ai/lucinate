@@ -73,7 +73,7 @@ func (f *fakeBackend) CreateSession(ctx context.Context, agentID, key string) (s
 	return key, nil
 }
 func (f *fakeBackend) SessionDelete(ctx context.Context, sessionKey string) error { return nil }
-func (f *fakeBackend) ChatSend(ctx context.Context, sessionKey, message, idemKey string) (*protocol.ChatSendResult, error) {
+func (f *fakeBackend) ChatSend(ctx context.Context, sessionKey string, params backend.ChatSendParams) (*protocol.ChatSendResult, error) {
 	return &protocol.ChatSendResult{}, nil
 }
 func (f *fakeBackend) ChatAbort(ctx context.Context, sessionKey, runID string) error { return nil }

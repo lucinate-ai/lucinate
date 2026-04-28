@@ -81,8 +81,13 @@ type Backend interface {
 	SessionDelete(ctx context.Context, sessionKey string) error
 
 	// ChatSend posts a user message and returns the run ID. Streaming
-	// deltas arrive on Events.
-	ChatSend(ctx context.Context, sessionKey, message, idemKey string) (*protocol.ChatSendResult, error)
+	// deltas arrive on Events. The Skills field of params is the
+	// catalog the model should be aware of for this session;
+	// backends present it in whatever shape their wire protocol
+	// expects (OpenClaw gets System:-prefixed lines on the first
+	// turn so the gateway can lift them into a system block; OpenAI
+	// gets a real role:system message rebuilt each turn).
+	ChatSend(ctx context.Context, sessionKey string, params ChatSendParams) (*protocol.ChatSendResult, error)
 
 	// ChatAbort cancels an in-flight run.
 	ChatAbort(ctx context.Context, sessionKey, runID string) error
@@ -102,6 +107,35 @@ type Backend interface {
 	// commands so unsupported features render a clear status message
 	// instead of a confusing error.
 	Capabilities() Capabilities
+}
+
+// ChatSendParams bundles the variable inputs to a chat turn so the
+// signature stays stable as new fields appear (skills today, tool
+// schemas tomorrow). The chat layer fills these — backends decide
+// how to render them on the wire.
+type ChatSendParams struct {
+	// Message is the user's typed prompt, exactly as it should be
+	// stored in the visible transcript. The chat layer never wraps
+	// it with System:-prefix kludges any more; that's a backend
+	// concern.
+	Message string
+
+	// IdempotencyKey is forwarded to backends that dedupe on the
+	// wire (OpenClaw). Backends that don't need it ignore the
+	// field.
+	IdempotencyKey string
+
+	// Skills is the local skill catalog the model should know
+	// about. Empty when no skills were discovered. Backends format
+	// it appropriately — see the Backend.ChatSend doc comment.
+	Skills []SkillCatalogEntry
+}
+
+// SkillCatalogEntry is one entry in the skill catalog presented to
+// the model as a list of available capabilities.
+type SkillCatalogEntry struct {
+	Name        string
+	Description string
 }
 
 // CreateAgentParams is the kitchen-sink parameter struct for

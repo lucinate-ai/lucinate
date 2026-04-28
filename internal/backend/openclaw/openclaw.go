@@ -9,6 +9,9 @@ package openclaw
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
 
 	"github.com/a3tai/openclaw-go/protocol"
 
@@ -20,6 +23,14 @@ import (
 // BackendFactory when the picked connection has type=openclaw.
 type Backend struct {
 	client *client.Client
+
+	// catalogSent tracks per-session whether the skill catalog has
+	// been delivered to the gateway already. The gateway parses
+	// System:-prefixed lines into a session-level system block and
+	// retains them across turns, so we only need to deliver the
+	// catalog with the first user message per session.
+	mu          sync.Mutex
+	catalogSent map[string]bool
 }
 
 // New wraps the given client. The caller still owns Connect / Close
@@ -27,7 +38,10 @@ type Backend struct {
 // the connection driver in app/app.go can drive the lifecycle without
 // caring about the concrete type.
 func New(c *client.Client) *Backend {
-	return &Backend{client: c}
+	return &Backend{
+		client:      c,
+		catalogSent: map[string]bool{},
+	}
 }
 
 // Client exposes the underlying gateway client for tests and for the
@@ -63,8 +77,53 @@ func (b *Backend) SessionDelete(ctx context.Context, sessionKey string) error {
 	return b.client.SessionDelete(ctx, sessionKey)
 }
 
-func (b *Backend) ChatSend(ctx context.Context, sessionKey, message, idemKey string) (*protocol.ChatSendResult, error) {
-	return b.client.ChatSend(ctx, sessionKey, message, idemKey)
+func (b *Backend) ChatSend(ctx context.Context, sessionKey string, params backend.ChatSendParams) (*protocol.ChatSendResult, error) {
+	message := params.Message
+	if catalog := b.takePendingCatalog(sessionKey, params.Skills); catalog != "" {
+		message = catalog + "\n" + message
+	}
+	return b.client.ChatSend(ctx, sessionKey, message, params.IdempotencyKey)
+}
+
+// takePendingCatalog returns the System:-prefixed catalog block to
+// prepend on the first turn of a session, or "" if the catalog has
+// already been delivered (the gateway retains it server-side after
+// parsing). The check-and-mark is atomic so concurrent ChatSend
+// calls on the same session don't both emit the catalog.
+func (b *Backend) takePendingCatalog(sessionKey string, skills []backend.SkillCatalogEntry) string {
+	if len(skills) == 0 {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.catalogSent[sessionKey] {
+		return ""
+	}
+	var entries strings.Builder
+	for _, s := range skills {
+		if s.Name == "" {
+			continue
+		}
+		entries.WriteString(fmt.Sprintf("  - %s: %s\n", s.Name, s.Description))
+	}
+	if entries.Len() == 0 {
+		return ""
+	}
+	body := "Available agent skills (activate with /skill-name):\n" + entries.String()
+	b.catalogSent[sessionKey] = true
+	return prefixAllLines(body)
+}
+
+// prefixAllLines prepends "System: " to every line of the text so
+// the gateway's prompt assembler can identify the block, and so
+// stripSystemLines on the client side hides it from the visible
+// transcript on history refresh.
+func prefixAllLines(text string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = "System: " + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (b *Backend) ChatAbort(ctx context.Context, sessionKey, runID string) error {

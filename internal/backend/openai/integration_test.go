@@ -121,7 +121,7 @@ func TestIntegration_ChatSendStreams(t *testing.T) {
 		t.Fatalf("CreateAgent: %v", err)
 	}
 
-	if _, err := b.ChatSend(context.Background(), "integration-test", "say hi", "idem-1"); err != nil {
+	if _, err := b.ChatSend(context.Background(), "integration-test", backend.ChatSendParams{Message: "say hi", IdempotencyKey: "idem-1"}); err != nil {
 		t.Fatalf("ChatSend: %v", err)
 	}
 
@@ -163,7 +163,7 @@ func TestIntegration_ChatAbort(t *testing.T) {
 
 	// Ask for something long so the abort window is wide enough that
 	// the test isn't racing the "final" event of a one-token reply.
-	res, err := b.ChatSend(context.Background(), "abort-test", "count from 1 to 50, one per line", "idem-abort")
+	res, err := b.ChatSend(context.Background(), "abort-test", backend.ChatSendParams{Message: "count from 1 to 50, one per line", IdempotencyKey: "idem-abort"})
 	if err != nil {
 		t.Fatalf("ChatSend: %v", err)
 	}

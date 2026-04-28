@@ -245,7 +245,7 @@ func (b *Backend) SessionDelete(ctx context.Context, sessionKey string) error {
 // channel as protocol.ChatEvent (state=delta), and a final event
 // closes the run. The user message is appended to history.jsonl
 // before the request goes out so a mid-stream crash doesn't lose it.
-func (b *Backend) ChatSend(ctx context.Context, sessionKey, message, idemKey string) (*protocol.ChatSendResult, error) {
+func (b *Backend) ChatSend(ctx context.Context, sessionKey string, params backend.ChatSendParams) (*protocol.ChatSendResult, error) {
 	meta, err := b.store.LoadMeta(sessionKey)
 	if err != nil {
 		return nil, fmt.Errorf("agent not found: %s", sessionKey)
@@ -258,7 +258,7 @@ func (b *Backend) ChatSend(ctx context.Context, sessionKey, message, idemKey str
 		return nil, fmt.Errorf("no model configured for agent %q (run /model to pick one)", sessionKey)
 	}
 
-	if err := b.store.AppendMessage(sessionKey, Message{Role: "user", Content: message}); err != nil {
+	if err := b.store.AppendMessage(sessionKey, Message{Role: "user", Content: params.Message}); err != nil {
 		return nil, fmt.Errorf("persist user message: %w", err)
 	}
 
@@ -268,7 +268,7 @@ func (b *Backend) ChatSend(ctx context.Context, sessionKey, message, idemKey str
 	b.runs[runID] = cancel
 	b.mu.Unlock()
 
-	go b.runStream(streamCtx, runID, sessionKey, model)
+	go b.runStream(streamCtx, runID, sessionKey, model, params.Skills)
 
 	return &protocol.ChatSendResult{RunID: runID}, nil
 }
@@ -277,17 +277,25 @@ func (b *Backend) ChatSend(ctx context.Context, sessionKey, message, idemKey str
 // emits chat-delta / chat-final events. Errors during the run are
 // surfaced as a state="error" event so the chat view's existing
 // error rendering applies.
-func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string) {
+func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string, skills []backend.SkillCatalogEntry) {
 	defer func() {
 		b.mu.Lock()
 		delete(b.runs, runID)
 		b.mu.Unlock()
 	}()
 
-	// Build the message list: system prompt (if any), then full history.
+	// Build the message list: identity/soul system prompt, then a
+	// separate system message advertising any local skills, then
+	// the full conversation history. Both system messages are
+	// reconstructed each turn so user edits to IDENTITY.md /
+	// SOUL.md and changes to the discovered skill set take effect
+	// immediately on the next request.
 	body := chatRequest{Model: model, Stream: true}
 	if sysPrompt := b.store.SystemPrompt(sessionKey); sysPrompt != "" {
 		body.Messages = append(body.Messages, chatRequestMessage{Role: "system", Content: sysPrompt})
+	}
+	if catalog := skillCatalogSystemMessage(skills); catalog != "" {
+		body.Messages = append(body.Messages, chatRequestMessage{Role: "system", Content: catalog})
 	}
 	history, _ := b.store.LoadHistory(sessionKey, 0)
 	for _, msg := range history {
@@ -548,6 +556,24 @@ func (b *Backend) send(ev protocol.Event) {
 func mustJSON(s string) string {
 	buf, _ := json.Marshal(s)
 	return string(buf)
+}
+
+// skillCatalogSystemMessage formats the local skill catalog as a
+// real role:system message body. Returns the empty string when no
+// catalog entries are present so the caller can skip emitting a
+// blank system block.
+func skillCatalogSystemMessage(skills []backend.SkillCatalogEntry) string {
+	var entries strings.Builder
+	for _, s := range skills {
+		if s.Name == "" {
+			continue
+		}
+		entries.WriteString(fmt.Sprintf("  - %s: %s\n", s.Name, s.Description))
+	}
+	if entries.Len() == 0 {
+		return ""
+	}
+	return "Available agent skills (the user activates one with /skill-name):\n" + entries.String()
 }
 
 // chatRequest mirrors the OpenAI-compatible request body (subset).

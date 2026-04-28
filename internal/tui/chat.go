@@ -107,8 +107,7 @@ type chatModel struct {
 	renderer         *glamour.TermRenderer
 	stats            *sessionStats
 	modelID          string
-	skills           []agentSkill
-	skillCatalogSent bool
+	skills []agentSkill
 	spinnerFrame     int
 	spinnerTicking   bool
 	prefs            config.Preferences
@@ -465,7 +464,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
 			m.sending = true
 			m.updateViewport()
-			cmds = append(cmds, m.sendMessage(m.withSkillCatalog(text)), m.ensureSpinnerTicking())
+			cmds = append(cmds, m.sendMessage(text), m.ensureSpinnerTicking())
 			return m, tea.Batch(cmds...)
 		}
 
@@ -576,9 +575,14 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 func (m *chatModel) sendMessage(text string) tea.Cmd {
 	sessionKey := m.sessionKey
 	b := m.backend
+	skills := m.catalogParams()
 	return func() tea.Msg {
 		idemKey := fmt.Sprintf("lucinate-%d", time.Now().UnixNano())
-		result, err := b.ChatSend(context.Background(), sessionKey, text, idemKey)
+		result, err := b.ChatSend(context.Background(), sessionKey, backend.ChatSendParams{
+			Message:        text,
+			IdempotencyKey: idemKey,
+			Skills:         skills,
+		})
 		if err != nil {
 			return chatSentMsg{err: err}
 		}
@@ -615,19 +619,19 @@ func (m *chatModel) cancelTurn() tea.Cmd {
 	}
 }
 
-// withSkillCatalog prepends the skill catalog to the message text on the first
-// send. The catalog uses "System:" prefixed lines which stripSystemLines removes
-// from display in history.
-func (m *chatModel) withSkillCatalog(text string) string {
-	if m.skillCatalogSent || len(m.skills) == 0 {
-		return text
+// catalogParams converts the chat model's discovered skills into
+// the protocol-neutral SkillCatalogEntry slice the backend expects.
+// Returns nil when no skills are loaded so backends that no-op on
+// empty input avoid an extra allocation per turn.
+func (m *chatModel) catalogParams() []backend.SkillCatalogEntry {
+	if len(m.skills) == 0 {
+		return nil
 	}
-	catalog := skillCatalogBlock(m.skills)
-	if catalog == "" {
-		return text
+	out := make([]backend.SkillCatalogEntry, 0, len(m.skills))
+	for _, s := range m.skills {
+		out = append(out, backend.SkillCatalogEntry{Name: s.Name, Description: s.Description})
 	}
-	m.skillCatalogSent = true
-	return catalog + "\n" + text
+	return out
 }
 
 // drainQueue sends the next queued message if any are pending.
