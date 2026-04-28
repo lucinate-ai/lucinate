@@ -26,22 +26,25 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 
+	"github.com/lucinate-ai/lucinate/internal/backend"
+	openclawBackend "github.com/lucinate-ai/lucinate/internal/backend/openclaw"
 	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/config"
 	"github.com/lucinate-ai/lucinate/internal/tui"
 )
 
-// ClientFactory builds an unconnected *client.Client for the given
-// connection. The TUI calls Connect on the returned client itself so it
-// can route token-mismatch / token-missing errors into modal recovery
-// flows. Embedders pass a factory whose default implementation uses the
-// per-endpoint filesystem identity store under ~/.lucinate/identity/.
-type ClientFactory = tui.ClientFactory
+// BackendFactory builds an unconnected backend.Backend for the given
+// connection. The TUI calls Connect on the returned backend itself so
+// it can route auth errors (token-mismatch, token-missing, 401) into
+// modal recovery flows. Embedders pass a factory whose implementation
+// chooses the right concrete backend (OpenClaw, OpenAI-compat, ...)
+// based on Connection.Type.
+type BackendFactory = tui.BackendFactory
 
 // RunOptions configures a Program.
 type RunOptions struct {
-	// Client is an already-connected gateway client whose events drive
-	// the UI. Setting Client puts the program in legacy
+	// Backend is an already-connected backend whose events drive
+	// the UI. Setting Backend puts the program in legacy
 	// single-connection mode: the connections picker and /connections
 	// command are unavailable, and the lifecycle is the caller's
 	// responsibility (Run does not Close it).
@@ -49,13 +52,19 @@ type RunOptions struct {
 	// Mutually exclusive with Store. Embedders driving the program
 	// from a platform-native shell that already manages connections
 	// elsewhere (native platform embedders) keep using this.
+	Backend backend.Backend
+
+	// Client is the previous name for Backend, kept as a typed
+	// alias-style field so existing native platform embedders
+	// continue to compile. New code should set Backend directly.
+	// When both are set, Backend takes precedence.
 	Client *client.Client
 
 	// Store is the connections persistence used by the TUI when it
 	// owns the connection lifecycle. Setting Store enables the
 	// connections picker (entry view + /connections command) and the
-	// auth-recovery modals; the program closes the active client when
-	// it exits. Mutually exclusive with Client.
+	// auth-recovery modals; the program closes the active backend
+	// when it exits. Mutually exclusive with Backend / Client.
 	Store *config.Connections
 
 	// Initial, when set alongside Store, is the connection the TUI
@@ -63,9 +72,9 @@ type RunOptions struct {
 	// connections picker as the entry view.
 	Initial *config.Connection
 
-	// ClientFactory builds a fresh, unconnected *client.Client for a
-	// connection. Required when Store is set.
-	ClientFactory ClientFactory
+	// BackendFactory builds a fresh, unconnected backend.Backend for
+	// a connection. Required when Store is set.
+	BackendFactory BackendFactory
 
 	// OnConnectionsChanged, when set, is invoked whenever the TUI
 	// adds, edits, deletes, or marks a connection as used. The CLI
@@ -170,31 +179,46 @@ type RunOptions struct {
 // connection driver controls. It is safe to call Resize, Quit, and
 // TriggerAction from goroutines other than the one running Run.
 type Program struct {
-	tp     *tea.Program
-	mode   programMode
-	client *client.Client    // legacy mode only
-	clientCh chan *client.Client // new mode: TUI publishes the active client here
-	store  *config.Connections
+	tp        *tea.Program
+	mode      programMode
+	backend   backend.Backend      // legacy mode only
+	backendCh chan backend.Backend // managed mode: TUI publishes the active backend here
+	store     *config.Connections
 }
 
 type programMode int
 
 const (
-	modeLegacy programMode = iota // pre-connected Client; lifecycle owned by caller
+	modeLegacy programMode = iota // pre-connected Backend; lifecycle owned by caller
 	modeManaged                   // Store + factory; lifecycle owned by the program
 )
+
+// resolveLegacyBackend reconciles the deprecated Client field with the
+// new Backend field. New code sets Backend; existing native platform
+// embedders pass *client.Client and we wrap it transparently. Both
+// fields nil → legacy mode is unset (caller must use Store).
+func resolveLegacyBackend(opts RunOptions) backend.Backend {
+	if opts.Backend != nil {
+		return opts.Backend
+	}
+	if opts.Client != nil {
+		return openclawBackend.New(opts.Client)
+	}
+	return nil
+}
 
 // New constructs a Program with the given options. It does not start the
 // underlying Bubble Tea loop; call Run to block on it.
 func New(opts RunOptions) (*Program, error) {
-	if opts.Client == nil && opts.Store == nil {
-		return nil, errors.New("app: either Client or Store is required")
+	legacyBackend := resolveLegacyBackend(opts)
+	if legacyBackend == nil && opts.Store == nil {
+		return nil, errors.New("app: either Client/Backend or Store is required")
 	}
-	if opts.Client != nil && opts.Store != nil {
-		return nil, errors.New("app: Client and Store are mutually exclusive")
+	if legacyBackend != nil && opts.Store != nil {
+		return nil, errors.New("app: Client/Backend and Store are mutually exclusive")
 	}
-	if opts.Store != nil && opts.ClientFactory == nil {
-		return nil, errors.New("app: ClientFactory is required when Store is set")
+	if opts.Store != nil && opts.BackendFactory == nil {
+		return nil, errors.New("app: BackendFactory is required when Store is set")
 	}
 
 	in := opts.Input
@@ -207,13 +231,13 @@ func New(opts RunOptions) (*Program, error) {
 	}
 
 	mode := modeLegacy
-	var clientCh chan *client.Client
+	var backendCh chan backend.Backend
 	if opts.Store != nil {
 		mode = modeManaged
 		// Buffered size 1 with drain-and-replace semantics in the
-		// driver so a rapid sequence of client switches collapses to
-		// the most recent one rather than queueing.
-		clientCh = make(chan *client.Client, 1)
+		// driver so a rapid sequence of backend switches collapses
+		// to the most recent one rather than queueing.
+		backendCh = make(chan backend.Backend, 1)
 	}
 
 	teaOpts := []tea.ProgramOption{
@@ -235,27 +259,27 @@ func New(opts RunOptions) (*Program, error) {
 		OnActionsChanged:     opts.OnActionsChanged,
 		Store:                opts.Store,
 		Initial:              opts.Initial,
-		ClientFactory:        opts.ClientFactory,
+		BackendFactory:       opts.BackendFactory,
 		OnConnectionsChanged: opts.OnConnectionsChanged,
 	}
 	if mode == modeManaged {
-		// Blocking send is fine: OnClientChanged is invoked from a
+		// Blocking send is fine: OnBackendChanged is invoked from a
 		// tea.Cmd goroutine, and the driver drains promptly except
-		// during tear-down of the previous client (a brief wait).
-		ch := clientCh
-		tuiOpts.OnClientChanged = func(c *client.Client) {
-			ch <- c
+		// during tear-down of the previous backend (a brief wait).
+		ch := backendCh
+		tuiOpts.OnBackendChanged = func(b backend.Backend) {
+			ch <- b
 		}
 	}
 
-	model := tui.NewApp(opts.Client, tuiOpts)
+	model := tui.NewApp(legacyBackend, tuiOpts)
 	tp := tea.NewProgram(model, teaOpts...)
 	return &Program{
-		tp:       tp,
-		mode:     mode,
-		client:   opts.Client,
-		clientCh: clientCh,
-		store:    opts.Store,
+		tp:        tp,
+		mode:      mode,
+		backend:   legacyBackend,
+		backendCh: backendCh,
+		store:     opts.Store,
 	}, nil
 }
 
@@ -300,35 +324,35 @@ func (p *Program) Run(ctx context.Context) error {
 	return nil
 }
 
-// runDriver owns the per-client pump+supervisor goroutines. In legacy
-// mode it binds once to p.client. In managed mode it watches clientCh
-// and rebinds on every successful client switch, closing the previous
-// client after its goroutines have drained.
+// runDriver owns the per-backend pump+supervisor goroutines. In
+// legacy mode it binds once to p.backend. In managed mode it watches
+// backendCh and rebinds on every successful backend switch, closing
+// the previous backend after its goroutines have drained.
 func (p *Program) runDriver(runCtx context.Context, done chan<- struct{}) {
 	defer close(done)
 
 	type bound struct {
-		c      *client.Client
-		stop   context.CancelFunc
-		wg     *sync.WaitGroup
-		owned  bool // close on teardown (true in managed mode, false in legacy)
+		b     backend.Backend
+		stop  context.CancelFunc
+		wg    *sync.WaitGroup
+		owned bool // close on teardown (true in managed mode, false in legacy)
 	}
 
 	var current *bound
 
-	tearDown := func(b *bound) {
-		if b == nil {
+	tearDown := func(bnd *bound) {
+		if bnd == nil {
 			return
 		}
-		b.stop()
-		b.wg.Wait()
-		if b.owned && b.c != nil {
-			_ = b.c.Close()
+		bnd.stop()
+		bnd.wg.Wait()
+		if bnd.owned && bnd.b != nil {
+			_ = bnd.b.Close()
 		}
 	}
 
-	bindClient := func(c *client.Client, owned bool) *bound {
-		if c == nil {
+	bindBackend := func(b backend.Backend, owned bool) *bound {
+		if b == nil {
 			return nil
 		}
 		bctx, bcancel := context.WithCancel(runCtx)
@@ -336,7 +360,7 @@ func (p *Program) runDriver(runCtx context.Context, done chan<- struct{}) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			events := c.Events()
+			events := b.Events()
 			for {
 				select {
 				case ev, ok := <-events:
@@ -351,15 +375,15 @@ func (p *Program) runDriver(runCtx context.Context, done chan<- struct{}) {
 		}()
 		go func() {
 			defer wg.Done()
-			c.Supervise(bctx, func(s client.ConnState) {
+			b.Supervise(bctx, func(s client.ConnState) {
 				p.tp.Send(tui.ConnStateMsg{Status: s.Status, Attempt: s.Attempt, Err: s.Err})
 			})
 		}()
-		return &bound{c: c, stop: bcancel, wg: &wg, owned: owned}
+		return &bound{b: b, stop: bcancel, wg: &wg, owned: owned}
 	}
 
 	if p.mode == modeLegacy {
-		current = bindClient(p.client, false)
+		current = bindBackend(p.backend, false)
 		<-runCtx.Done()
 		tearDown(current)
 		return
@@ -370,9 +394,9 @@ func (p *Program) runDriver(runCtx context.Context, done chan<- struct{}) {
 		case <-runCtx.Done():
 			tearDown(current)
 			return
-		case c := <-p.clientCh:
+		case b := <-p.backendCh:
 			tearDown(current)
-			current = bindClient(c, true)
+			current = bindBackend(b, true)
 		}
 	}
 }

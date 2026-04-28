@@ -12,10 +12,10 @@ import (
 func newSeededStore(t *testing.T) *config.Connections {
 	t.Helper()
 	store := &config.Connections{}
-	if _, err := store.Add("home", config.ConnTypeOpenClaw, "https://home.example.com"); err != nil {
+	if _, err := store.Add(config.ConnectionFields{Name: "home", Type: config.ConnTypeOpenClaw, URL: "https://home.example.com"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if _, err := store.Add("work", config.ConnTypeOpenClaw, "https://work.example.com"); err != nil {
+	if _, err := store.Add(config.ConnectionFields{Name: "work", Type: config.ConnTypeOpenClaw, URL: "https://work.example.com"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	return store

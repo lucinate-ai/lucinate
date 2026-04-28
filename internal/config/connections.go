@@ -13,14 +13,29 @@ import (
 )
 
 // ConnectionType identifies the protocol/backend a Connection points at.
-// Today only OpenClaw is supported; the enum exists so the persisted
-// shape and the picker UI don't need a new round of changes when the
-// OpenAI-compat and Hermes backends land.
+// New backend types extend this enum and are surfaced as choices on
+// the connections form.
 type ConnectionType string
 
 const (
 	ConnTypeOpenClaw ConnectionType = "openclaw"
+	ConnTypeOpenAI   ConnectionType = "openai"
 )
+
+// AllConnectionTypes lists every type the picker UI knows about, in
+// the order it should render them.
+var AllConnectionTypes = []ConnectionType{ConnTypeOpenClaw, ConnTypeOpenAI}
+
+// Label returns the user-facing label for the connection type.
+func (t ConnectionType) Label() string {
+	switch t {
+	case ConnTypeOpenClaw:
+		return "OpenClaw"
+	case ConnTypeOpenAI:
+		return "OpenAI-compatible"
+	}
+	return string(t)
+}
 
 // Connection is a saved target the user can connect to. The triple
 // (Type, URL) is treated as the natural key when matching against the
@@ -32,6 +47,11 @@ type Connection struct {
 	URL       string         `json:"url"`
 	CreatedAt time.Time      `json:"createdAt"`
 	LastUsed  time.Time      `json:"lastUsed,omitempty"`
+
+	// DefaultModel is the model new agents on this connection use
+	// when the create-agent form does not specify one. OpenAI-compat
+	// only.
+	DefaultModel string `json:"defaultModel,omitempty"`
 }
 
 // Connections is the on-disk persistence shape for the connections
@@ -137,17 +157,27 @@ func (c *Connections) FindByURL(t ConnectionType, rawURL string) *Connection {
 	return nil
 }
 
+// ConnectionFields holds the user-supplied fields of a connection at
+// add or edit time. The form populates the subset relevant to the
+// chosen Type.
+type ConnectionFields struct {
+	Name         string
+	Type         ConnectionType
+	URL          string
+	DefaultModel string // OpenAI-compat only
+}
+
 // Add appends a new connection, generating an ID and CreatedAt
-// timestamp. The caller is expected to have validated Name/Type/URL
-// already (the picker UI does this).
-func (c *Connections) Add(name string, t ConnectionType, rawURL string) (*Connection, error) {
-	if name == "" {
+// timestamp. URL validation works for any HTTP(S)/WS(S) URL — the
+// picker UI is the source of type-specific validation rules.
+func (c *Connections) Add(fields ConnectionFields) (*Connection, error) {
+	if fields.Name == "" {
 		return nil, fmt.Errorf("connection name is required")
 	}
-	if rawURL == "" {
+	if fields.URL == "" {
 		return nil, fmt.Errorf("connection URL is required")
 	}
-	if _, err := deriveWSURL(rawURL); err != nil {
+	if _, err := deriveWSURL(fields.URL); err != nil {
 		return nil, fmt.Errorf("invalid URL: %w", err)
 	}
 	id, err := newConnectionID()
@@ -155,36 +185,38 @@ func (c *Connections) Add(name string, t ConnectionType, rawURL string) (*Connec
 		return nil, err
 	}
 	conn := Connection{
-		ID:        id,
-		Name:      name,
-		Type:      t,
-		URL:       rawURL,
-		CreatedAt: time.Now().UTC(),
+		ID:           id,
+		Name:         fields.Name,
+		Type:         fields.Type,
+		URL:          fields.URL,
+		DefaultModel: fields.DefaultModel,
+		CreatedAt:    time.Now().UTC(),
 	}
 	c.Connections = append(c.Connections, conn)
 	return &c.Connections[len(c.Connections)-1], nil
 }
 
-// Update replaces the name/url of an existing connection. Type is
-// intentionally immutable — switching backend types changes the auth
-// shape and identity directory, which is closer to deleting and
-// re-adding than to an edit.
-func (c *Connections) Update(id, name, rawURL string) error {
+// Update replaces the editable fields of an existing connection.
+// Type is intentionally immutable — switching backend types changes
+// the auth shape and identity directory, which is closer to deleting
+// and re-adding than to an edit.
+func (c *Connections) Update(id string, fields ConnectionFields) error {
 	conn := c.Find(id)
 	if conn == nil {
 		return fmt.Errorf("connection not found: %s", id)
 	}
-	if name == "" {
+	if fields.Name == "" {
 		return fmt.Errorf("connection name is required")
 	}
-	if rawURL == "" {
+	if fields.URL == "" {
 		return fmt.Errorf("connection URL is required")
 	}
-	if _, err := deriveWSURL(rawURL); err != nil {
+	if _, err := deriveWSURL(fields.URL); err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
-	conn.Name = name
-	conn.URL = rawURL
+	conn.Name = fields.Name
+	conn.URL = fields.URL
+	conn.DefaultModel = fields.DefaultModel
 	return nil
 }
 

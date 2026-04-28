@@ -14,7 +14,7 @@ func TestNew_RequiresClient(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when Client is nil")
 	}
-	if !strings.Contains(err.Error(), "either Client or Store is required") {
+	if !strings.Contains(err.Error(), "either Client/Backend or Store is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -24,7 +24,7 @@ func TestRun_RequiresClient(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when Client is nil")
 	}
-	if !strings.Contains(err.Error(), "either Client or Store is required") {
+	if !strings.Contains(err.Error(), "either Client/Backend or Store is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -46,7 +46,7 @@ func TestNew_StoreRequiresClientFactory(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when Store is set without ClientFactory")
 	}
-	if !strings.Contains(err.Error(), "ClientFactory is required") {
+	if !strings.Contains(err.Error(), "BackendFactory is required") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

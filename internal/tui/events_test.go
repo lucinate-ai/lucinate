@@ -48,6 +48,7 @@ func newTestChatModel() *chatModel {
 	vp := viewport.New()
 	return &chatModel{
 		viewport:  vp,
+		backend:   newFakeBackend(),
 		agentName: "test",
 		width:     80,
 		height:    30,

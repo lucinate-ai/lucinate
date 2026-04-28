@@ -21,7 +21,7 @@ func TestConnections_AddFindUpdateDelete(t *testing.T) {
 	withHomeDir(t)
 
 	var c Connections
-	conn, err := c.Add("home", ConnTypeOpenClaw, "https://gw.example.com")
+	conn, err := c.Add(ConnectionFields{Name: "home", Type: ConnTypeOpenClaw, URL: "https://gw.example.com"})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestConnections_AddFindUpdateDelete(t *testing.T) {
 		t.Error("FindByURL did not match case-insensitive host")
 	}
 
-	if err := c.Update(conn.ID, "renamed", "https://other.example.com"); err != nil {
+	if err := c.Update(conn.ID, ConnectionFields{Name: "renamed", Type: ConnTypeOpenClaw, URL: "https://other.example.com"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	if got := c.Find(conn.ID); got.Name != "renamed" || got.URL != "https://other.example.com" {
@@ -63,20 +63,20 @@ func TestConnections_AddFindUpdateDelete(t *testing.T) {
 
 func TestConnections_AddRejectsInvalidURL(t *testing.T) {
 	var c Connections
-	if _, err := c.Add("bad", ConnTypeOpenClaw, "ftp://nope"); err == nil {
+	if _, err := c.Add(ConnectionFields{Name: "bad", Type: ConnTypeOpenClaw, URL: "ftp://nope"}); err == nil {
 		t.Fatal("expected error for unsupported scheme")
 	}
-	if _, err := c.Add("blank", ConnTypeOpenClaw, ""); err == nil {
+	if _, err := c.Add(ConnectionFields{Name: "blank", Type: ConnTypeOpenClaw, URL: ""}); err == nil {
 		t.Fatal("expected error for empty URL")
 	}
-	if _, err := c.Add("", ConnTypeOpenClaw, "https://ok.example.com"); err == nil {
+	if _, err := c.Add(ConnectionFields{Name: "", Type: ConnTypeOpenClaw, URL: "https://ok.example.com"}); err == nil {
 		t.Fatal("expected error for empty name")
 	}
 }
 
 func TestConnections_DeleteClearsDefault(t *testing.T) {
 	var c Connections
-	conn, _ := c.Add("a", ConnTypeOpenClaw, "https://a.example.com")
+	conn, _ := c.Add(ConnectionFields{Name: "a", Type: ConnTypeOpenClaw, URL: "https://a.example.com"})
 	c.MarkUsed(conn.ID)
 	if c.DefaultID != conn.ID {
 		t.Fatalf("MarkUsed did not set default: %q", c.DefaultID)
@@ -89,8 +89,8 @@ func TestConnections_DeleteClearsDefault(t *testing.T) {
 
 func TestConnections_MarkUsedSetsTimestampAndDefault(t *testing.T) {
 	var c Connections
-	a, _ := c.Add("a", ConnTypeOpenClaw, "https://a.example.com")
-	b, _ := c.Add("b", ConnTypeOpenClaw, "https://b.example.com")
+	a, _ := c.Add(ConnectionFields{Name: "a", Type: ConnTypeOpenClaw, URL: "https://a.example.com"})
+	b, _ := c.Add(ConnectionFields{Name: "b", Type: ConnTypeOpenClaw, URL: "https://b.example.com"})
 
 	c.MarkUsed(a.ID)
 	if c.DefaultID != a.ID {
@@ -110,7 +110,7 @@ func TestSaveAndLoadConnections_RoundTrip(t *testing.T) {
 	withHomeDir(t)
 
 	var saved Connections
-	conn, _ := saved.Add("home", ConnTypeOpenClaw, "https://home.example.com")
+	conn, _ := saved.Add(ConnectionFields{Name: "home", Type: ConnTypeOpenClaw, URL: "https://home.example.com"})
 	saved.MarkUsed(conn.ID)
 
 	if err := SaveConnections(saved); err != nil {
@@ -170,7 +170,7 @@ func TestSaveConnections_FileMode(t *testing.T) {
 func TestSaveConnections_WritesValidJSON(t *testing.T) {
 	home := withHomeDir(t)
 	var c Connections
-	_, _ = c.Add("a", ConnTypeOpenClaw, "https://a.example.com")
+	_, _ = c.Add(ConnectionFields{Name: "a", Type: ConnTypeOpenClaw, URL: "https://a.example.com"})
 	if err := SaveConnections(c); err != nil {
 		t.Fatal(err)
 	}

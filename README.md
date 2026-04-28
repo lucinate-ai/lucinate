@@ -53,15 +53,23 @@ go build -o lucinate .
 
 ### 1. Configure lucinate
 
-On first launch lucinate opens a **Connections** picker so you can add a gateway without setting any env vars. Saved connections live in `~/.lucinate/connections.json`; the most recently used is selected automatically next time.
+On first launch lucinate opens a **Connections** picker so you can add a backend without setting any env vars. Saved connections live in `~/.lucinate/connections.json`; the most recently used is selected automatically next time.
 
-Prefer env vars? Set `OPENCLAW_GATEWAY_URL` and lucinate will auto-add a connection for it on first run:
+Two connection types are supported:
+
+- **OpenClaw** — connect to an OpenClaw gateway over WebSocket. Auth uses Ed25519 device pairing.
+- **OpenAI-compatible** — connect to any `/v1/chat/completions` endpoint (Ollama, vLLM, LM Studio, llamafile, OpenAI proper). Agents are stored locally as IDENTITY.md + SOUL.md markdown under `~/.lucinate/agents/<connection-id>/<agent-id>/`, composed into the system prompt at runtime.
+
+Prefer env vars? Either is recognised on first run and auto-added as a connection:
 
 ```sh
 OPENCLAW_GATEWAY_URL=https://your-gateway-host
+LUCINATE_OPENAI_BASE_URL=http://localhost:11434/v1
+LUCINATE_OPENAI_API_KEY=sk-...           # optional
+LUCINATE_OPENAI_DEFAULT_MODEL=llama3.2   # optional
 ```
 
-The gateway URL can use `https`, `http`, `wss`, or `ws` schemes. lucinate derives the WebSocket endpoint automatically.
+OpenClaw URLs can use `https`, `http`, `wss`, or `ws` — lucinate derives the WebSocket endpoint automatically. OpenAI-compatible URLs are HTTP(S) base URLs ending in `/v1`.
 
 Switch between saved connections at any time with `/connections` from the chat view. Use `n` to add a new one, `e` to edit, `d` to delete (with confirmation).
 

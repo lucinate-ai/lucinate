@@ -13,7 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/backend"
 )
 
 // sessionItem is a list item for the session browser.
@@ -92,7 +92,7 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 // sessionsModel is the session browser view.
 type sessionsModel struct {
 	list      list.Model
-	client    *client.Client
+	backend   backend.Backend
 	agentID   string
 	agentName string
 	modelID   string
@@ -102,7 +102,7 @@ type sessionsModel struct {
 	hideHints bool
 }
 
-func newSessionsModel(c *client.Client, agentID, agentName, modelID, mainKey string, hideHints bool) sessionsModel {
+func newSessionsModel(b backend.Backend, agentID, agentName, modelID, mainKey string, hideHints bool) sessionsModel {
 	l := list.New(nil, sessionDelegate{}, 0, 0)
 	l.Title = "Sessions"
 	l.SetShowStatusBar(false)
@@ -114,7 +114,7 @@ func newSessionsModel(c *client.Client, agentID, agentName, modelID, mainKey str
 
 	return sessionsModel{
 		list:      l,
-		client:    c,
+		backend:   b,
 		agentID:   agentID,
 		agentName: agentName,
 		modelID:   modelID,
@@ -165,10 +165,10 @@ func sessionGroup(key string) string {
 }
 
 func (m sessionsModel) loadSessions() tea.Cmd {
-	cl := m.client
+	b := m.backend
 	agentID := m.agentID
 	return func() tea.Msg {
-		raw, err := cl.SessionsList(context.Background(), agentID)
+		raw, err := b.SessionsList(context.Background(), agentID)
 		if err != nil {
 			return sessionsLoadedMsg{err: err}
 		}
@@ -332,13 +332,13 @@ func (m sessionsModel) TriggerAction(id string) (sessionsModel, tea.Cmd) {
 		if m.loading || m.err != nil {
 			return m, nil
 		}
-		cl := m.client
+		b := m.backend
 		agentID := m.agentID
 		agentName := m.agentName
 		modelID := m.modelID
 		return m, func() tea.Msg {
 			key := time.Now().Format("2006-01-02T15:04:05")
-			sessionKey, err := cl.CreateSession(context.Background(), agentID, key)
+			sessionKey, err := b.CreateSession(context.Background(), agentID, key)
 			return newSessionCreatedMsg{
 				sessionKey: sessionKey,
 				agentName:  agentName,

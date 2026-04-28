@@ -14,6 +14,7 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
@@ -93,7 +94,7 @@ type chatModel struct {
 	viewport         viewport.Model
 	textarea         textarea.Model
 	messages         []chatMessage
-	client           *client.Client
+	backend          backend.Backend
 	sessionKey       string
 	agentID          string
 	agentName        string
@@ -153,7 +154,7 @@ func (m *chatModel) ensureSpinnerTicking() tea.Cmd {
 	return spinnerTickCmd()
 }
 
-func newChatModel(c *client.Client, sessionKey, agentID, agentName, modelID string, prefs config.Preferences, hideInput bool) chatModel {
+func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID string, prefs config.Preferences, hideInput bool) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Focus()
@@ -175,7 +176,7 @@ func newChatModel(c *client.Client, sessionKey, agentID, agentName, modelID stri
 	return chatModel{
 		viewport:     vp,
 		textarea:     ta,
-		client:       c,
+		backend:      b,
 		sessionKey:   sessionKey,
 		agentID:      agentID,
 		agentName:    agentName,
@@ -197,9 +198,14 @@ func (m chatModel) Init() tea.Cmd {
 }
 
 func (m chatModel) loadStats() tea.Cmd {
-	cl := m.client
+	usage, ok := m.backend.(backend.UsageBackend)
+	if !ok {
+		// Backends without server-side usage stats simply skip the
+		// load; the chat view falls back to the placeholder.
+		return func() tea.Msg { return statsLoadedMsg{} }
+	}
 	return func() tea.Msg {
-		raw, err := cl.SessionUsage(context.Background(), "")
+		raw, err := usage.SessionUsage(context.Background(), "")
 		if err != nil {
 			return statsLoadedMsg{err: err}
 		}
@@ -567,9 +573,10 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 
 func (m *chatModel) sendMessage(text string) tea.Cmd {
 	sessionKey := m.sessionKey
+	b := m.backend
 	return func() tea.Msg {
 		idemKey := fmt.Sprintf("lucinate-%d", time.Now().UnixNano())
-		result, err := m.client.ChatSend(context.Background(), sessionKey, text, idemKey)
+		result, err := b.ChatSend(context.Background(), sessionKey, text, idemKey)
 		if err != nil {
 			return chatSentMsg{err: err}
 		}
@@ -584,7 +591,7 @@ func (m *chatModel) cancelTurn() tea.Cmd {
 		m.updateViewport()
 		return nil
 	}
-	cl := m.client
+	b := m.backend
 	sessionKey := m.sessionKey
 	runID := m.runID
 	m.pendingMessages = nil
@@ -601,7 +608,7 @@ func (m *chatModel) cancelTurn() tea.Cmd {
 	m.messages = append(m.messages, chatMessage{role: "system", content: "Cancelled."})
 	m.updateViewport()
 	return func() tea.Msg {
-		err := cl.ChatAbort(context.Background(), sessionKey, runID)
+		err := b.ChatAbort(context.Background(), sessionKey, runID)
 		return chatAbortMsg{err: err}
 	}
 }

@@ -10,6 +10,8 @@ import (
 
 	"github.com/a3tai/openclaw-go/protocol"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/lucinate-ai/lucinate/internal/backend"
 )
 
 // pendingConfirmation holds a deferred action awaiting user confirmation.
@@ -75,13 +77,21 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		m.updateViewport()
 		return true, nil
 	case "/compact":
-		cl := m.client
+		compact, ok := m.backend.(backend.CompactBackend)
+		if !ok {
+			m.messages = append(m.messages, chatMessage{
+				role:   "system",
+				errMsg: "/compact is not available on this connection",
+			})
+			m.updateViewport()
+			return true, nil
+		}
 		sessionKey := m.sessionKey
 		m.pendingConfirm = &pendingConfirmation{
 			prompt: "Compact session context? This summarises older messages to reduce token usage. (y/n)",
 			action: func() tea.Cmd {
 				return func() tea.Msg {
-					err := cl.SessionCompact(context.Background(), sessionKey)
+					err := compact.SessionCompact(context.Background(), sessionKey)
 					return sessionCompactedMsg{err: err}
 				}
 			},
@@ -93,18 +103,18 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		m.updateViewport()
 		return true, nil
 	case "/reset":
-		cl := m.client
+		b := m.backend
 		sessionKey := m.sessionKey
 		agentID := m.agentID
 		m.pendingConfirm = &pendingConfirmation{
 			prompt: "Clear this session? This permanently deletes all messages and starts fresh. (y/n)",
 			action: func() tea.Cmd {
 				return func() tea.Msg {
-					if err := cl.SessionDelete(context.Background(), sessionKey); err != nil {
+					if err := b.SessionDelete(context.Background(), sessionKey); err != nil {
 						return sessionClearedMsg{err: err}
 					}
 					// Create a new session to replace the deleted one.
-					newKey, err := cl.CreateSession(context.Background(), agentID, "")
+					newKey, err := b.CreateSession(context.Background(), agentID, "")
 					if err != nil {
 						return sessionClearedMsg{err: err}
 					}
@@ -156,10 +166,18 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		m.updateViewport()
 		return true, nil
 	case "/status":
-		cl := m.client
+		status, ok := m.backend.(backend.StatusBackend)
+		if !ok {
+			m.messages = append(m.messages, chatMessage{
+				role:   "system",
+				errMsg: "/status is not available on this connection",
+			})
+			m.updateViewport()
+			return true, nil
+		}
 		return true, func() tea.Msg {
-			health, err := cl.GatewayHealth(context.Background())
-			uptimeMs := cl.HelloUptimeMs()
+			health, err := status.GatewayHealth(context.Background())
+			uptimeMs := status.HelloUptimeMs()
 			return gatewayStatusMsg{health: health, uptimeMs: uptimeMs, err: err}
 		}
 
@@ -219,9 +237,9 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 func (m *chatModel) handleModelCommand(text string) (bool, tea.Cmd) {
 	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
 	if len(parts) == 1 {
-		cl := m.client
+		b := m.backend
 		return true, func() tea.Msg {
-			result, err := cl.ModelsList(context.Background())
+			result, err := b.ModelsList(context.Background())
 			if err != nil {
 				return modelListMsg{err: err}
 			}
@@ -230,10 +248,10 @@ func (m *chatModel) handleModelCommand(text string) (bool, tea.Cmd) {
 	}
 
 	query := strings.ToLower(strings.TrimSpace(parts[1]))
-	cl := m.client
+	b := m.backend
 	sessionKey := m.sessionKey
 	return true, func() tea.Msg {
-		result, err := cl.ModelsList(context.Background())
+		result, err := b.ModelsList(context.Background())
 		if err != nil {
 			return modelSwitchedMsg{err: err}
 		}
@@ -251,7 +269,7 @@ func (m *chatModel) handleModelCommand(text string) (bool, tea.Cmd) {
 		if match == nil {
 			return modelSwitchedMsg{err: fmt.Errorf("no model matching %q", query)}
 		}
-		if err := cl.SessionPatchModel(context.Background(), sessionKey, match.ID); err != nil {
+		if err := b.SessionPatchModel(context.Background(), sessionKey, match.ID); err != nil {
 			return modelSwitchedMsg{err: err}
 		}
 		return modelSwitchedMsg{modelID: match.ID}
@@ -260,13 +278,18 @@ func (m *chatModel) handleModelCommand(text string) (bool, tea.Cmd) {
 
 // execCommand submits a command for remote execution on the gateway host.
 func (m *chatModel) execCommand(command string) tea.Cmd {
-	cl := m.client
+	execB, ok := m.backend.(backend.ExecBackend)
+	if !ok {
+		return func() tea.Msg {
+			return execSubmittedMsg{err: fmt.Errorf("remote command execution is not available on this connection")}
+		}
+	}
 	sessionKey := m.sessionKey
 	return func() tea.Msg {
 		ctx := context.Background()
 
 		// Two-phase request: gateway returns immediately with status "accepted".
-		result, err := cl.ExecRequest(ctx, command, sessionKey)
+		result, err := execB.ExecRequest(ctx, command, sessionKey)
 		if err != nil {
 			return execSubmittedMsg{err: err}
 		}
@@ -285,7 +308,7 @@ func (m *chatModel) execCommand(command string) tea.Cmd {
 		// The gateway may have already resolved the approval via its own exec policy,
 		// so ignore "unknown or expired" errors.
 		if decision == "" {
-			_, err = cl.ExecResolve(ctx, result.ID, "allow-once")
+			_, err = execB.ExecResolve(ctx, result.ID, "allow-once")
 			if err != nil {
 				// If the approval was already resolved, that's fine — just wait for exec.finished.
 				if !strings.Contains(err.Error(), "unknown or expired") {
@@ -439,10 +462,18 @@ func (m *chatModel) handleThinkCommand(text string) (bool, tea.Cmd) {
 		return true, nil
 	}
 
-	cl := m.client
+	thinking, ok := m.backend.(backend.ThinkingBackend)
+	if !ok {
+		m.messages = append(m.messages, chatMessage{
+			role:   "system",
+			errMsg: "/think is not available on this connection",
+		})
+		m.updateViewport()
+		return true, nil
+	}
 	sessionKey := m.sessionKey
 	return true, func() tea.Msg {
-		err := cl.SessionPatchThinking(context.Background(), sessionKey, level)
+		err := thinking.SessionPatchThinking(context.Background(), sessionKey, level)
 		return thinkingChangedMsg{level: level, err: err}
 	}
 }

@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
@@ -128,7 +128,7 @@ func TestNewApp_ManagedNoInitialStartsAtConnections(t *testing.T) {
 	store := &config.Connections{}
 	m := NewApp(nil, AppOptions{
 		Store:         store,
-		ClientFactory: func(*config.Connection) (*client.Client, error) { return nil, nil },
+		BackendFactory: func(*config.Connection) (backend.Backend, error) { return nil, nil },
 	})
 	if m.state != viewConnections {
 		t.Errorf("managed-no-initial should start at viewConnections, got %v", m.state)
@@ -139,11 +139,11 @@ func TestNewApp_ManagedNoInitialStartsAtConnections(t *testing.T) {
 // Initial connection jumps straight into the connecting state.
 func TestNewApp_ManagedWithInitialStartsAtConnecting(t *testing.T) {
 	store := &config.Connections{}
-	conn, _ := store.Add("home", config.ConnTypeOpenClaw, "https://home.example.com")
+	conn, _ := store.Add(config.ConnectionFields{Name: "home", Type: config.ConnTypeOpenClaw, URL: "https://home.example.com"})
 	m := NewApp(nil, AppOptions{
 		Store:         store,
 		Initial:       conn,
-		ClientFactory: func(*config.Connection) (*client.Client, error) { return nil, nil },
+		BackendFactory: func(*config.Connection) (backend.Backend, error) { return nil, nil },
 	})
 	if m.state != viewConnecting {
 		t.Errorf("managed-with-initial should start at viewConnecting, got %v", m.state)

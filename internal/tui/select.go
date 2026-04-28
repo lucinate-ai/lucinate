@@ -13,7 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/backend"
 )
 
 // agentItem is a list item for the agent picker.
@@ -71,7 +71,7 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 // selectModel is the agent selection view.
 type selectModel struct {
 	list      list.Model
-	client    *client.Client
+	backend   backend.Backend
 	loading   bool
 	err       error
 	mainKey   string
@@ -96,7 +96,7 @@ type agentsLoadedMsg struct {
 	err    error
 }
 
-func newSelectModel(c *client.Client, hideHints bool) selectModel {
+func newSelectModel(b backend.Backend, hideHints bool) selectModel {
 	l := list.New(nil, agentDelegate{}, 0, 0)
 	l.Title = "Select an agent"
 	l.SetShowStatusBar(false)
@@ -111,7 +111,7 @@ func newSelectModel(c *client.Client, hideHints bool) selectModel {
 
 	return selectModel{
 		list:      l,
-		client:    c,
+		backend:   b,
 		loading:   true,
 		hideHints: hideHints,
 	}
@@ -119,15 +119,18 @@ func newSelectModel(c *client.Client, hideHints bool) selectModel {
 
 func (m selectModel) loadAgents() tea.Cmd {
 	return func() tea.Msg {
-		result, err := m.client.ListAgents(context.Background())
+		result, err := m.backend.ListAgents(context.Background())
 		return agentsLoadedMsg{result: result, err: err}
 	}
 }
 
 func (m selectModel) createAgent(name, workspace string) tea.Cmd {
-	cl := m.client
+	b := m.backend
 	return func() tea.Msg {
-		err := cl.CreateAgent(context.Background(), name, workspace)
+		err := b.CreateAgent(context.Background(), backend.CreateAgentParams{
+			Name:      name,
+			Workspace: workspace,
+		})
 		return agentCreatedMsg{name: name, err: err}
 	}
 }

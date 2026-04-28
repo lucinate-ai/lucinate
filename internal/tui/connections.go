@@ -70,11 +70,18 @@ type connectionsModel struct {
 	subState  connectionsSubState
 	hideHints bool
 
-	// Form state shared by add and edit.
+	// Form state shared by add and edit. The form has a fixed
+	// type-radio at the top (always rendered, focusable on add and
+	// read-only on edit since type is immutable) plus 2-3 text fields
+	// that vary by selected type:
+	//   OpenClaw → Name, Gateway URL
+	//   OpenAI   → Name, Base URL, Default model
 	editingID    string
+	formType     config.ConnectionType
 	nameInput    textinput.Model
 	urlInput     textinput.Model
-	focusedField int // 0 = name, 1 = url
+	modelInput   textinput.Model
+	focusedField int // index into formFields()
 	formErr      string
 
 	// Delete confirm state.
@@ -85,6 +92,18 @@ type connectionsModel struct {
 	width  int
 	height int
 }
+
+// formField identifies a focusable input on the connections form.
+// formFields() returns the ordered list relevant to the currently
+// selected type so Tab cycles only through visible inputs.
+type formField int
+
+const (
+	formFieldType formField = iota // type radio (only on add)
+	formFieldName
+	formFieldURL
+	formFieldModel // OpenAI only
+)
 
 func newConnectionsModel(store *config.Connections, hideHints bool) connectionsModel {
 	l := list.New(nil, connectionDelegate{}, 0, 0)
@@ -231,6 +250,7 @@ func (m *connectionsModel) enterFormForNew() {
 	m.subState = subStateConnForm
 	m.editingID = ""
 	m.formErr = ""
+	m.formType = config.ConnTypeOpenClaw
 	m.focusedField = 0
 
 	m.nameInput = textinput.New()
@@ -238,15 +258,20 @@ func (m *connectionsModel) enterFormForNew() {
 	m.nameInput.CharLimit = 64
 
 	m.urlInput = textinput.New()
-	m.urlInput.Placeholder = "https://gateway.example.com"
 	m.urlInput.CharLimit = 256
+	m.applyTypeDefaults()
+
+	m.modelInput = textinput.New()
+	m.modelInput.Placeholder = "llama3.2"
+	m.modelInput.CharLimit = 128
 }
 
 func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
 	m.subState = subStateConnForm
 	m.editingID = conn.ID
 	m.formErr = ""
-	m.focusedField = 0
+	m.formType = conn.Type
+	m.focusedField = 1 // skip the type radio — it's read-only on edit
 
 	m.nameInput = textinput.New()
 	m.nameInput.SetValue(conn.Name)
@@ -255,6 +280,45 @@ func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
 	m.urlInput = textinput.New()
 	m.urlInput.SetValue(conn.URL)
 	m.urlInput.CharLimit = 256
+
+	m.modelInput = textinput.New()
+	m.modelInput.SetValue(conn.DefaultModel)
+	m.modelInput.CharLimit = 128
+}
+
+// applyTypeDefaults updates the URL placeholder when the selected
+// type changes so the user sees a hint that matches the chosen
+// backend.
+func (m *connectionsModel) applyTypeDefaults() {
+	switch m.formType {
+	case config.ConnTypeOpenAI:
+		m.urlInput.Placeholder = "http://localhost:11434/v1"
+	default:
+		m.urlInput.Placeholder = "https://gateway.example.com"
+	}
+}
+
+// formFields returns the focusable inputs for the current form
+// state, in tab order. Type is included only on add; the model field
+// is included only when type=OpenAI.
+func (m connectionsModel) formFields() []formField {
+	fields := []formField{}
+	if m.editingID == "" {
+		fields = append(fields, formFieldType)
+	}
+	fields = append(fields, formFieldName, formFieldURL)
+	if m.formType == config.ConnTypeOpenAI {
+		fields = append(fields, formFieldModel)
+	}
+	return fields
+}
+
+func (m connectionsModel) currentField() formField {
+	fields := m.formFields()
+	if m.focusedField < 0 || m.focusedField >= len(fields) {
+		return formFieldName
+	}
+	return fields[m.focusedField]
 }
 
 func (m connectionsModel) handleFormKey(msg tea.KeyPressMsg) (connectionsModel, tea.Cmd) {
@@ -262,31 +326,75 @@ func (m connectionsModel) handleFormKey(msg tea.KeyPressMsg) (connectionsModel, 
 	case "esc":
 		m.subState = subStateConnList
 		return m, nil
-	case "tab", "shift+tab":
-		return m, m.switchFormFocus()
+	case "tab":
+		return m, m.advanceFocus(1)
+	case "shift+tab":
+		return m, m.advanceFocus(-1)
+	case "left", "right":
+		// Type-radio navigation: cycle through ConnectionType options
+		// when the radio is focused.
+		if m.currentField() == formFieldType {
+			m.cycleType(msg.String() == "right")
+			return m, nil
+		}
 	case "enter":
 		return m.submitForm()
 	}
 	return m.updateForm(msg)
 }
 
-func (m connectionsModel) switchFormFocus() tea.Cmd {
-	if m.focusedField == 0 {
-		m.focusedField = 1
-		m.nameInput.Blur()
-		return m.urlInput.Focus()
+// advanceFocus moves the focused-field index by delta, wrapping at
+// either end and updating the textinput Focus/Blur flags so the cursor
+// renders on the right field.
+func (m connectionsModel) advanceFocus(delta int) tea.Cmd {
+	fields := m.formFields()
+	if len(fields) == 0 {
+		return nil
 	}
-	m.focusedField = 0
+	m.focusedField = (m.focusedField + delta + len(fields)) % len(fields)
+	m.nameInput.Blur()
 	m.urlInput.Blur()
-	return m.nameInput.Focus()
+	m.modelInput.Blur()
+	switch fields[m.focusedField] {
+	case formFieldName:
+		return m.nameInput.Focus()
+	case formFieldURL:
+		return m.urlInput.Focus()
+	case formFieldModel:
+		return m.modelInput.Focus()
+	}
+	return nil
+}
+
+// cycleType rotates the formType through AllConnectionTypes in either
+// direction. Adjusts URL placeholder via applyTypeDefaults so the
+// hint stays accurate.
+func (m *connectionsModel) cycleType(forward bool) {
+	types := config.AllConnectionTypes
+	idx := 0
+	for i, t := range types {
+		if t == m.formType {
+			idx = i
+			break
+		}
+	}
+	step := 1
+	if !forward {
+		step = -1
+	}
+	m.formType = types[(idx+step+len(types))%len(types)]
+	m.applyTypeDefaults()
 }
 
 func (m connectionsModel) updateForm(msg tea.Msg) (connectionsModel, tea.Cmd) {
 	var cmd tea.Cmd
-	if m.focusedField == 0 {
+	switch m.currentField() {
+	case formFieldName:
 		m.nameInput, cmd = m.nameInput.Update(msg)
-	} else {
+	case formFieldURL:
 		m.urlInput, cmd = m.urlInput.Update(msg)
+	case formFieldModel:
+		m.modelInput, cmd = m.modelInput.Update(msg)
 	}
 	return m, cmd
 }
@@ -298,13 +406,19 @@ func (m connectionsModel) submitForm() (connectionsModel, tea.Cmd) {
 	name := strings.TrimSpace(m.nameInput.Value())
 	url := strings.TrimSpace(m.urlInput.Value())
 
+	fields := config.ConnectionFields{
+		Name:         name,
+		Type:         m.formType,
+		URL:          url,
+		DefaultModel: strings.TrimSpace(m.modelInput.Value()),
+	}
 	if m.editingID == "" {
-		if _, err := m.store.Add(name, config.ConnTypeOpenClaw, url); err != nil {
+		if _, err := m.store.Add(fields); err != nil {
 			m.formErr = err.Error()
 			return m, nil
 		}
 	} else {
-		if err := m.store.Update(m.editingID, name, url); err != nil {
+		if err := m.store.Update(m.editingID, fields); err != nil {
 			m.formErr = err.Error()
 			return m, nil
 		}
@@ -396,13 +510,45 @@ func (m connectionsModel) viewForm() string {
 	b.WriteString(headerStyle.Render(title))
 	b.WriteString("\n\n")
 
-	b.WriteString("  Type: OpenClaw\n\n")
+	b.WriteString("  Type:")
+	if m.editingID == "" && m.currentField() == formFieldType {
+		b.WriteString(helpStyle.Render("  (← →)"))
+	}
+	b.WriteString("\n")
+	b.WriteString("  ")
+	for i, t := range config.AllConnectionTypes {
+		marker := "( )"
+		if t == m.formType {
+			marker = "(•)"
+		}
+		label := t.Label()
+		if m.editingID == "" && m.currentField() == formFieldType && t == m.formType {
+			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accent).Render(marker + " " + label))
+		} else if m.editingID != "" && t != m.formType {
+			b.WriteString(helpStyle.Render(marker + " " + label))
+		} else {
+			b.WriteString(marker + " " + label)
+		}
+		if i < len(config.AllConnectionTypes)-1 {
+			b.WriteString("   ")
+		}
+	}
+	b.WriteString("\n\n")
 
 	b.WriteString("  Name:\n")
 	b.WriteString("  " + m.nameInput.View() + "\n\n")
 
-	b.WriteString("  Gateway URL:\n")
+	urlLabel := "Gateway URL:"
+	if m.formType == config.ConnTypeOpenAI {
+		urlLabel = "Base URL:"
+	}
+	b.WriteString("  " + urlLabel + "\n")
 	b.WriteString("  " + m.urlInput.View() + "\n\n")
+
+	if m.formType == config.ConnTypeOpenAI {
+		b.WriteString("  Default model (optional):\n")
+		b.WriteString("  " + m.modelInput.View() + "\n\n")
+	}
 
 	if m.formErr != "" {
 		b.WriteString(errorStyle.Render("  " + m.formErr))

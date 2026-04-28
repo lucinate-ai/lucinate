@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/a3tai/openclaw-go/protocol"
 
+	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
@@ -198,7 +199,7 @@ type connectAttemptMsg struct {
 // with an error banner.
 type connectResultMsg struct {
 	connection *config.Connection
-	client     *client.Client
+	backend    backend.Backend
 	authNeed   authRecovery
 	err        error
 }
@@ -211,6 +212,7 @@ const (
 	authRecoveryNone authRecovery = iota
 	authRecoveryTokenMismatch
 	authRecoveryTokenMissing
+	authRecoveryAPIKey
 )
 
 // authResolvedMsg is sent after the user has resolved an auth-recovery
@@ -218,7 +220,7 @@ const (
 // (cleared token, reset identity, stored a new pre-shared token).
 type authResolvedMsg struct {
 	connection *config.Connection
-	client     *client.Client
+	backend    backend.Backend
 	cancelled  bool
 }
 

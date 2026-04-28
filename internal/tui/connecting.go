@@ -7,7 +7,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
@@ -30,7 +30,7 @@ const (
 // AppModel.
 type connectingModel struct {
 	connection *config.Connection
-	client     *client.Client
+	backend    backend.Backend
 	subState   connectingSubState
 	hideHints  bool
 
@@ -52,9 +52,9 @@ func newConnectingModel(conn *config.Connection, hideHints bool) connectingModel
 // enterAuthModal switches the model into the appropriate recovery
 // sub-state. AppModel calls this when runConnect returned a
 // recoverable auth error.
-func (m *connectingModel) enterAuthModal(conn *config.Connection, c *client.Client, need authRecovery, err error) {
+func (m *connectingModel) enterAuthModal(conn *config.Connection, b backend.Backend, need authRecovery, err error) {
 	m.connection = conn
-	m.client = c
+	m.backend = b
 	m.authErr = err
 	switch need {
 	case authRecoveryTokenMismatch:
@@ -64,6 +64,13 @@ func (m *connectingModel) enterAuthModal(conn *config.Connection, c *client.Clie
 		ti := textinput.New()
 		ti.Placeholder = "auth token"
 		ti.CharLimit = 256
+		ti.Focus()
+		m.tokenInput = ti
+	case authRecoveryAPIKey:
+		m.subState = subStateAuthTokenPrompt
+		ti := textinput.New()
+		ti.Placeholder = "api key"
+		ti.CharLimit = 512
 		ti.Focus()
 		m.tokenInput = ti
 	}
@@ -90,28 +97,32 @@ func (m connectingModel) handleKey(msg tea.KeyPressMsg) (connectingModel, tea.Cm
 	case subStateAuthMismatchPrompt:
 		switch msg.String() {
 		case "1", "enter":
-			c := m.client
+			b := m.backend
 			conn := m.connection
 			return m, func() tea.Msg {
-				if err := c.ClearToken(); err != nil {
-					return connectResultMsg{connection: conn, err: fmt.Errorf("clear token: %w", err)}
+				if auth, ok := b.(backend.DeviceTokenAuth); ok {
+					if err := auth.ClearToken(); err != nil {
+						return connectResultMsg{connection: conn, err: fmt.Errorf("clear token: %w", err)}
+					}
 				}
-				return authResolvedMsg{connection: conn, client: c}
+				return authResolvedMsg{connection: conn, backend: b}
 			}
 		case "2":
-			c := m.client
+			b := m.backend
 			conn := m.connection
 			return m, func() tea.Msg {
-				if err := c.ResetIdentity(); err != nil {
-					return connectResultMsg{connection: conn, err: fmt.Errorf("reset identity: %w", err)}
+				if auth, ok := b.(backend.DeviceTokenAuth); ok {
+					if err := auth.ResetIdentity(); err != nil {
+						return connectResultMsg{connection: conn, err: fmt.Errorf("reset identity: %w", err)}
+					}
 				}
-				return authResolvedMsg{connection: conn, client: c}
+				return authResolvedMsg{connection: conn, backend: b}
 			}
 		case "esc", "3", "q":
-			c := m.client
+			b := m.backend
 			conn := m.connection
 			return m, func() tea.Msg {
-				return authResolvedMsg{connection: conn, client: c, cancelled: true}
+				return authResolvedMsg{connection: conn, backend: b, cancelled: true}
 			}
 		}
 		return m, nil
@@ -123,19 +134,26 @@ func (m connectingModel) handleKey(msg tea.KeyPressMsg) (connectingModel, tea.Cm
 			if token == "" {
 				return m, nil
 			}
-			c := m.client
+			b := m.backend
 			conn := m.connection
 			return m, func() tea.Msg {
-				if err := c.StoreToken(token); err != nil {
-					return connectResultMsg{connection: conn, err: fmt.Errorf("store token: %w", err)}
+				switch auth := b.(type) {
+				case backend.DeviceTokenAuth:
+					if err := auth.StoreToken(token); err != nil {
+						return connectResultMsg{connection: conn, err: fmt.Errorf("store token: %w", err)}
+					}
+				case backend.APIKeyAuth:
+					if err := auth.StoreAPIKey(token); err != nil {
+						return connectResultMsg{connection: conn, err: fmt.Errorf("store api key: %w", err)}
+					}
 				}
-				return authResolvedMsg{connection: conn, client: c}
+				return authResolvedMsg{connection: conn, backend: b}
 			}
 		case "esc":
-			c := m.client
+			b := m.backend
 			conn := m.connection
 			return m, func() tea.Msg {
-				return authResolvedMsg{connection: conn, client: c, cancelled: true}
+				return authResolvedMsg{connection: conn, backend: b, cancelled: true}
 			}
 		}
 		var cmd tea.Cmd

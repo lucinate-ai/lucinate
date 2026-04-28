@@ -45,11 +45,30 @@ func ResolveEntryConnection() EntryConnection {
 		if conn := store.FindByURL(ConnTypeOpenClaw, envURL); conn != nil {
 			return EntryConnection{Store: store, Connection: conn}
 		}
-		conn, err := store.Add(AutoNameForURL(envURL), ConnTypeOpenClaw, envURL)
+		conn, err := store.Add(ConnectionFields{
+			Name: AutoNameForURL(envURL),
+			Type: ConnTypeOpenClaw,
+			URL:  envURL,
+		})
 		if err == nil {
 			return EntryConnection{Store: store, Connection: conn}
 		}
 		// Invalid env URL falls through to whatever the store offers.
+	}
+
+	if envURL := os.Getenv("LUCINATE_OPENAI_BASE_URL"); envURL != "" {
+		if conn := store.FindByURL(ConnTypeOpenAI, envURL); conn != nil {
+			return EntryConnection{Store: store, Connection: conn}
+		}
+		conn, err := store.Add(ConnectionFields{
+			Name:         AutoNameForURL(envURL),
+			Type:         ConnTypeOpenAI,
+			URL:          envURL,
+			DefaultModel: os.Getenv("LUCINATE_OPENAI_DEFAULT_MODEL"),
+		})
+		if err == nil {
+			return EntryConnection{Store: store, Connection: conn}
+		}
 	}
 
 	if store.DefaultID != "" {

@@ -9,6 +9,7 @@ import (
 func TestResolveEntryConnection_EmptyStoreNoEnv(t *testing.T) {
 	withHomeDir(t)
 	t.Setenv("OPENCLAW_GATEWAY_URL", "")
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "")
 
 	got := ResolveEntryConnection()
 	if !got.ShowPicker {
@@ -21,9 +22,10 @@ func TestResolveEntryConnection_EmptyStoreNoEnv(t *testing.T) {
 
 func TestResolveEntryConnection_EnvMatchesExisting(t *testing.T) {
 	withHomeDir(t)
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "")
 
 	var seed Connections
-	seed.Add("home", ConnTypeOpenClaw, "https://gw.example.com")
+	seed.Add(ConnectionFields{Name: "home", Type: ConnTypeOpenClaw, URL: "https://gw.example.com"})
 	if err := SaveConnections(seed); err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +42,7 @@ func TestResolveEntryConnection_EnvMatchesExisting(t *testing.T) {
 
 func TestResolveEntryConnection_EnvAutoAdds(t *testing.T) {
 	withHomeDir(t)
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "")
 	t.Setenv("OPENCLAW_GATEWAY_URL", "https://newgw.example.com")
 
 	got := ResolveEntryConnection()
@@ -59,6 +62,7 @@ func TestResolveEntryConnection_EnvAutoAdds(t *testing.T) {
 
 func TestResolveEntryConnection_EnvAutoAddNotPersisted(t *testing.T) {
 	home := withHomeDir(t)
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "")
 	t.Setenv("OPENCLAW_GATEWAY_URL", "https://newgw.example.com")
 
 	_ = ResolveEntryConnection()
@@ -71,10 +75,11 @@ func TestResolveEntryConnection_EnvAutoAddNotPersisted(t *testing.T) {
 func TestResolveEntryConnection_DefaultID(t *testing.T) {
 	withHomeDir(t)
 	t.Setenv("OPENCLAW_GATEWAY_URL", "")
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "")
 
 	var seed Connections
-	a, _ := seed.Add("a", ConnTypeOpenClaw, "https://a.example.com")
-	seed.Add("b", ConnTypeOpenClaw, "https://b.example.com")
+	a, _ := seed.Add(ConnectionFields{Name: "a", Type: ConnTypeOpenClaw, URL: "https://a.example.com"})
+	seed.Add(ConnectionFields{Name: "b", Type: ConnTypeOpenClaw, URL: "https://b.example.com"})
 	seed.MarkUsed(a.ID)
 	if err := SaveConnections(seed); err != nil {
 		t.Fatal(err)
@@ -92,9 +97,10 @@ func TestResolveEntryConnection_DefaultID(t *testing.T) {
 func TestResolveEntryConnection_SingleConnectionAutoPick(t *testing.T) {
 	withHomeDir(t)
 	t.Setenv("OPENCLAW_GATEWAY_URL", "")
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "")
 
 	var seed Connections
-	conn, _ := seed.Add("only", ConnTypeOpenClaw, "https://only.example.com")
+	conn, _ := seed.Add(ConnectionFields{Name: "only", Type: ConnTypeOpenClaw, URL: "https://only.example.com"})
 	if err := SaveConnections(seed); err != nil {
 		t.Fatal(err)
 	}
@@ -111,10 +117,11 @@ func TestResolveEntryConnection_SingleConnectionAutoPick(t *testing.T) {
 func TestResolveEntryConnection_MultipleNoDefaultShowsPicker(t *testing.T) {
 	withHomeDir(t)
 	t.Setenv("OPENCLAW_GATEWAY_URL", "")
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "")
 
 	var seed Connections
-	seed.Add("a", ConnTypeOpenClaw, "https://a.example.com")
-	seed.Add("b", ConnTypeOpenClaw, "https://b.example.com")
+	seed.Add(ConnectionFields{Name: "a", Type: ConnTypeOpenClaw, URL: "https://a.example.com"})
+	seed.Add(ConnectionFields{Name: "b", Type: ConnTypeOpenClaw, URL: "https://b.example.com"})
 	if err := SaveConnections(seed); err != nil {
 		t.Fatal(err)
 	}
@@ -128,10 +135,11 @@ func TestResolveEntryConnection_MultipleNoDefaultShowsPicker(t *testing.T) {
 func TestResolveEntryConnection_StaleDefaultIDFallsThrough(t *testing.T) {
 	withHomeDir(t)
 	t.Setenv("OPENCLAW_GATEWAY_URL", "")
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "")
 
 	var seed Connections
-	seed.Add("a", ConnTypeOpenClaw, "https://a.example.com")
-	seed.Add("b", ConnTypeOpenClaw, "https://b.example.com")
+	seed.Add(ConnectionFields{Name: "a", Type: ConnTypeOpenClaw, URL: "https://a.example.com"})
+	seed.Add(ConnectionFields{Name: "b", Type: ConnTypeOpenClaw, URL: "https://b.example.com"})
 	seed.DefaultID = "stale-id"
 	if err := SaveConnections(seed); err != nil {
 		t.Fatal(err)
@@ -143,12 +151,30 @@ func TestResolveEntryConnection_StaleDefaultIDFallsThrough(t *testing.T) {
 	}
 }
 
+func TestResolveEntryConnection_OpenAIEnvAutoAdds(t *testing.T) {
+	withHomeDir(t)
+	t.Setenv("OPENCLAW_GATEWAY_URL", "")
+	t.Setenv("LUCINATE_OPENAI_BASE_URL", "http://localhost:11434/v1")
+	t.Setenv("LUCINATE_OPENAI_DEFAULT_MODEL", "llama3.2")
+
+	got := ResolveEntryConnection()
+	if got.ShowPicker || got.Connection == nil {
+		t.Fatalf("expected auto-added OpenAI connection, got %+v", got)
+	}
+	if got.Connection.Type != ConnTypeOpenAI {
+		t.Errorf("Type = %q want %q", got.Connection.Type, ConnTypeOpenAI)
+	}
+	if got.Connection.DefaultModel != "llama3.2" {
+		t.Errorf("DefaultModel = %q", got.Connection.DefaultModel)
+	}
+}
+
 func TestResolveEntryConnection_InvalidEnvURLFallsThrough(t *testing.T) {
 	withHomeDir(t)
 	t.Setenv("OPENCLAW_GATEWAY_URL", "ftp://nope.example.com")
 
 	var seed Connections
-	conn, _ := seed.Add("only", ConnTypeOpenClaw, "https://only.example.com")
+	conn, _ := seed.Add(ConnectionFields{Name: "only", Type: ConnTypeOpenClaw, URL: "https://only.example.com"})
 	if err := SaveConnections(seed); err != nil {
 		t.Fatal(err)
 	}

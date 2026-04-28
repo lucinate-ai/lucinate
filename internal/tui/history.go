@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 
-	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/backend"
 )
 
 // historyResponse is the structure of the chat.history RPC response.
@@ -23,28 +23,28 @@ type historyMessage struct {
 
 func (m chatModel) loadHistory() tea.Cmd {
 	sessionKey := m.sessionKey
-	cl := m.client
+	b := m.backend
 	renderer := m.renderer
 	limit := m.historyLimit
 	return func() tea.Msg {
-		msgs, err := fetchHistory(cl, sessionKey, renderer, limit)
+		msgs, err := fetchHistory(b, sessionKey, renderer, limit)
 		return historyLoadedMsg{messages: msgs, err: err}
 	}
 }
 
 func (m chatModel) refreshHistory() tea.Cmd {
 	sessionKey := m.sessionKey
-	cl := m.client
+	b := m.backend
 	renderer := m.renderer
 	limit := m.historyLimit
 	return func() tea.Msg {
-		msgs, err := fetchHistory(cl, sessionKey, renderer, limit)
+		msgs, err := fetchHistory(b, sessionKey, renderer, limit)
 		return historyRefreshMsg{messages: msgs, err: err}
 	}
 }
 
-func fetchHistory(cl *client.Client, sessionKey string, renderer *glamour.TermRenderer, limit int) ([]chatMessage, error) {
-	raw, err := cl.ChatHistory(context.Background(), sessionKey, limit)
+func fetchHistory(b backend.Backend, sessionKey string, renderer *glamour.TermRenderer, limit int) ([]chatMessage, error) {
+	raw, err := b.ChatHistory(context.Background(), sessionKey, limit)
 	if err != nil {
 		return nil, err
 	}
