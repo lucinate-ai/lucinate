@@ -2,10 +2,17 @@
 //
 // The CLI entry point in main.go is a thin wrapper around Run; embedders
 // that need to host the program with their own input source or output sink
-// (for example, tests or alternative front-ends) construct a *client.Client,
-// connect it, and then either call Run for a one-shot blocking invocation
-// or build a *Program directly when they need to send window-size updates
-// or request a quit from another goroutine.
+// (for example, tests or alternative front-ends) either:
+//
+//   - construct a *client.Client themselves, connect it, and pass it via
+//     RunOptions.Client (legacy single-connection mode used by native
+//     platform embedders); or
+//   - pass a *config.Connections store plus a ClientFactory and let the
+//     TUI own the connection lifecycle, including the connections picker
+//     and auth-recovery modals (used by the CLI).
+//
+// In both modes Run is a one-shot blocking invocation; embedders that
+// need Resize or Quit from another goroutine build a *Program directly.
 package app
 
 import (
@@ -14,20 +21,58 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 
 	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/config"
 	"github.com/lucinate-ai/lucinate/internal/tui"
 )
 
+// ClientFactory builds an unconnected *client.Client for the given
+// connection. The TUI calls Connect on the returned client itself so it
+// can route token-mismatch / token-missing errors into modal recovery
+// flows. Embedders pass a factory whose default implementation uses the
+// per-endpoint filesystem identity store under ~/.lucinate/identity/.
+type ClientFactory = tui.ClientFactory
+
 // RunOptions configures a Program.
 type RunOptions struct {
-	// Client is the already-connected gateway client whose events drive the
-	// UI. Neither Run nor Program closes the client; lifecycle is the
-	// caller's responsibility.
+	// Client is an already-connected gateway client whose events drive
+	// the UI. Setting Client puts the program in legacy
+	// single-connection mode: the connections picker and /connections
+	// command are unavailable, and the lifecycle is the caller's
+	// responsibility (Run does not Close it).
+	//
+	// Mutually exclusive with Store. Embedders driving the program
+	// from a platform-native shell that already manages connections
+	// elsewhere (native platform embedders) keep using this.
 	Client *client.Client
+
+	// Store is the connections persistence used by the TUI when it
+	// owns the connection lifecycle. Setting Store enables the
+	// connections picker (entry view + /connections command) and the
+	// auth-recovery modals; the program closes the active client when
+	// it exits. Mutually exclusive with Client.
+	Store *config.Connections
+
+	// Initial, when set alongside Store, is the connection the TUI
+	// will attempt to use first. A nil Initial drops the user into the
+	// connections picker as the entry view.
+	Initial *config.Connection
+
+	// ClientFactory builds a fresh, unconnected *client.Client for a
+	// connection. Required when Store is set.
+	ClientFactory ClientFactory
+
+	// OnConnectionsChanged, when set, is invoked whenever the TUI
+	// adds, edits, deletes, or marks a connection as used. The CLI
+	// wires this to SaveConnections so a successful connect persists
+	// to disk. Embedders that own persistence elsewhere can mirror it
+	// here.
+	OnConnectionsChanged func(config.Connections)
 
 	// Input is the source of user input bytes. If nil, os.Stdin is used.
 	Input io.Reader
@@ -120,20 +165,38 @@ type RunOptions struct {
 	OnActionsChanged func(actions []Action)
 }
 
-// Program wraps a Bubble Tea program with the lucinate model and a
-// gateway-events pump goroutine. It is safe to call Resize and Quit from
-// goroutines other than the one running Run.
+// Program wraps a Bubble Tea program with the lucinate model and the
+// gateway-events / supervisor goroutines whose lifetimes the
+// connection driver controls. It is safe to call Resize, Quit, and
+// TriggerAction from goroutines other than the one running Run.
 type Program struct {
 	tp     *tea.Program
-	client *client.Client
+	mode   programMode
+	client *client.Client    // legacy mode only
+	clientCh chan *client.Client // new mode: TUI publishes the active client here
+	store  *config.Connections
 }
+
+type programMode int
+
+const (
+	modeLegacy programMode = iota // pre-connected Client; lifecycle owned by caller
+	modeManaged                   // Store + factory; lifecycle owned by the program
+)
 
 // New constructs a Program with the given options. It does not start the
 // underlying Bubble Tea loop; call Run to block on it.
 func New(opts RunOptions) (*Program, error) {
-	if opts.Client == nil {
-		return nil, errors.New("app: Client is required")
+	if opts.Client == nil && opts.Store == nil {
+		return nil, errors.New("app: either Client or Store is required")
 	}
+	if opts.Client != nil && opts.Store != nil {
+		return nil, errors.New("app: Client and Store are mutually exclusive")
+	}
+	if opts.Store != nil && opts.ClientFactory == nil {
+		return nil, errors.New("app: ClientFactory is required when Store is set")
+	}
+
 	in := opts.Input
 	if in == nil {
 		in = os.Stdin
@@ -143,13 +206,16 @@ func New(opts RunOptions) (*Program, error) {
 		out = os.Stdout
 	}
 
-	model := tui.NewApp(opts.Client, tui.AppOptions{
-		HideInputArea:       opts.HideInputArea,
-		HideActionHints:     opts.HideActionHints,
-		DisableMouse:        opts.DisableMouse,
-		OnInputFocusChanged: opts.OnInputFocusChanged,
-		OnActionsChanged:    opts.OnActionsChanged,
-	})
+	mode := modeLegacy
+	var clientCh chan *client.Client
+	if opts.Store != nil {
+		mode = modeManaged
+		// Buffered size 1 with drain-and-replace semantics in the
+		// driver so a rapid sequence of client switches collapses to
+		// the most recent one rather than queueing.
+		clientCh = make(chan *client.Client, 1)
+	}
+
 	teaOpts := []tea.ProgramOption{
 		tea.WithInput(in),
 		tea.WithOutput(out),
@@ -160,44 +226,58 @@ func New(opts RunOptions) (*Program, error) {
 	if opts.ColorProfile != 0 {
 		teaOpts = append(teaOpts, tea.WithColorProfile(opts.ColorProfile))
 	}
+
+	tuiOpts := tui.AppOptions{
+		HideInputArea:        opts.HideInputArea,
+		HideActionHints:      opts.HideActionHints,
+		DisableMouse:         opts.DisableMouse,
+		OnInputFocusChanged:  opts.OnInputFocusChanged,
+		OnActionsChanged:     opts.OnActionsChanged,
+		Store:                opts.Store,
+		Initial:              opts.Initial,
+		ClientFactory:        opts.ClientFactory,
+		OnConnectionsChanged: opts.OnConnectionsChanged,
+	}
+	if mode == modeManaged {
+		// Blocking send is fine: OnClientChanged is invoked from a
+		// tea.Cmd goroutine, and the driver drains promptly except
+		// during tear-down of the previous client (a brief wait).
+		ch := clientCh
+		tuiOpts.OnClientChanged = func(c *client.Client) {
+			ch <- c
+		}
+	}
+
+	model := tui.NewApp(opts.Client, tuiOpts)
 	tp := tea.NewProgram(model, teaOpts...)
-	return &Program{tp: tp, client: opts.Client}, nil
+	return &Program{
+		tp:       tp,
+		mode:     mode,
+		client:   opts.Client,
+		clientCh: clientCh,
+		store:    opts.Store,
+	}, nil
 }
 
 // Run starts the Bubble Tea program and blocks until it exits or ctx is
-// cancelled. The events-pump goroutine that bridges gateway events into the
-// program — and the connection supervisor that pushes reconnect state
-// transitions — are owned by Run for the duration of the call.
+// cancelled. The events-pump goroutine that bridges gateway events into
+// the program — and the connection supervisor that pushes reconnect
+// state transitions — are owned by Run for the duration of the call.
 //
-// Run is single-shot per Program; calling it more than once is a programming
-// error and the second call's behaviour is undefined.
+// In legacy mode (Client set) the pump is bound once to that client and
+// the caller closes it after Run returns. In managed mode (Store set)
+// the pump rewires whenever the TUI publishes a new client through
+// OnClientChanged, and Run closes whichever client is active when the
+// program exits.
+//
+// Run is single-shot per Program; calling it more than once is a
+// programming error and the second call's behaviour is undefined.
 func (p *Program) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	pumpDone := make(chan struct{})
-	go func() {
-		defer close(pumpDone)
-		events := p.client.Events()
-		for {
-			select {
-			case ev, ok := <-events:
-				if !ok {
-					return
-				}
-				p.tp.Send(tui.GatewayEventMsg(ev))
-			case <-runCtx.Done():
-				return
-			}
-		}
-	}()
-
-	// Watch the gateway connection and push reconnect-state transitions
-	// into the program so the chat view can surface a "lost connection /
-	// reconnecting" badge and clear stale streaming placeholders.
-	go p.client.Supervise(runCtx, func(s client.ConnState) {
-		p.tp.Send(tui.ConnStateMsg{Status: s.Status, Attempt: s.Attempt, Err: s.Err})
-	})
+	driverDone := make(chan struct{})
+	go p.runDriver(runCtx, driverDone)
 
 	// Quit the program if the caller cancels the context.
 	stopWatcher := make(chan struct{})
@@ -212,12 +292,89 @@ func (p *Program) Run(ctx context.Context) error {
 	_, err := p.tp.Run()
 	close(stopWatcher)
 	cancel()
-	<-pumpDone
+	<-driverDone
 
 	if err != nil {
 		return fmt.Errorf("program: %w", err)
 	}
 	return nil
+}
+
+// runDriver owns the per-client pump+supervisor goroutines. In legacy
+// mode it binds once to p.client. In managed mode it watches clientCh
+// and rebinds on every successful client switch, closing the previous
+// client after its goroutines have drained.
+func (p *Program) runDriver(runCtx context.Context, done chan<- struct{}) {
+	defer close(done)
+
+	type bound struct {
+		c      *client.Client
+		stop   context.CancelFunc
+		wg     *sync.WaitGroup
+		owned  bool // close on teardown (true in managed mode, false in legacy)
+	}
+
+	var current *bound
+
+	tearDown := func(b *bound) {
+		if b == nil {
+			return
+		}
+		b.stop()
+		b.wg.Wait()
+		if b.owned && b.c != nil {
+			_ = b.c.Close()
+		}
+	}
+
+	bindClient := func(c *client.Client, owned bool) *bound {
+		if c == nil {
+			return nil
+		}
+		bctx, bcancel := context.WithCancel(runCtx)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			events := c.Events()
+			for {
+				select {
+				case ev, ok := <-events:
+					if !ok {
+						return
+					}
+					p.tp.Send(tui.GatewayEventMsg(ev))
+				case <-bctx.Done():
+					return
+				}
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			c.Supervise(bctx, func(s client.ConnState) {
+				p.tp.Send(tui.ConnStateMsg{Status: s.Status, Attempt: s.Attempt, Err: s.Err})
+			})
+		}()
+		return &bound{c: c, stop: bcancel, wg: &wg, owned: owned}
+	}
+
+	if p.mode == modeLegacy {
+		current = bindClient(p.client, false)
+		<-runCtx.Done()
+		tearDown(current)
+		return
+	}
+
+	for {
+		select {
+		case <-runCtx.Done():
+			tearDown(current)
+			return
+		case c := <-p.clientCh:
+			tearDown(current)
+			current = bindClient(c, true)
+		}
+	}
 }
 
 // Resize sends a window-size update to the running program. Safe to call

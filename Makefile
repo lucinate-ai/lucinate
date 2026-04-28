@@ -25,6 +25,16 @@ run:
 test:
 	go test ./...
 
+# smoke runs the startup smoke test in isolation. The smoke test
+# constructs the AppModel in every entry-view variant the startup
+# resolver produces and feeds it the initial WindowSizeMsg the
+# bubbletea program would emit on a real terminal. CI runs this so a
+# regression that panics before any user input is caught before
+# release. Hermetic — no gateway, no terminal required.
+.PHONY: smoke
+smoke:
+	go test -count=1 -run TestStartupSmoke ./internal/tui/
+
 .PHONY: coverage
 coverage:
 	go test -coverprofile=coverage.out ./...

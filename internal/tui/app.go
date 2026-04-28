@@ -2,6 +2,9 @@ package tui
 
 import (
 	"context"
+	"errors"
+	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -12,20 +15,53 @@ import (
 type viewState int
 
 const (
-	viewSelect viewState = iota
+	viewConnections viewState = iota
+	viewConnecting
+	viewSelect
 	viewChat
 	viewSessions
 	viewConfig
 )
 
-// AppOptions configures an AppModel. Embedders that drive the program from
-// a platform-native input surface (so the in-TUI textarea would be
-// duplicate UI) set HideInputArea; see app.RunOptions for the full
-// rationale.
+// ClientFactory builds an unconnected *client.Client for a stored
+// connection. The TUI owns Connect (so it can route token errors into
+// modal recovery flows). Embedders pass a factory whose default
+// implementation uses the per-endpoint identity store under
+// ~/.lucinate/identity/.
+type ClientFactory func(*config.Connection) (*client.Client, error)
+
+// AppOptions configures an AppModel. Embedders that drive the program
+// from a platform-native input surface set HideInputArea; see
+// app.RunOptions for the full rationale.
 type AppOptions struct {
 	HideInputArea   bool
 	HideActionHints bool
 	DisableMouse    bool
+
+	// Store, when non-nil, enables managed mode: the TUI owns the
+	// connection lifecycle, runs the connections picker as the entry
+	// view (or auto-picks via the same decision tree the resolver
+	// uses), and surfaces the /connections command. Mutually
+	// exclusive with passing a pre-connected *client.Client to NewApp.
+	Store *config.Connections
+
+	// Initial is the connection the TUI will attempt first when in
+	// managed mode. A nil Initial drops the user into the picker.
+	Initial *config.Connection
+
+	// ClientFactory is required in managed mode; it constructs an
+	// unconnected client for a chosen connection.
+	ClientFactory ClientFactory
+
+	// OnClientChanged is invoked after a successful connect — the
+	// app-layer driver uses this to rewire the events pump and
+	// supervisor onto the new client. Nil in legacy mode.
+	OnClientChanged func(*client.Client)
+
+	// OnConnectionsChanged is invoked after any CRUD operation
+	// (add/edit/delete/MarkUsed) so embedders can persist the store.
+	// Nil in legacy mode.
+	OnConnectionsChanged func(config.Connections)
 
 	// OnInputFocusChanged, if non-nil, is invoked whenever the active
 	// view's preferred input mode changes. See app.RunOptions for the
@@ -40,18 +76,25 @@ type AppOptions struct {
 
 // AppModel is the root bubbletea model.
 type AppModel struct {
-	state           viewState
-	selectModel     selectModel
-	chatModel       chatModel
-	sessionsModel   sessionsModel
-	configModel     configModel
-	client          *client.Client
-	prefs           config.Preferences
-	width           int
-	height          int
-	hideInput       bool
-	hideActionHints bool
-	disableMouse    bool
+	state             viewState
+	connectionsModel  connectionsModel
+	connectingModel   connectingModel
+	selectModel       selectModel
+	chatModel         chatModel
+	sessionsModel     sessionsModel
+	configModel       configModel
+	client            *client.Client
+	store             *config.Connections
+	clientFactory     ClientFactory
+	onClientChanged   func(*client.Client)
+	onConnsChanged    func(config.Connections)
+	prefs             config.Preferences
+	width             int
+	height            int
+	hideInput         bool
+	hideActionHints   bool
+	disableMouse      bool
+	managed           bool
 
 	onInputFocusChanged func(bool)
 	lastWantsInput      bool
@@ -63,22 +106,58 @@ type AppModel struct {
 }
 
 // NewApp creates the root application model.
+//
+// In legacy mode the caller passes a pre-connected *client.Client and
+// leaves opts.Store nil. In managed mode the caller passes a nil
+// client and supplies opts.Store + opts.ClientFactory; the TUI handles
+// connect/auth/switch internally.
 func NewApp(c *client.Client, opts AppOptions) AppModel {
-	return AppModel{
-		state:               viewSelect,
-		selectModel:         newSelectModel(c, opts.HideActionHints),
-		client:              c,
-		prefs:               config.LoadPreferences(),
-		hideInput:           opts.HideInputArea,
-		hideActionHints:     opts.HideActionHints,
-		disableMouse:        opts.DisableMouse,
-		onInputFocusChanged: opts.OnInputFocusChanged,
-		onActionsChanged:    opts.OnActionsChanged,
+	managed := opts.Store != nil
+
+	m := AppModel{
+		client:               c,
+		prefs:                config.LoadPreferences(),
+		hideInput:            opts.HideInputArea,
+		hideActionHints:      opts.HideActionHints,
+		disableMouse:         opts.DisableMouse,
+		store:                opts.Store,
+		clientFactory:        opts.ClientFactory,
+		onClientChanged:      opts.OnClientChanged,
+		onConnsChanged:       opts.OnConnectionsChanged,
+		managed:              managed,
+		onInputFocusChanged:  opts.OnInputFocusChanged,
+		onActionsChanged:     opts.OnActionsChanged,
 	}
+
+	switch {
+	case !managed:
+		// Legacy: jump straight into the agent picker.
+		m.state = viewSelect
+		m.selectModel = newSelectModel(c, opts.HideActionHints)
+	case opts.Initial != nil:
+		// Managed with an initial pick: try to connect first, surface
+		// errors / auth modals from there.
+		m.state = viewConnecting
+		m.connectingModel = newConnectingModel(opts.Initial, opts.HideActionHints)
+	default:
+		// Managed without an initial pick: open the connections picker.
+		m.state = viewConnections
+		m.connectionsModel = newConnectionsModel(opts.Store, opts.HideActionHints)
+	}
+
+	return m
 }
 
 func (m AppModel) Init() tea.Cmd {
-	return m.selectModel.Init()
+	switch m.state {
+	case viewSelect:
+		return m.selectModel.Init()
+	case viewConnecting:
+		return m.startConnect(m.connectingModel.connection)
+	case viewConnections:
+		return m.connectionsModel.Init()
+	}
+	return nil
 }
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -109,6 +188,10 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // action UI without polling.
 func (m AppModel) Actions() []Action {
 	switch m.state {
+	case viewConnections:
+		return m.connectionsModel.Actions()
+	case viewConnecting:
+		return m.connectingModel.Actions()
 	case viewSelect:
 		return m.selectModel.Actions()
 	case viewSessions:
@@ -125,6 +208,14 @@ func (m AppModel) Actions() []Action {
 // view's TriggerAction so the work lives in one place.
 func (m AppModel) TriggerAction(id string) (AppModel, tea.Cmd) {
 	switch m.state {
+	case viewConnections:
+		var cmd tea.Cmd
+		m.connectionsModel, cmd = m.connectionsModel.TriggerAction(id)
+		return m, cmd
+	case viewConnecting:
+		var cmd tea.Cmd
+		m.connectingModel, cmd = m.connectingModel.TriggerAction(id)
+		return m, cmd
 	case viewSelect:
 		var cmd tea.Cmd
 		m.selectModel, cmd = m.selectModel.TriggerAction(id)
@@ -174,14 +265,18 @@ func (m AppModel) maybeNotifyActions(cmd tea.Cmd) (tea.Model, tea.Cmd) {
 // text-input widget that expects free-form typing (the chat textarea, the
 // new-agent form fields). Embedders use this signal to decide whether to
 // surface their on-screen keyboard. List- and viewport-only views (agent
-// list, sessions, config) return false: they only need the platform's
-// existing navigation affordances.
+// list, sessions, config, connections list) return false: they only need
+// the platform's existing navigation affordances.
 func (m AppModel) computeWantsInput() bool {
 	switch m.state {
 	case viewChat:
 		return true
 	case viewSelect:
 		return m.selectModel.subState == subStateCreate
+	case viewConnections:
+		return m.connectionsModel.wantsInput()
+	case viewConnecting:
+		return m.connectingModel.wantsInput()
 	}
 	return false
 }
@@ -217,14 +312,22 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.selectModel.setSize(msg.Width, msg.Height)
-		if m.state == viewChat {
+		// Only forward to the active view's model — the others
+		// hold zero-value bubbles widgets whose internal state
+		// panics on SetSize before they're constructed via the
+		// transition path that owns them.
+		switch m.state {
+		case viewConnections:
+			m.connectionsModel.setSize(msg.Width, msg.Height)
+		case viewConnecting:
+			m.connectingModel.setSize(msg.Width, msg.Height)
+		case viewSelect:
+			m.selectModel.setSize(msg.Width, msg.Height)
+		case viewChat:
 			m.chatModel.setSize(msg.Width, msg.Height)
-		}
-		if m.state == viewSessions {
+		case viewSessions:
 			m.sessionsModel.setSize(msg.Width, msg.Height)
-		}
-		if m.state == viewConfig {
+		case viewConfig:
 			m.configModel.setSize(msg.Width, msg.Height)
 		}
 		return m, nil
@@ -250,6 +353,61 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 
 	case ConnStateMsg:
 		m.chatModel.applyConnState(msg)
+		return m, nil
+
+	case showConnectionsMsg:
+		if !m.managed {
+			return m, nil
+		}
+		// Tear down the active client so the next pick gets a fresh
+		// pump+supervisor. Publishing nil to the driver causes it to
+		// close the current client. Run on a goroutine so the
+		// blocking send into the driver channel never stalls the
+		// bubbletea event loop.
+		if m.onClientChanged != nil && m.client != nil {
+			cb := m.onClientChanged
+			go cb(nil)
+		}
+		m.client = nil
+		m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints)
+		m.connectionsModel.setSize(m.width, m.height)
+		m.state = viewConnections
+		return m, m.connectionsModel.Init()
+
+	case connectionPickedMsg:
+		return m.beginConnect(msg.connection)
+
+	case connectAttemptMsg:
+		return m.beginConnect(msg.connection)
+
+	case connectResultMsg:
+		return m.handleConnectResult(msg)
+
+	case authResolvedMsg:
+		if msg.cancelled {
+			// User backed out of the auth modal — return to the picker.
+			m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints)
+			m.connectionsModel.setSize(m.width, m.height)
+			m.state = viewConnections
+			if msg.client != nil {
+				_ = msg.client.Close()
+			}
+			return m, m.connectionsModel.Init()
+		}
+		// Retry connect with the same client (token has been
+		// stored/cleared as appropriate by the modal).
+		return m, m.retryConnect(msg.connection, msg.client)
+
+	case connectionsChangedMsg:
+		if m.onConnsChanged != nil && m.store != nil {
+			cb := m.onConnsChanged
+			snapshot := *m.store
+			notify := func() tea.Msg {
+				cb(snapshot)
+				return nil
+			}
+			return m, notify
+		}
 		return m, nil
 
 	case showSessionsMsg:
@@ -310,6 +468,16 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	}
 
 	switch m.state {
+	case viewConnections:
+		var cmd tea.Cmd
+		m.connectionsModel, cmd = m.connectionsModel.Update(msg)
+		return m, cmd
+
+	case viewConnecting:
+		var cmd tea.Cmd
+		m.connectingModel, cmd = m.connectingModel.Update(msg)
+		return m, cmd
+
 	case viewSelect:
 		var cmd tea.Cmd
 		m.selectModel, cmd = m.selectModel.Update(msg)
@@ -365,9 +533,134 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	return m, nil
 }
 
+// connectTimeout matches the legacy CLI bound. Long enough for a slow
+// network handshake but short enough that a wedged DNS resolution gives
+// up within a single attention span.
+const connectTimeout = 15 * time.Second
+
+// startConnect kicks off a Connect attempt for the given connection
+// without changing view state. The caller (Init) has already set the
+// state to viewConnecting.
+func (m AppModel) startConnect(conn *config.Connection) tea.Cmd {
+	if conn == nil || m.clientFactory == nil {
+		return nil
+	}
+	factory := m.clientFactory
+	return func() tea.Msg {
+		c, err := factory(conn)
+		if err != nil {
+			return connectResultMsg{connection: conn, err: err}
+		}
+		return runConnect(conn, c)
+	}
+}
+
+// beginConnect transitions to viewConnecting and starts a connect
+// attempt. Used both for picker-driven picks and direct
+// connectAttemptMsg dispatches.
+func (m AppModel) beginConnect(conn *config.Connection) (AppModel, tea.Cmd) {
+	if conn == nil {
+		return m, nil
+	}
+	m.connectingModel = newConnectingModel(conn, m.hideActionHints)
+	m.connectingModel.setSize(m.width, m.height)
+	m.state = viewConnecting
+	return m, m.startConnect(conn)
+}
+
+// retryConnect reuses an existing client (whose stored token may have
+// been mutated by an auth modal) and re-runs Connect.
+func (m AppModel) retryConnect(conn *config.Connection, c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		return runConnect(conn, c)
+	}
+}
+
+// runConnect performs a single Connect attempt and classifies the
+// result so handleConnectResult can decide between transitioning to
+// viewSelect (success), opening an auth modal (recoverable), or
+// returning to the picker (unrecoverable).
+func runConnect(conn *config.Connection, c *client.Client) connectResultMsg {
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+	if err := c.Connect(ctx); err != nil {
+		switch {
+		case isTokenMismatchErr(err):
+			return connectResultMsg{connection: conn, client: c, authNeed: authRecoveryTokenMismatch, err: err}
+		case isTokenMissingErr(err):
+			return connectResultMsg{connection: conn, client: c, authNeed: authRecoveryTokenMissing, err: err}
+		default:
+			_ = c.Close()
+			return connectResultMsg{connection: conn, err: err}
+		}
+	}
+	return connectResultMsg{connection: conn, client: c}
+}
+
+func isTokenMismatchErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "gateway token mismatch")
+}
+
+func isTokenMissingErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "gateway token missing")
+}
+
+// handleConnectResult routes a connect outcome: success transitions to
+// the agent picker and publishes the new client to the app-layer
+// driver; recoverable auth errors open a modal; everything else lands
+// the user back on the connections picker with an error banner.
+func (m AppModel) handleConnectResult(msg connectResultMsg) (AppModel, tea.Cmd) {
+	if msg.err == nil && msg.client != nil {
+		// Success — promote to default and publish the client.
+		if m.store != nil && msg.connection != nil {
+			m.store.MarkUsed(msg.connection.ID)
+		}
+		m.client = msg.client
+		if m.onClientChanged != nil {
+			cb := m.onClientChanged
+			c := msg.client
+			go cb(c) // blocking send; do off the event loop
+		}
+		m.selectModel = newSelectModel(msg.client, m.hideActionHints)
+		m.selectModel.setSize(m.width, m.height)
+		m.state = viewSelect
+		var cmd tea.Cmd = m.selectModel.Init()
+		if m.onConnsChanged != nil && m.store != nil {
+			cb := m.onConnsChanged
+			snapshot := *m.store
+			notify := func() tea.Msg {
+				cb(snapshot)
+				return nil
+			}
+			cmd = tea.Batch(cmd, notify)
+		}
+		return m, cmd
+	}
+
+	if msg.authNeed != authRecoveryNone && msg.client != nil {
+		m.connectingModel.enterAuthModal(msg.connection, msg.client, msg.authNeed, msg.err)
+		return m, nil
+	}
+
+	// Unrecoverable: bounce back to the picker with the error.
+	m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints)
+	m.connectionsModel.setSize(m.width, m.height)
+	if msg.err != nil {
+		m.connectionsModel.lastErr = msg.err
+	} else {
+		m.connectionsModel.lastErr = errors.New("connect failed")
+	}
+	m.state = viewConnections
+	return m, m.connectionsModel.Init()
+}
+
 func (m AppModel) View() tea.View {
 	var v tea.View
 	switch m.state {
+	case viewConnections:
+		v = tea.NewView(m.connectionsModel.View())
+	case viewConnecting:
+		v = tea.NewView(m.connectingModel.View())
 	case viewSelect:
 		v = tea.NewView(m.selectModel.View())
 	case viewChat:

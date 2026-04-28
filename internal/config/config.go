@@ -26,6 +26,17 @@ func Load() (*Config, error) {
 	return New(gatewayURL)
 }
 
+// FromConnection builds a Config from a stored Connection, deriving
+// the matching WebSocket endpoint. Used by the TUI now that the
+// connection lifecycle (selection, persistence, mid-session switch)
+// happens above the gateway-client layer.
+func FromConnection(conn *Connection) (*Config, error) {
+	if conn == nil {
+		return nil, fmt.Errorf("connection is required")
+	}
+	return New(conn.URL)
+}
+
 // New builds a Config from a gateway URL, deriving the matching WebSocket
 // endpoint. Useful for embedders that obtain the gateway URL from somewhere
 // other than the OPENCLAW_GATEWAY_URL environment variable.

@@ -53,13 +53,17 @@ go build -o lucinate .
 
 ### 1. Configure lucinate
 
-Create a `.env` file in the directory you'll run lucinate from (or export the variable in your shell):
+On first launch lucinate opens a **Connections** picker so you can add a gateway without setting any env vars. Saved connections live in `~/.lucinate/connections.json`; the most recently used is selected automatically next time.
+
+Prefer env vars? Set `OPENCLAW_GATEWAY_URL` and lucinate will auto-add a connection for it on first run:
 
 ```sh
 OPENCLAW_GATEWAY_URL=https://your-gateway-host
 ```
 
 The gateway URL can use `https`, `http`, `wss`, or `ws` schemes. lucinate derives the WebSocket endpoint automatically.
+
+Switch between saved connections at any time with `/connections` from the chat view. Use `n` to add a new one, `e` to edit, `d` to delete (with confirmation).
 
 ### Flags
 
@@ -131,6 +135,7 @@ Type these in the chat input. Tab autocompletes partial commands.
 | `/clear` | Clear chat display |
 | `/compact` | Compact session context (with confirmation) |
 | `/config` | Open preferences |
+| `/connections` | Switch gateway connection |
 | `/model` | List available models |
 | `/model <name>` | Switch model (fuzzy match) |
 | `/reset` | Delete session and start fresh (with confirmation) |

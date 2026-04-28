@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/lucinate-ai/lucinate/internal/client"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 func TestComputeWantsInput(t *testing.T) {
@@ -107,6 +110,43 @@ func TestMaybeNotifyInputFocus_PreservesIncomingCmd(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != false {
 		t.Fatalf("notify cmd did not fire: got=%v", got)
+	}
+}
+
+// TestNewApp_LegacyClientStartsAtSelect: pre-connected client (native
+// platform embedder pattern) skips the connections picker.
+func TestNewApp_LegacyClientStartsAtSelect(t *testing.T) {
+	m := NewApp(nil, AppOptions{})
+	if m.state != viewSelect {
+		t.Errorf("legacy client should start at viewSelect, got %v", m.state)
+	}
+}
+
+// TestNewApp_ManagedNoInitialStartsAtConnections: managed mode with no
+// Initial drops the user into the picker.
+func TestNewApp_ManagedNoInitialStartsAtConnections(t *testing.T) {
+	store := &config.Connections{}
+	m := NewApp(nil, AppOptions{
+		Store:         store,
+		ClientFactory: func(*config.Connection) (*client.Client, error) { return nil, nil },
+	})
+	if m.state != viewConnections {
+		t.Errorf("managed-no-initial should start at viewConnections, got %v", m.state)
+	}
+}
+
+// TestNewApp_ManagedWithInitialStartsAtConnecting: managed mode with an
+// Initial connection jumps straight into the connecting state.
+func TestNewApp_ManagedWithInitialStartsAtConnecting(t *testing.T) {
+	store := &config.Connections{}
+	conn, _ := store.Add("home", config.ConnTypeOpenClaw, "https://home.example.com")
+	m := NewApp(nil, AppOptions{
+		Store:         store,
+		Initial:       conn,
+		ClientFactory: func(*config.Connection) (*client.Client, error) { return nil, nil },
+	})
+	if m.state != viewConnecting {
+		t.Errorf("managed-with-initial should start at viewConnecting, got %v", m.state)
 	}
 }
 

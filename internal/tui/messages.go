@@ -183,6 +183,59 @@ type sessionClearedMsg struct {
 // spinnerTickMsg advances the streaming-response placeholder animation.
 type spinnerTickMsg struct{}
 
+// connectAttemptMsg requests AppModel to begin a connect attempt for
+// the given connection. Used both at startup (Initial connection) and
+// when the user picks a connection from the picker.
+type connectAttemptMsg struct {
+	connection *config.Connection
+}
+
+// connectResultMsg carries the outcome of a Connect call. On success
+// the new client is published to the app-layer driver via
+// onClientChanged and the TUI advances to the agent picker. On
+// recoverable auth errors AppModel transitions to an auth-modal
+// sub-state. On other errors it returns to the connections picker
+// with an error banner.
+type connectResultMsg struct {
+	connection *config.Connection
+	client     *client.Client
+	authNeed   authRecovery
+	err        error
+}
+
+// authRecovery describes which auth-modal flow a connect error wants.
+// "none" means no recovery offered (a generic error).
+type authRecovery int
+
+const (
+	authRecoveryNone authRecovery = iota
+	authRecoveryTokenMismatch
+	authRecoveryTokenMissing
+)
+
+// authResolvedMsg is sent after the user has resolved an auth-recovery
+// modal. The TUI re-runs Connect with whatever state the modal mutated
+// (cleared token, reset identity, stored a new pre-shared token).
+type authResolvedMsg struct {
+	connection *config.Connection
+	client     *client.Client
+	cancelled  bool
+}
+
+// showConnectionsMsg signals the AppModel to switch to the connections
+// picker (mid-session, via /connections).
+type showConnectionsMsg struct{}
+
+// connectionPickedMsg is emitted by the connections picker when the
+// user chooses a connection. AppModel turns it into a connectAttemptMsg.
+type connectionPickedMsg struct {
+	connection *config.Connection
+}
+
+// connectionsChangedMsg is emitted by the connections picker after a
+// CRUD operation. The TUI uses it to re-render and notify the embedder.
+type connectionsChangedMsg struct{}
+
 // ConnStateMsg carries a gateway connection-state transition from the
 // reconnect supervisor into the bubbletea event loop. Exported so main.go
 // can dispatch it via p.Send().

@@ -363,6 +363,20 @@ func TestSlashCommand_Config(t *testing.T) {
 	}
 }
 
+func TestSlashCommand_Connections(t *testing.T) {
+	m := newSlashTestModel()
+	handled, cmd := m.handleSlashCommand("/connections")
+	if !handled {
+		t.Fatal("expected /connections to be handled")
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd from /connections")
+	}
+	if _, ok := cmd().(showConnectionsMsg); !ok {
+		t.Errorf("expected showConnectionsMsg, got %T", cmd())
+	}
+}
+
 func TestSlashCommand_Commands_ShowsHelp(t *testing.T) {
 	m := newSlashTestModel()
 	initialCount := len(m.messages)
