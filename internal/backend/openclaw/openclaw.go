@@ -153,6 +153,7 @@ func (b *Backend) Capabilities() backend.Capabilities {
 		SessionUsage:   true,
 		AuthRecovery:   backend.AuthRecoveryDeviceToken,
 		AgentWorkspace: true,
+		Cron:           true,
 	}
 }
 
@@ -198,6 +199,32 @@ func (b *Backend) StoreToken(token string) error { return b.client.StoreToken(to
 func (b *Backend) ClearToken() error             { return b.client.ClearToken() }
 func (b *Backend) ResetIdentity() error          { return b.client.ResetIdentity() }
 
+// --- CronBackend ---
+
+func (b *Backend) CronsList(ctx context.Context, params protocol.CronListParams) (*protocol.CronListResult, error) {
+	return b.client.CronsList(ctx, params)
+}
+
+func (b *Backend) CronRuns(ctx context.Context, params protocol.CronRunsParams) (*protocol.CronRunsResult, error) {
+	return b.client.CronRuns(ctx, params)
+}
+
+func (b *Backend) CronAdd(ctx context.Context, params protocol.CronAddParams) (json.RawMessage, error) {
+	return b.client.CronAdd(ctx, params)
+}
+
+func (b *Backend) CronUpdate(ctx context.Context, params protocol.CronUpdateParams) error {
+	return b.client.CronUpdate(ctx, params)
+}
+
+func (b *Backend) CronRemove(ctx context.Context, jobID string) error {
+	return b.client.CronRemove(ctx, jobID)
+}
+
+func (b *Backend) CronRun(ctx context.Context, jobID string, force bool) error {
+	return b.client.CronRun(ctx, jobID, force)
+}
+
 // Compile-time assertions that the wrapper implements every interface
 // it claims to.
 var (
@@ -208,4 +235,5 @@ var (
 	_ backend.ThinkingBackend = (*Backend)(nil)
 	_ backend.UsageBackend    = (*Backend)(nil)
 	_ backend.DeviceTokenAuth = (*Backend)(nil)
+	_ backend.CronBackend     = (*Backend)(nil)
 )

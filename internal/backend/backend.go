@@ -181,6 +181,12 @@ type Capabilities struct {
 	// backends (OpenAI-compat) leave this false because Identity /
 	// Soul / Model carry the agent's configuration instead.
 	AgentWorkspace bool
+
+	// Cron indicates the backend implements CronBackend. The TUI
+	// gates the /crons command on this so backends without server-
+	// side scheduling print a clear "not available" message rather
+	// than crashing on a failed type assertion.
+	Cron bool
 }
 
 // AuthRecovery selects the auth-modal flow the connecting view runs
@@ -243,4 +249,17 @@ type DeviceTokenAuth interface {
 // backends when the upstream returns 401/403.
 type APIKeyAuth interface {
 	StoreAPIKey(key string) error
+}
+
+// CronBackend exposes the gateway cron API behind the /crons view.
+// Local-agent backends and OpenAI-compat backends omit this; the TUI
+// type-asserts and prints "not available on this connection" when the
+// assertion fails.
+type CronBackend interface {
+	CronsList(ctx context.Context, params protocol.CronListParams) (*protocol.CronListResult, error)
+	CronRuns(ctx context.Context, params protocol.CronRunsParams) (*protocol.CronRunsResult, error)
+	CronAdd(ctx context.Context, params protocol.CronAddParams) (json.RawMessage, error)
+	CronUpdate(ctx context.Context, params protocol.CronUpdateParams) error
+	CronRemove(ctx context.Context, jobID string) error
+	CronRun(ctx context.Context, jobID string, force bool) error
 }

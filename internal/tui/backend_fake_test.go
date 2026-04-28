@@ -36,6 +36,18 @@ type fakeBackend struct {
 	storedAPIKey   string
 	clearedToken   bool
 	resetIdentity  bool
+
+	// Cron RPC seams — tests pre-seed jobs / runs / errors and read
+	// back the recorded calls through these fields.
+	cronJobs        []protocol.CronJob
+	cronRuns        []protocol.CronRunLogEntry
+	cronListErr     error
+	cronRunsErr     error
+	lastCronAdd     *protocol.CronAddParams
+	lastCronUpdate  *protocol.CronUpdateParams
+	lastCronRunID   string
+	lastCronRunForce bool
+	cronRemoved     []string
 }
 
 func newFakeBackend() *fakeBackend {
@@ -49,6 +61,7 @@ func newFakeBackend() *fakeBackend {
 			SessionUsage:   true,
 			AuthRecovery:   backend.AuthRecoveryDeviceToken,
 			AgentWorkspace: true,
+			Cron:           true,
 		},
 	}
 }
@@ -134,6 +147,45 @@ func (f *fakeBackend) ResetIdentity() error          { f.resetIdentity = true; r
 
 func (f *fakeBackend) StoreAPIKey(key string) error { f.storedAPIKey = key; return nil }
 
+// --- CronBackend ---
+
+func (f *fakeBackend) CronsList(ctx context.Context, params protocol.CronListParams) (*protocol.CronListResult, error) {
+	if f.cronListErr != nil {
+		return nil, f.cronListErr
+	}
+	return &protocol.CronListResult{Jobs: f.cronJobs, Total: len(f.cronJobs)}, nil
+}
+
+func (f *fakeBackend) CronRuns(ctx context.Context, params protocol.CronRunsParams) (*protocol.CronRunsResult, error) {
+	if f.cronRunsErr != nil {
+		return nil, f.cronRunsErr
+	}
+	return &protocol.CronRunsResult{Entries: f.cronRuns, Total: len(f.cronRuns)}, nil
+}
+
+func (f *fakeBackend) CronAdd(ctx context.Context, params protocol.CronAddParams) (json.RawMessage, error) {
+	p := params
+	f.lastCronAdd = &p
+	return json.RawMessage(`{"id":"new-job"}`), nil
+}
+
+func (f *fakeBackend) CronUpdate(ctx context.Context, params protocol.CronUpdateParams) error {
+	p := params
+	f.lastCronUpdate = &p
+	return nil
+}
+
+func (f *fakeBackend) CronRemove(ctx context.Context, jobID string) error {
+	f.cronRemoved = append(f.cronRemoved, jobID)
+	return nil
+}
+
+func (f *fakeBackend) CronRun(ctx context.Context, jobID string, force bool) error {
+	f.lastCronRunID = jobID
+	f.lastCronRunForce = force
+	return nil
+}
+
 // Compile-time assertions.
 var (
 	_ backend.Backend         = (*fakeBackend)(nil)
@@ -144,4 +196,5 @@ var (
 	_ backend.UsageBackend    = (*fakeBackend)(nil)
 	_ backend.DeviceTokenAuth = (*fakeBackend)(nil)
 	_ backend.APIKeyAuth      = (*fakeBackend)(nil)
+	_ backend.CronBackend     = (*fakeBackend)(nil)
 )

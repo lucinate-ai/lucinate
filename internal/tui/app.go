@@ -21,6 +21,7 @@ const (
 	viewChat
 	viewSessions
 	viewConfig
+	viewCrons
 )
 
 // BackendFactory builds an unconnected backend.Backend for a stored
@@ -83,6 +84,7 @@ type AppModel struct {
 	chatModel         chatModel
 	sessionsModel     sessionsModel
 	configModel       configModel
+	cronsModel        cronsModel
 	backend           backend.Backend
 	activeConn        *config.Connection // the connection backend belongs to; rendered in status bars
 	store             *config.Connections
@@ -200,6 +202,8 @@ func (m AppModel) Actions() []Action {
 		return m.sessionsModel.Actions()
 	case viewConfig:
 		return m.configModel.Actions()
+	case viewCrons:
+		return m.cronsModel.Actions()
 	}
 	return nil
 }
@@ -229,6 +233,10 @@ func (m AppModel) TriggerAction(id string) (AppModel, tea.Cmd) {
 	case viewConfig:
 		var cmd tea.Cmd
 		m.configModel, cmd = m.configModel.TriggerAction(id)
+		return m, cmd
+	case viewCrons:
+		var cmd tea.Cmd
+		m.cronsModel, cmd = m.cronsModel.TriggerAction(id)
 		return m, cmd
 	}
 	return m, nil
@@ -331,6 +339,8 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.sessionsModel.setSize(msg.Width, msg.Height)
 		case viewConfig:
 			m.configModel.setSize(msg.Width, msg.Height)
+		case viewCrons:
+			m.cronsModel.setSize(msg.Width, msg.Height)
 		}
 		return m, nil
 
@@ -413,6 +423,24 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case showCronsMsg:
+		cron, ok := m.backend.(backend.CronBackend)
+		if !ok {
+			// Capability missing — bounce silently. The /crons handler
+			// in commands.go renders the user-facing "not available"
+			// message before dispatching this msg, so reaching this
+			// branch implies a programming error elsewhere.
+			return m, nil
+		}
+		m.cronsModel = newCronsModel(cron, msg.filterAgentID, msg.filterLabel, m.hideActionHints, m.activeConn)
+		m.cronsModel.setSize(m.width, m.height)
+		m.state = viewCrons
+		return m, m.cronsModel.Init()
+
+	case goBackFromCronsMsg:
+		m.state = viewChat
+		return m, nil
+
 	case showSessionsMsg:
 		m.sessionsModel = newSessionsModel(m.backend, msg.agentID, msg.agentName, msg.modelID, msg.mainKey, m.hideActionHints, m.activeConn)
 		m.sessionsModel.setSize(m.width, m.height)
@@ -420,7 +448,11 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		return m, m.sessionsModel.Init()
 
 	case sessionSelectedMsg:
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn))
+		agentID := msg.agentID
+		if agentID == "" {
+			agentID = m.sessionsModel.agentID
+		}
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn))
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -530,6 +562,11 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case viewConfig:
 		var cmd tea.Cmd
 		m.configModel, cmd = m.configModel.Update(msg)
+		return m, cmd
+
+	case viewCrons:
+		var cmd tea.Cmd
+		m.cronsModel, cmd = m.cronsModel.Update(msg)
 		return m, cmd
 	}
 
@@ -683,6 +720,8 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView(m.sessionsModel.View())
 	case viewConfig:
 		v = tea.NewView(m.configModel.View())
+	case viewCrons:
+		v = tea.NewView(m.cronsModel.View())
 	default:
 		v = tea.NewView("")
 	}
