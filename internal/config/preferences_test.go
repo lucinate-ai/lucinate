@@ -43,6 +43,31 @@ func TestSaveAndLoadPreferences(t *testing.T) {
 	}
 }
 
+func TestDefaultPreferences_ConnectTimeout(t *testing.T) {
+	p := DefaultPreferences()
+	if p.ConnectTimeoutSeconds != DefaultConnectTimeoutSeconds {
+		t.Errorf("expected ConnectTimeoutSeconds %d, got %d", DefaultConnectTimeoutSeconds, p.ConnectTimeoutSeconds)
+	}
+}
+
+func TestLoadPreferences_MissingConnectTimeout(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	configDir := filepath.Join(dir, ".lucinate")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"completionBell":true,"historyLimit":50}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := LoadPreferences()
+	if loaded.ConnectTimeoutSeconds != DefaultConnectTimeoutSeconds {
+		t.Errorf("expected default ConnectTimeoutSeconds %d for old config, got %d", DefaultConnectTimeoutSeconds, loaded.ConnectTimeoutSeconds)
+	}
+}
+
 func TestLoadPreferences_MissingHistoryLimit(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)

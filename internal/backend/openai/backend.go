@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -51,9 +52,17 @@ type Options struct {
 	DefaultModel string
 
 	// HTTPClient lets tests inject a fake transport. Defaults to a
-	// http.Client with no timeout (streaming responses are
-	// arbitrarily long; per-call ctx cancels are the bound).
+	// http.Client with no request-level timeout (streaming responses
+	// are arbitrarily long; per-call ctx cancels are the bound). When
+	// nil, ConnectTimeout is applied at the transport level so socket
+	// dial and TLS handshake share the user-configured deadline
+	// without bounding streaming reads.
 	HTTPClient *http.Client
+
+	// ConnectTimeout bounds TCP dial and TLS handshake on the default
+	// HTTP transport. Zero leaves Go's defaults in place. Ignored when
+	// HTTPClient is supplied (tests configure their own transport).
+	ConnectTimeout time.Duration
 }
 
 // Backend implements backend.Backend by translating /v1/chat/completions
@@ -87,7 +96,7 @@ func New(opts Options) (*Backend, error) {
 	}
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		httpClient = &http.Client{Transport: newDefaultTransport(opts.ConnectTimeout)}
 	}
 	return &Backend{
 		opts:   opts,
@@ -603,4 +612,25 @@ func removeFile(dir, name string) error {
 		return err
 	}
 	return nil
+}
+
+// newDefaultTransport clones http.DefaultTransport and overlays
+// connect-time deadlines so a slow or unreachable backend gives up at
+// the user-configured bound. Streaming reads remain unbounded — only
+// dial and TLS handshake are constrained.
+func newDefaultTransport(connectTimeout time.Duration) http.RoundTripper {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultTransport
+	}
+	t := base.Clone()
+	if connectTimeout > 0 {
+		dialer := &net.Dialer{
+			Timeout:   connectTimeout,
+			KeepAlive: 30 * time.Second,
+		}
+		t.DialContext = dialer.DialContext
+		t.TLSHandshakeTimeout = connectTimeout
+	}
+	return t
 }

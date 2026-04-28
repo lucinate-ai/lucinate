@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/a3tai/openclaw-go/gateway"
 	"github.com/a3tai/openclaw-go/identity"
@@ -40,6 +41,26 @@ type Client struct {
 	events chan protocol.Event
 	cfg    *config.Config
 	store  IdentityStore
+
+	// connectTimeout, when non-zero, is forwarded to the gateway SDK
+	// as WithConnectTimeout so the WebSocket handshake gives up at the
+	// user-configured deadline. Applies to both initial Connect and
+	// each Reconnect attempt.
+	connectTimeout time.Duration
+}
+
+// SetConnectTimeout sets the WebSocket connect/handshake deadline used
+// for every (re)dial. A zero or negative value lets the SDK use its
+// own default. Safe to call before any Connect/Reconnect; the value is
+// read on each dial.
+func (c *Client) SetConnectTimeout(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if d <= 0 {
+		c.connectTimeout = 0
+		return
+	}
+	c.connectTimeout = d
 }
 
 // New creates a new client from the given config, using the default
@@ -160,6 +181,10 @@ func (c *Client) buildOptions() ([]gateway.Option, error) {
 
 	deviceToken := c.store.LoadDeviceToken()
 
+	c.mu.RLock()
+	connectTimeout := c.connectTimeout
+	c.mu.RUnlock()
+
 	opts := []gateway.Option{
 		gateway.WithToken(deviceToken),
 		gateway.WithClientInfo(protocol.ClientInfo{
@@ -178,6 +203,9 @@ func (c *Client) buildOptions() ([]gateway.Option, error) {
 			}
 		}),
 		gateway.WithIdentity(id, deviceToken),
+	}
+	if connectTimeout > 0 {
+		opts = append(opts, gateway.WithConnectTimeout(connectTimeout))
 	}
 	return opts, nil
 }

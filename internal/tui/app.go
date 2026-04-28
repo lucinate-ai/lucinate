@@ -536,10 +536,16 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	return m, nil
 }
 
-// connectTimeout matches the legacy CLI bound. Long enough for a slow
-// network handshake but short enough that a wedged DNS resolution gives
-// up within a single attention span.
-const connectTimeout = 15 * time.Second
+// connectTimeoutFromPrefs returns the per-attempt deadline for the
+// initial connect, sourced from the user's config-screen value with a
+// safety floor in case the on-disk prefs are corrupt.
+func (m AppModel) connectTimeoutFromPrefs() time.Duration {
+	secs := m.prefs.ConnectTimeoutSeconds
+	if secs <= 0 {
+		secs = config.DefaultConnectTimeoutSeconds
+	}
+	return time.Duration(secs) * time.Second
+}
 
 // startConnect kicks off a Connect attempt for the given connection
 // without changing view state. The caller (Init) has already set the
@@ -549,12 +555,13 @@ func (m AppModel) startConnect(conn *config.Connection) tea.Cmd {
 		return nil
 	}
 	factory := m.backendFactory
+	timeout := m.connectTimeoutFromPrefs()
 	return func() tea.Msg {
 		b, err := factory(conn)
 		if err != nil {
 			return connectResultMsg{connection: conn, err: err}
 		}
-		return runConnect(conn, b)
+		return runConnect(conn, b, timeout)
 	}
 }
 
@@ -574,8 +581,9 @@ func (m AppModel) beginConnect(conn *config.Connection) (AppModel, tea.Cmd) {
 // retryConnect reuses an existing backend (whose stored token may
 // have been mutated by an auth modal) and re-runs Connect.
 func (m AppModel) retryConnect(conn *config.Connection, b backend.Backend) tea.Cmd {
+	timeout := m.connectTimeoutFromPrefs()
 	return func() tea.Msg {
-		return runConnect(conn, b)
+		return runConnect(conn, b, timeout)
 	}
 }
 
@@ -583,8 +591,8 @@ func (m AppModel) retryConnect(conn *config.Connection, b backend.Backend) tea.C
 // result so handleConnectResult can decide between transitioning to
 // viewSelect (success), opening an auth modal (recoverable), or
 // returning to the picker (unrecoverable).
-func runConnect(conn *config.Connection, b backend.Backend) connectResultMsg {
-	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+func runConnect(conn *config.Connection, b backend.Backend, timeout time.Duration) connectResultMsg {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := b.Connect(ctx); err != nil {
 		switch {

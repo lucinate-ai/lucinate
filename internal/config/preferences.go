@@ -9,17 +9,26 @@ import (
 // DefaultHistoryLimit is the number of messages loaded when restoring a session.
 const DefaultHistoryLimit = 50
 
+// DefaultConnectTimeoutSeconds is the per-attempt deadline for the
+// initial connect and each reconnect attempt. Long enough for a slow
+// network handshake but short enough that a wedged DNS resolution gives
+// up within a single attention span. Slow backends (local LLMs warming
+// up, distant gateways) can override this from the config screen.
+const DefaultConnectTimeoutSeconds = 15
+
 // Preferences holds user-configurable settings persisted to disk.
 type Preferences struct {
-	CompletionBell bool `json:"completionBell"`
-	HistoryLimit   int  `json:"historyLimit"`
+	CompletionBell        bool `json:"completionBell"`
+	HistoryLimit          int  `json:"historyLimit"`
+	ConnectTimeoutSeconds int  `json:"connectTimeoutSeconds"`
 }
 
 // DefaultPreferences returns the default preference values.
 func DefaultPreferences() Preferences {
 	return Preferences{
-		CompletionBell: true,
-		HistoryLimit:   DefaultHistoryLimit,
+		CompletionBell:        true,
+		HistoryLimit:          DefaultHistoryLimit,
+		ConnectTimeoutSeconds: DefaultConnectTimeoutSeconds,
 	}
 }
 
@@ -54,6 +63,9 @@ func LoadPreferences() Preferences {
 	}
 	if p.HistoryLimit <= 0 {
 		p.HistoryLimit = DefaultHistoryLimit
+	}
+	if p.ConnectTimeoutSeconds <= 0 {
+		p.ConnectTimeoutSeconds = DefaultConnectTimeoutSeconds
 	}
 	return p
 }
