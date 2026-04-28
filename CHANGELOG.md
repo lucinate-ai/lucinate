@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.23.0] - 2026-04-28
+### Added
+- feat(tui): add Ollama preset to the connections form
+- feat(tui): expose connections action from the agent picker
+- feat(tui): show the active connection in the agent and session views
+- feat: add OpenAI-compatible backend alongside OpenClaw
+
+### Changed
+- docs: document connections picker
+- docs: document connections, backends, and OpenAI agent storage
+- docs: simplify getting started
+- docs: split per-backend docs and cover audit-flagged test gaps
+- refactor: move skill catalog injection from chat layer into the backends
+- test: add OpenAI integration test suite against host Ollama
+- test: cover connections form and auth modals end-to-end
+
+### Fixed
+- fix(openai): seed IDENTITY.md with the agent's chosen name
+- fix(tui): hide workspace field on the create-agent form for local backends
+- fix: propagate focus changes when tabbing through the new-connection form
+- fix: update startup smoke test for BackendFactory rename
+
 ## [0.22.0] - 2026-04-28
 ### Added
 - feat: add connections picker for managing gateways
