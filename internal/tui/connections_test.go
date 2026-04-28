@@ -167,6 +167,32 @@ func TestConnectionsModel_EnterEmitsPickedMsg(t *testing.T) {
 	}
 }
 
+func TestConnectionsModel_TabAdvancesFocus(t *testing.T) {
+	store := &config.Connections{}
+	m := newConnectionsModel(store, false)
+	m, _ = m.TriggerAction("new-connection")
+
+	// New form starts focused on the type radio (index 0).
+	if m.focusedField != 0 || m.currentField() != formFieldType {
+		t.Fatalf("expected initial focus on type, got field=%v idx=%d", m.currentField(), m.focusedField)
+	}
+
+	// Tab advances through type → name → url; for OpenClaw there is
+	// no model field so the next Tab wraps back to type.
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.currentField() != formFieldName {
+		t.Errorf("after first tab: %v", m.currentField())
+	}
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.currentField() != formFieldURL {
+		t.Errorf("after second tab: %v", m.currentField())
+	}
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.currentField() != formFieldType {
+		t.Errorf("expected wrap back to type, got %v", m.currentField())
+	}
+}
+
 func TestConnectionsModel_EditFlow(t *testing.T) {
 	store := newSeededStore(t)
 	m := newConnectionsModel(store, false)
