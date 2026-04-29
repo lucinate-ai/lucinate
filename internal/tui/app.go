@@ -72,6 +72,15 @@ type AppOptions struct {
 	// view's set of exposed Actions changes. See app.RunOptions for
 	// the full rationale; this is the unexported plumbing.
 	OnActionsChanged func(actions []Action)
+
+	// OnFocusedFieldChanged, if non-nil, is invoked whenever the
+	// active view's focused text-input changes (Tab/Shift-Tab inside a
+	// form, or entry into a new view that lands focus on a different
+	// field). The string is the new field's current value at the
+	// moment of transition, so embedders driving an external input
+	// surface (e.g. a SwiftUI TextField on iOS) can hydrate it to
+	// match. See app.RunOptions for the full rationale.
+	OnFocusedFieldChanged func(value string)
 }
 
 // AppModel is the root bubbletea model.
@@ -104,6 +113,10 @@ type AppModel struct {
 	onActionsChanged func([]Action)
 	lastActions      []Action
 	actionsReported  bool
+
+	onFocusedFieldChanged func(string)
+	lastFocusedFieldKey   string
+	focusedFieldReported  bool
 }
 
 // NewApp creates the root application model.
@@ -128,6 +141,7 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 		managed:              managed,
 		onInputFocusChanged:  opts.OnInputFocusChanged,
 		onActionsChanged:     opts.OnActionsChanged,
+		onFocusedFieldChanged: opts.OnFocusedFieldChanged,
 	}
 
 	switch {
@@ -181,7 +195,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	nextModel, cmd := next.maybeNotifyInputFocus(cmd)
 	next = nextModel.(AppModel)
-	return next.maybeNotifyActions(cmd)
+	nextModel, cmd = next.maybeNotifyActions(cmd)
+	next = nextModel.(AppModel)
+	return next.maybeNotifyFocusedField(cmd)
 }
 
 // Actions returns the discoverable, view-level commands the active
@@ -301,6 +317,51 @@ func (m AppModel) maybeNotifyInputFocus(cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	cb := m.onInputFocusChanged
 	notify := func() tea.Msg {
 		cb(wants)
+		return nil
+	}
+	if cmd == nil {
+		return m, notify
+	}
+	return m, tea.Batch(cmd, notify)
+}
+
+// computeFocusedField returns a pair (identityKey, currentValue) for
+// the active view's focused text input. The identityKey changes only
+// when the FIELD changes (not when its value mutates from a user
+// keystroke), so dedup against it fires the callback on transitions
+// without spamming on every typed character. The currentValue is read
+// at notification time so embedders see the field's pre-fill in Edit
+// mode and the empty initial state on Add.
+func (m AppModel) computeFocusedField() (key, value string) {
+	switch m.state {
+	case viewConnections:
+		return m.connectionsModel.focusedFieldIdentity()
+	}
+	// Other views (chat, agent picker, sessions, config, connecting)
+	// either have no field-level focus or only ever expose one input;
+	// embedders that need single-input hydration can still observe
+	// OnInputFocusChanged for view-level transitions.
+	return "", ""
+}
+
+// maybeNotifyFocusedField invokes OnFocusedFieldChanged when the
+// focused-field identity changes. Mirrors maybeNotifyInputFocus /
+// maybeNotifyActions: the first post-Init call always fires so the
+// embedder sees the starting state, and the callback runs from a
+// tea.Cmd to keep the event loop responsive.
+func (m AppModel) maybeNotifyFocusedField(cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.onFocusedFieldChanged == nil {
+		return m, cmd
+	}
+	key, value := m.computeFocusedField()
+	if m.focusedFieldReported && key == m.lastFocusedFieldKey {
+		return m, cmd
+	}
+	m.lastFocusedFieldKey = key
+	m.focusedFieldReported = true
+	cb := m.onFocusedFieldChanged
+	notify := func() tea.Msg {
+		cb(value)
 		return nil
 	}
 	if cmd == nil {

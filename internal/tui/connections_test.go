@@ -21,6 +21,18 @@ func newSeededStore(t *testing.T) *config.Connections {
 	return store
 }
 
+// focusTypeRadio walks the form's focus order until the type radio
+// is selected. The new-connection form lands focus on Name so plain
+// typing produces visible input; tests that exercise preset cycling
+// (Left/Right is the radio's own affordance, gated on the radio
+// being the active field) shift-tab back to it explicitly.
+func focusTypeRadio(m connectionsModel) connectionsModel {
+	for m.currentField() != formFieldType {
+		m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	}
+	return m
+}
+
 func TestConnectionsModel_RendersEmptyState(t *testing.T) {
 	m := newConnectionsModel(&config.Connections{}, false)
 	out := m.View()
@@ -171,6 +183,7 @@ func TestConnectionsModel_TypeCycleUpdatesPreset(t *testing.T) {
 	store := &config.Connections{}
 	m := newConnectionsModel(store, false)
 	m, _ = m.TriggerAction("new-connection")
+	m = focusTypeRadio(m)
 
 	if m.formPreset != presetOpenClaw {
 		t.Fatalf("expected initial preset OpenClaw, got %v", m.formPreset)
@@ -213,6 +226,7 @@ func TestConnectionsModel_OllamaPresetPersistsAsOpenAI(t *testing.T) {
 	store := &config.Connections{}
 	m := newConnectionsModel(store, false)
 	m, _ = m.TriggerAction("new-connection")
+	m = focusTypeRadio(m)
 
 	// OpenClaw → OpenAI → Ollama.
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -248,6 +262,7 @@ func TestConnectionsModel_OpenAITabOrderIncludesModel(t *testing.T) {
 	store := &config.Connections{}
 	m := newConnectionsModel(store, false)
 	m, _ = m.TriggerAction("new-connection")
+	m = focusTypeRadio(m)
 
 	// Switch to OpenAI so the model field joins the tab order.
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -288,6 +303,7 @@ func TestConnectionsModel_NewOpenAIConnectionPersistsModel(t *testing.T) {
 	store := &config.Connections{}
 	m := newConnectionsModel(store, false)
 	m, _ = m.TriggerAction("new-connection")
+	m = focusTypeRadio(m)
 
 	// Switch type to OpenAI.
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -327,6 +343,7 @@ func TestConnectionsModel_NewFormRendersOnlyRelevantFields(t *testing.T) {
 	}
 
 	// Switch to OpenAI: model field appears, URL relabels.
+	m = focusTypeRadio(m)
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
 	out = m.viewForm()
 	if !strings.Contains(out, "Default model") {
@@ -345,24 +362,28 @@ func TestConnectionsModel_TabAdvancesFocus(t *testing.T) {
 	m := newConnectionsModel(store, false)
 	m, _ = m.TriggerAction("new-connection")
 
-	// New form starts focused on the type radio (index 0).
-	if m.focusedField != 0 || m.currentField() != formFieldType {
-		t.Fatalf("expected initial focus on type, got field=%v idx=%d", m.currentField(), m.focusedField)
+	// New form lands focus on Name so the host's first keystroke
+	// produces visible input. The type radio is at index 0 of
+	// formFields() but accepting plain characters there is a no-op
+	// (updateForm has no case for formFieldType, and left/right are
+	// the radio's own affordance), so initial focus skips past it.
+	if m.currentField() != formFieldName {
+		t.Fatalf("expected initial focus on name, got field=%v idx=%d", m.currentField(), m.focusedField)
 	}
 
-	// Tab advances through type → name → url; for OpenClaw there is
-	// no model field so the next Tab wraps back to type.
+	// Tab advances through name → url → type and wraps; for
+	// OpenClaw there is no model field.
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.currentField() != formFieldName {
+	if m.currentField() != formFieldURL {
 		t.Errorf("after first tab: %v", m.currentField())
 	}
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.currentField() != formFieldURL {
+	if m.currentField() != formFieldType {
 		t.Errorf("after second tab: %v", m.currentField())
 	}
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.currentField() != formFieldType {
-		t.Errorf("expected wrap back to type, got %v", m.currentField())
+	if m.currentField() != formFieldName {
+		t.Errorf("expected wrap back to name, got %v", m.currentField())
 	}
 }
 

@@ -173,12 +173,13 @@ func TestAppModel_TabAdvancesFocusInConnectionsForm(t *testing.T) {
 	if m.connectionsModel.subState != subStateConnForm {
 		t.Fatalf("expected form sub-state, got %v", m.connectionsModel.subState)
 	}
-	if got := m.connectionsModel.currentField(); got != formFieldType {
-		t.Fatalf("expected initial focus on type radio, got %v", got)
+	if got := m.connectionsModel.currentField(); got != formFieldName {
+		t.Fatalf("expected initial focus on name input, got %v", got)
 	}
 
-	// One Tab advances to name, two to URL — through AppModel.Update.
-	for _, want := range []formField{formFieldName, formFieldURL} {
+	// One Tab advances to URL, two to the type radio — through
+	// AppModel.Update.
+	for _, want := range []formField{formFieldURL, formFieldType} {
 		updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 		m = updated.(AppModel)
 		if got := m.connectionsModel.currentField(); got != want {

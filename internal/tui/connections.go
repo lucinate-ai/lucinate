@@ -305,7 +305,6 @@ func (m *connectionsModel) enterFormForNew() {
 	m.editingID = ""
 	m.formErr = ""
 	m.formPreset = presetOpenClaw
-	m.focusedField = 0
 
 	m.nameInput = textinput.New()
 	m.nameInput.Placeholder = "home pi"
@@ -319,6 +318,14 @@ func (m *connectionsModel) enterFormForNew() {
 	m.modelInput.CharLimit = 128
 
 	m.applyPresetDefaults(presetOpenClaw)
+
+	// Start focus on Name. The type radio sits at index 0 of
+	// formFields() in Add mode, but landing focus there silently
+	// swallows typed characters (updateForm has no case for
+	// formFieldType — left/right cycle the radio in handleFormKey,
+	// while Bubbles textinputs aren't reached). Users who want to
+	// switch protocol can shift-tab back to the radio.
+	m.focusedField = m.indexOfField(formFieldName)
 }
 
 func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
@@ -402,6 +409,48 @@ func (m connectionsModel) currentField() formField {
 		return formFieldName
 	}
 	return fields[m.focusedField]
+}
+
+// indexOfField returns the focus-order position of the given field
+// in the current form layout, or 0 if the field is not present.
+// formFields() varies by mode (Add includes the type radio; Edit
+// drops it) and by preset (model is OpenAI-only), so callers that
+// want to land focus on a named field compute its index this way.
+func (m connectionsModel) indexOfField(target formField) int {
+	for i, f := range m.formFields() {
+		if f == target {
+			return i
+		}
+	}
+	return 0
+}
+
+// focusedFieldIdentity returns a (key, value) pair identifying the
+// active form input. The key changes only when the focused field
+// itself changes (e.g. Tab from name → url), not when its value
+// mutates from typing — host hydration of an external input surface
+// should track field transitions, not keystrokes. The value is the
+// field's current contents at the moment of the call. When the form
+// isn't open or the focused position is on the type radio (which has
+// no string value), key and value are empty so the host clears its
+// surface.
+func (m connectionsModel) focusedFieldIdentity() (string, string) {
+	if m.subState != subStateConnForm {
+		return "", ""
+	}
+	scope := "connections.add"
+	if m.editingID != "" {
+		scope = "connections.edit." + m.editingID
+	}
+	switch m.currentField() {
+	case formFieldName:
+		return scope + ".name", m.nameInput.Value()
+	case formFieldURL:
+		return scope + ".url", m.urlInput.Value()
+	case formFieldModel:
+		return scope + ".model", m.modelInput.Value()
+	}
+	return "", ""
 }
 
 func (m connectionsModel) handleFormKey(msg tea.KeyPressMsg) (connectionsModel, tea.Cmd) {

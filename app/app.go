@@ -172,6 +172,22 @@ type RunOptions struct {
 	// accordingly. The CLI leaves it nil — its inline help is the
 	// surface that matters there.
 	OnActionsChanged func(actions []Action)
+
+	// OnFocusedFieldChanged, if non-nil, is invoked whenever the
+	// active view's focused text-input changes — Tab/Shift-Tab inside
+	// a multi-field form, or entry into a view that lands focus on a
+	// different field. The string is the new field's current value
+	// at the moment of transition (empty for a fresh field; pre-fill
+	// in Edit mode), so embedders driving an external input surface
+	// (a SwiftUI TextField on iOS, say) can hydrate it to match the
+	// TUI state without inventing their own per-field bookkeeping.
+	//
+	// The callback does not fire on every keystroke — only on field
+	// transitions, dedup'd by field identity — so embedders are safe
+	// to use it as a source of truth without rate-limiting. It runs
+	// from a tea.Cmd goroutine, so embedders that touch UI on a main
+	// thread should trampoline accordingly. The CLI leaves it nil.
+	OnFocusedFieldChanged func(value string)
 }
 
 // Program wraps a Bubble Tea program with the lucinate model and the
@@ -252,15 +268,16 @@ func New(opts RunOptions) (*Program, error) {
 	}
 
 	tuiOpts := tui.AppOptions{
-		HideInputArea:        opts.HideInputArea,
-		HideActionHints:      opts.HideActionHints,
-		DisableMouse:         opts.DisableMouse,
-		OnInputFocusChanged:  opts.OnInputFocusChanged,
-		OnActionsChanged:     opts.OnActionsChanged,
-		Store:                opts.Store,
-		Initial:              opts.Initial,
-		BackendFactory:       opts.BackendFactory,
-		OnConnectionsChanged: opts.OnConnectionsChanged,
+		HideInputArea:         opts.HideInputArea,
+		HideActionHints:       opts.HideActionHints,
+		DisableMouse:          opts.DisableMouse,
+		OnInputFocusChanged:   opts.OnInputFocusChanged,
+		OnActionsChanged:      opts.OnActionsChanged,
+		OnFocusedFieldChanged: opts.OnFocusedFieldChanged,
+		Store:                 opts.Store,
+		Initial:               opts.Initial,
+		BackendFactory:        opts.BackendFactory,
+		OnConnectionsChanged:  opts.OnConnectionsChanged,
 	}
 	if mode == modeManaged {
 		// Blocking send is fine: OnBackendChanged is invoked from a
