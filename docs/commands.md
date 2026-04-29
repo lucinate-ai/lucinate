@@ -18,6 +18,8 @@ Unrecognised slash commands fall through to a skill-name lookup. If no skill mat
 | `/compact` | Compact the session context — see [sessions.md](sessions.md#compact-and-reset) — **OpenClaw only** |
 | `/config` | Open the preferences view by emitting `showConfigMsg{}` |
 | `/connections` | Open the connections picker mid-session, tearing down the active backend — see [connections.md](connections.md) |
+| `/crons` | Open the cron browser filtered to the current agent — see [crons.md](crons.md) — **OpenClaw only** |
+| `/crons all` | Open the cron browser unfiltered (jobs across all agents) — **OpenClaw only** |
 | `/exit`, `/quit` | Exit via `tea.Quit` |
 | `/help`, `/commands` | Print static help text; appends skill count if any are loaded |
 | `/model` | List available models |

@@ -1,0 +1,85 @@
+# Cron jobs
+
+The cron browser (`internal/tui/crons.go`) lets users list, inspect, run, edit, create, and delete the gateway's scheduled jobs without leaving the TUI. Cron is gateway-side scheduling, not a lucinate concept — only backends that implement `backend.CronBackend` expose the view.
+
+## Entry points
+
+`/crons` and `/crons all` are the only entry points. The chat view's slash-command handler (`internal/tui/commands.go`) type-asserts the active backend against `backend.CronBackend`:
+
+- Assertion fails → `"/crons is not available on this connection"` system message, no view transition (same pattern as `/status`, `/compact`).
+- Assertion succeeds → `showCronsMsg{filterAgentID, filterLabel}` is emitted. With `/crons` the filter is the chat's current agent; `/crons all` clears the filter so jobs across every agent are listed.
+
+## Capability surface
+
+`backend.CronBackend` (`internal/backend/backend.go`) wraps six gateway RPCs:
+
+| Method | Wire call | Used for |
+|---|---|---|
+| `CronsList` | `cron.list` | List substate |
+| `CronRuns` | `cron.runs` | Run history in detail substate |
+| `CronAdd` | `cron.add` | Create form submit |
+| `CronUpdate` | `cron.update` (typed) | Toggle enable / disable |
+| `CronUpdateRaw` | `cron.update` (raw map) | Edit form submit — see [Raw-patch edit semantics](#raw-patch-edit-semantics) |
+| `CronRemove` | `cron.remove` | Confirm-delete substate |
+| `CronRun` | `cron.run` (`mode=force`) | Manual run-now |
+
+Capability is also reported as `Capabilities.Cron` so embedders can hide the entry up-front.
+
+## Substates
+
+`cronsModel` is a single view with four substates:
+
+| Substate | Purpose |
+|---|---|
+| `cronSubList` | Default — paginated, filtered job list |
+| `cronSubDetail` | Drill-down into a selected job + run history |
+| `cronSubForm` | Create or edit form |
+| `cronSubConfirmDelete` | y/n prompt before `CronRemove` fires |
+
+Each substate exposes its own discoverable actions through `Actions()`; `TriggerAction(id)` is the single dispatcher both keystrokes and embedder-issued `TriggerActionMsg`s flow through.
+
+## List substate
+
+The list view loads on `Init()` via `loadJobs()`, which calls `CronsList(Enabled: "all", SortBy: "nextRunAtMs", SortDir: "asc")`. The full slice is cached on the model so the agent-filter toggle (`a` key) can re-apply locally without a round-trip — server-side filtering is not exposed in `CronListParams`. Each row renders:
+
+- **Line 1**: bold name + dim relative-time chip (`in 8h`, `due`, `—`).
+- **Line 2**: chips for session target (`main`/`isolated`), wake mode (`now`/`heartbeat`), agent ID, and a status badge (`ok`/`error`/`disabled`/`idle`).
+
+`enter` opens detail; `r` refreshes; `n` opens the create form; `esc` emits `goBackFromCronsMsg{}` to return to chat.
+
+## Detail substate
+
+`enter` on the list emits a `loadRuns(jobID)` command alongside the substate transition; `cronRunsLoadedMsg` populates the run-history table (most recent 10 entries, formatted by `formatRunLogEntry`). Rendered fields:
+
+- Schedule (cron expression + timezone, or fallback for `at`/`every` kinds)
+- Description, Agent, Model (from `payload.Model`), Session target, Wake mode
+- Delivery (always shown — `none`, `announce (channel)`, or `webhook → URL`)
+- Next run, Last run (with status), Payload body
+- Run history table
+
+Actions: `R` run-now, `t` toggle enable, `e` edit, `x` delete (→ confirm substate), `T` open the most recent run's session in chat (emits `sessionSelectedMsg{sessionKey, agentID}`), `r` refresh, `esc` back to list.
+
+## Form substate
+
+The create and edit form share `cronForm` and the `cronFormField` enum (12 fields, tab-ordered). To avoid a TUI form modelling every union the gateway protocol exposes (`CronSchedule.Kind` ∈ `at`/`every`/`cron`; `CronPayload.Kind` ∈ `systemEvent`/`agentTurn`), the form is **constrained to `cron` schedules and `agentTurn` payloads**. Editing a job whose existing kind is anything else loads the form in a refused state:
+
+> Edit not supported for schedule kind "every". Use the openclaw CLI.
+
+The save path is suppressed in this state — we surface the brittleness rather than silently round-trip a truncated representation.
+
+Tab/Shift+Tab navigates fields. Space toggles the cycle/checkbox controls (`sessionTarget`, `wakeMode`, `deliveryMode`, `enabled`). Inside the payload `textarea`, Enter inserts a newline; Ctrl+S (or Alt+Enter) saves from anywhere; Esc cancels and returns to whichever substate opened the form.
+
+### Raw-patch edit semantics
+
+The toggle action (`t` on detail) and the create-form submit use the typed `protocol.CronUpdateParams`/`CronAddParams`. The **edit-form submit goes through `CronUpdateRaw(jobID, patch map[string]any)` instead**, because every string field on `protocol.CronJobPatch` and `CronPayload` is tagged `json:",omitempty"` — once Go marshals an empty value, the field is dropped from the JSON, and the gateway can't distinguish "user cleared this field" from "user didn't touch this field" (it keeps the prior value). The map-based path emits empty strings verbatim (see `buildJobPatchMap`) so clearing model, description, or delivery actually persists. Toggle stays on the typed path because it only mutates a `*bool`, which doesn't have the omitempty problem.
+
+## Confirm-delete substate
+
+`x` on detail transitions to a y/n prompt. `y` calls `CronRemove(jobID)` and refreshes the list (returning to `cronSubList`). `n` or `esc` returns to detail without action.
+
+## Out of scope
+
+- Server-side cron filtering by agent (would need `agentId` added to `CronListParams` upstream).
+- Edit support for `at`/`every` schedules and `systemEvent` payloads.
+- Pagination of run history beyond the most recent 10 entries.
+- Live updates via cron-related gateway events — there is no streaming for cron state changes today, so the user must press `r` to refresh.

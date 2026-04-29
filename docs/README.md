@@ -12,6 +12,7 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 | [authentication.md](authentication.md) | Device pairing, Ed25519 identity, gateway connection and token lifecycle |
 | [agents.md](agents.md) | Agent picker, auto-selection, agent creation |
 | [sessions.md](sessions.md) | Session lifecycle, session browser, compact/reset, message queueing |
+| [crons.md](crons.md) | Gateway cron browser: list/detail/form substates, capability gating, raw-patch edit semantics |
 | [commands.md](commands.md) | Slash command dispatch, all built-in commands, tab completion, confirmation pattern |
 | [shell-execution.md](shell-execution.md) | `!` local exec and `!!` remote exec with two-phase approval |
 | [skills.md](skills.md) | Skill file format, discovery, catalog injection, activation |

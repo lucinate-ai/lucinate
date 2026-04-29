@@ -40,7 +40,7 @@ Legacy mode (`AppOptions.Backend != nil`, no `Store`) is for native-platform emb
 
 ## Capability negotiation
 
-`backend.Backend.Capabilities()` reports a `Capabilities` struct (`internal/backend/backend.go`); the TUI type-asserts against optional sub-interfaces (`StatusBackend`, `ExecBackend`, `CompactBackend`, `ThinkingBackend`, `UsageBackend`, `DeviceTokenAuth`, `APIKeyAuth`) at the relevant call sites. OpenClaw implements all of them. OpenAI implements only `APIKeyAuth` — backend-only commands (`/status`, `/compact`, `/think`, `/stats`, `!!`) render a "not available on this connection" system message instead of erroring.
+`backend.Backend.Capabilities()` reports a `Capabilities` struct (`internal/backend/backend.go`); the TUI type-asserts against optional sub-interfaces (`StatusBackend`, `ExecBackend`, `CompactBackend`, `ThinkingBackend`, `UsageBackend`, `CronBackend`, `DeviceTokenAuth`, `APIKeyAuth`) at the relevant call sites. OpenClaw implements all of them. OpenAI implements only `APIKeyAuth` — backend-only commands (`/status`, `/compact`, `/think`, `/stats`, `/crons`, `!!`) render a "not available on this connection" system message instead of erroring.
 
 ## Auth-recovery modals
 
