@@ -256,7 +256,8 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case historyLoadedMsg:
 		if msg.err == nil && len(msg.messages) > 0 {
-			hist := append(msg.messages, chatMessage{role: "separator"})
+			lastTs := lastTimestampMs(msg.messages)
+			hist := append(msg.messages, chatMessage{role: "separator", timestampMs: lastTs})
 			m.messages = append(hist, m.messages...)
 			m.updateViewport()
 		}

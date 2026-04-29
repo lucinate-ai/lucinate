@@ -402,8 +402,9 @@ func (b *Backend) ChatHistory(ctx context.Context, sessionKey string, limit int)
 		Text string `json:"text"`
 	}
 	type historyMsg struct {
-		Role    string  `json:"role"`
-		Content []block `json:"content"`
+		Role      string  `json:"role"`
+		Content   []block `json:"content"`
+		Timestamp int64   `json:"timestamp,omitempty"`
 	}
 	out := struct {
 		Messages []historyMsg `json:"messages"`
@@ -412,9 +413,14 @@ func (b *Backend) ChatHistory(ctx context.Context, sessionKey string, limit int)
 		if msg.Role == "system" {
 			continue
 		}
+		var ts int64
+		if !msg.Time.IsZero() {
+			ts = msg.Time.UnixMilli()
+		}
 		out.Messages = append(out.Messages, historyMsg{
-			Role:    msg.Role,
-			Content: []block{{Type: "text", Text: msg.Content}},
+			Role:      msg.Role,
+			Content:   []block{{Type: "text", Text: msg.Content}},
+			Timestamp: ts,
 		})
 	}
 	return json.Marshal(out)

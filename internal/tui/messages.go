@@ -17,7 +17,8 @@ type chatMessage struct {
 	streaming     bool
 	awaitingDelta bool // true for the pre-response spinner placeholder, before any delta arrives
 	errMsg        string
-	rendered      bool // true if content has been glamour-rendered (contains ANSI codes)
+	rendered      bool  // true if content has been glamour-rendered (contains ANSI codes)
+	timestampMs   int64 // unix millis; only used by "separator" rows to label resume time
 }
 
 // sessionStats holds token usage stats for display.

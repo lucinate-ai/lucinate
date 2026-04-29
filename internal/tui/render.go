@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/olekukonko/tablewriter"
@@ -18,8 +19,7 @@ func (m *chatModel) updateViewport() {
 		}
 		switch msg.role {
 		case "separator":
-			sep := strings.Repeat("─", contentWidth)
-			b.WriteString(statusStyle.Render(sep))
+			b.WriteString(statusStyle.Render(buildSeparator(contentWidth, formatSeparatorLabel(msg.timestampMs, time.Now()))))
 
 		case "user":
 			prefixIndent, wrapWidth := m.writePrefix(&b, userPrefixStyle, "You")
@@ -285,6 +285,60 @@ func stripLeadingSpacesPerLine(s string) string {
 		lines[i] = sb.String()
 	}
 	return strings.Join(lines, "\n")
+}
+
+// lastTimestampMs returns the timestamp of the last message in msgs that
+// carries one, or 0 if none do. Used to label the resume-point separator.
+func lastTimestampMs(msgs []chatMessage) int64 {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].timestampMs > 0 {
+			return msgs[i].timestampMs
+		}
+	}
+	return 0
+}
+
+// formatSeparatorLabel renders a timestamp suffix for the history separator.
+// Returns "" when the timestamp is missing so older backends fall back to a
+// plain rule.
+func formatSeparatorLabel(ms int64, now time.Time) string {
+	if ms <= 0 {
+		return ""
+	}
+	t := time.UnixMilli(ms).In(now.Location())
+	if sameYMD(t, now) {
+		return t.Format("15:04")
+	}
+	if sameYMD(t, now.AddDate(0, 0, -1)) {
+		return "Yesterday " + t.Format("15:04")
+	}
+	if t.Year() == now.Year() {
+		return t.Format("2 Jan 15:04")
+	}
+	return t.Format("2 Jan 2006 15:04")
+}
+
+func sameYMD(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
+}
+
+// buildSeparator returns a horizontal rule of the given width with an optional
+// centred label. The total visible width always equals width.
+func buildSeparator(width int, label string) string {
+	if width <= 0 {
+		return ""
+	}
+	if label == "" {
+		return strings.Repeat("─", width)
+	}
+	decorated := " " + label + " "
+	if len(decorated) >= width {
+		return strings.Repeat("─", width)
+	}
+	pad := (width - len(decorated)) / 2
+	return strings.Repeat("─", pad) + decorated + strings.Repeat("─", width-pad-len(decorated))
 }
 
 // isTableLine returns true if the line appears to be part of a rendered table.

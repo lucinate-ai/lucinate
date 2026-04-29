@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	"github.com/charmbracelet/x/ansi"
@@ -323,6 +324,71 @@ func TestStripLeadingSpacesPerLine(t *testing.T) {
 				t.Errorf("stripLeadingSpacesPerLine(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFormatSeparatorLabel(t *testing.T) {
+	now := time.Date(2026, 4, 29, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		ts   time.Time
+		zero bool // pass ms=0 instead of ts
+		want string
+	}{
+		{"missing", time.Time{}, true, ""},
+		{"today", time.Date(2026, 4, 29, 8, 30, 0, 0, time.UTC), false, "08:30"},
+		{"yesterday", time.Date(2026, 4, 28, 22, 5, 0, 0, time.UTC), false, "Yesterday 22:05"},
+		{"earlier_this_year", time.Date(2026, 1, 12, 14, 0, 0, 0, time.UTC), false, "12 Jan 14:00"},
+		{"prior_year", time.Date(2025, 12, 31, 23, 59, 0, 0, time.UTC), false, "31 Dec 2025 23:59"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var ms int64
+			if !tt.zero {
+				ms = tt.ts.UnixMilli()
+			}
+			got := formatSeparatorLabel(ms, now)
+			if got != tt.want {
+				t.Errorf("formatSeparatorLabel(%s) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildSeparator(t *testing.T) {
+	tests := []struct {
+		name  string
+		width int
+		label string
+		want  string
+	}{
+		{"plain", 10, "", "──────────"},
+		{"centred_label", 13, "08:30", "─── 08:30 ───"},
+		{"odd_padding", 12, "08:30", "── 08:30 ───"},
+		{"label_too_wide", 5, "08:30", "─────"},
+		{"zero_width", 0, "08:30", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildSeparator(tt.width, tt.label)
+			if got != tt.want {
+				t.Errorf("buildSeparator(%d, %q) = %q, want %q", tt.width, tt.label, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLastTimestampMs(t *testing.T) {
+	msgs := []chatMessage{
+		{role: "user", timestampMs: 100},
+		{role: "assistant", timestampMs: 200},
+		{role: "user"},
+	}
+	if got := lastTimestampMs(msgs); got != 200 {
+		t.Errorf("lastTimestampMs() = %d, want 200", got)
+	}
+	if got := lastTimestampMs(nil); got != 0 {
+		t.Errorf("lastTimestampMs(nil) = %d, want 0", got)
 	}
 }
 

@@ -17,8 +17,9 @@ type historyResponse struct {
 }
 
 type historyMessage struct {
-	Role    string             `json:"role"`
-	Content []chatContentBlock `json:"content"`
+	Role      string             `json:"role"`
+	Content   []chatContentBlock `json:"content"`
+	Timestamp int64              `json:"timestamp,omitempty"` // unix millis, when present
 }
 
 func (m chatModel) loadHistory() tea.Cmd {
@@ -88,7 +89,7 @@ func fetchHistory(b backend.Backend, sessionKey string, renderer *glamour.TermRe
 				rendered = true
 			}
 		}
-		msgs = append(msgs, chatMessage{role: role, content: text, raw: raw, thinking: thinking, rendered: rendered})
+		msgs = append(msgs, chatMessage{role: role, content: text, raw: raw, thinking: thinking, rendered: rendered, timestampMs: hm.Timestamp})
 	}
 	return msgs, nil
 }
