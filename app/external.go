@@ -6,6 +6,7 @@ import (
 
 	"github.com/a3tai/openclaw-go/identity"
 
+	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/config"
 	"github.com/lucinate-ai/lucinate/internal/tui"
@@ -29,6 +30,57 @@ type Identity = identity.Identity
 // obtain one from Connect and pass it to RunOptions.Client. The only method
 // they need to call directly is Close.
 type Client = client.Client
+
+// Backend is the chat-service abstraction the TUI consumes. Values of
+// this type are produced by a BackendFactory and passed to
+// RunOptions.Backend (single-connection mode) or returned from the
+// factory the TUI calls itself (managed mode).
+type Backend = backend.Backend
+
+// Connection is a saved chat-service target. The picker in managed
+// mode adds, edits, and deletes Connections in the surrounding store.
+type Connection = config.Connection
+
+// Connections is the on-disk persistence shape for the connection
+// store: a list of Connection plus the ID to auto-pick at startup.
+type Connections = config.Connections
+
+// ConnectionType identifies the protocol/backend a Connection points
+// at. Use the ConnTypeOpenClaw / ConnTypeOpenAI constants.
+type ConnectionType = config.ConnectionType
+
+// ConnectionFields is the input shape Connections.Add and Update take.
+// Only the fields relevant to the chosen Type need to be populated.
+type ConnectionFields = config.ConnectionFields
+
+// EntryConnection is the resolved startup decision returned from
+// ResolveEntryConnection: either an explicit Connection to use, or a
+// directive to drop the user into the picker.
+type EntryConnection = config.EntryConnection
+
+// Connection-type constants re-exported so embedders can build
+// Connection values without importing internal/config.
+const (
+	ConnTypeOpenClaw = config.ConnTypeOpenClaw
+	ConnTypeOpenAI   = config.ConnTypeOpenAI
+)
+
+// LoadConnections reads the connection store from
+// ~/.lucinate/connections.json, returning an empty store on first run
+// or when the file is missing or unreadable.
+func LoadConnections() Connections { return config.LoadConnections() }
+
+// SaveConnections writes the connection store to disk atomically. The
+// CLI calls this from the OnConnectionsChanged callback so a successful
+// connect persists; embedders that own persistence elsewhere can skip
+// it.
+func SaveConnections(c Connections) error { return config.SaveConnections(c) }
+
+// ResolveEntryConnection runs the startup decision tree (env vars,
+// stored DefaultID, single-entry auto-pick, picker fallback) against
+// the on-disk store. Embedders that don't honour env vars and want
+// pure on-disk behaviour can call LoadConnections directly.
+func ResolveEntryConnection() EntryConnection { return config.ResolveEntryConnection() }
 
 // Connect builds a gateway client for the given URL, hooks it up to the
 // supplied IdentityStore, and performs the connect handshake. The returned
