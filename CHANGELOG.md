@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.24.0] - 2026-04-29
+### Added
+- feat(tui): list, inspect, and manage gateway cron jobs
+- feat: make connect timeout configurable for slow backends
+
 ## [0.23.0] - 2026-04-28
 ### Added
 - feat(tui): add Ollama preset to the connections form
