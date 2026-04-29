@@ -432,6 +432,62 @@ func (c *Client) StoreToken(token string) error {
 	return c.store.SaveDeviceToken(token)
 }
 
+// CronsList lists cron jobs on the gateway.
+func (c *Client) CronsList(ctx context.Context, params protocol.CronListParams) (*protocol.CronListResult, error) {
+	return c.currentGW().CronList(ctx, params)
+}
+
+// CronRuns retrieves the run history for a cron job (or all jobs).
+func (c *Client) CronRuns(ctx context.Context, params protocol.CronRunsParams) (*protocol.CronRunsResult, error) {
+	return c.currentGW().CronRuns(ctx, params)
+}
+
+// CronAdd creates a new cron job.
+func (c *Client) CronAdd(ctx context.Context, params protocol.CronAddParams) (json.RawMessage, error) {
+	return c.currentGW().CronAdd(ctx, params)
+}
+
+// CronUpdate updates an existing cron job.
+func (c *Client) CronUpdate(ctx context.Context, params protocol.CronUpdateParams) error {
+	return c.currentGW().CronUpdate(ctx, params)
+}
+
+// CronUpdateRaw updates an existing cron job using a raw patch map.
+// This bypasses the protocol.CronJobPatch struct so callers can express
+// "explicitly clear this string field" — the typed struct uses
+// `omitempty` on string fields, which makes an empty value
+// indistinguishable from "field not provided" once it hits the wire.
+// The form-edit flow uses this so clearing the model or description
+// fields actually persists.
+func (c *Client) CronUpdateRaw(ctx context.Context, jobID string, patch map[string]any) error {
+	resp, err := c.currentGW().Send(ctx, string(protocol.MethodCronUpdate), map[string]any{
+		"id":    jobID,
+		"patch": patch,
+	})
+	if err != nil {
+		return fmt.Errorf("cron update: %w", err)
+	}
+	if !resp.OK && resp.Error != nil {
+		return fmt.Errorf("cron update: %s: %s", resp.Error.Code, resp.Error.Message)
+	}
+	return nil
+}
+
+// CronRemove deletes a cron job.
+func (c *Client) CronRemove(ctx context.Context, jobID string) error {
+	return c.currentGW().CronRemove(ctx, protocol.CronRemoveParams{ID: jobID})
+}
+
+// CronRun manually triggers a cron job. When force is true, the job runs
+// regardless of its schedule; otherwise it only runs if currently due.
+func (c *Client) CronRun(ctx context.Context, jobID string, force bool) error {
+	mode := "due"
+	if force {
+		mode = "force"
+	}
+	return c.currentGW().CronRun(ctx, protocol.CronRunParams{ID: jobID, Mode: mode})
+}
+
 // GW returns the underlying gateway client (for direct RPC access).
 // May return nil if no connection has been established yet, or briefly
 // during a reconnect cycle.

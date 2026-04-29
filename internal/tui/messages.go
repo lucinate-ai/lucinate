@@ -124,9 +124,14 @@ type showSessionsMsg struct {
 	mainKey   string
 }
 
-// sessionSelectedMsg is returned when the user picks a session to restore.
+// sessionSelectedMsg is returned when the user picks a session to
+// restore. Most senders (the session browser) leave agentID empty and
+// the AppModel falls back to the session view's known agentID;
+// crossviews like the cron browser populate it explicitly so the chat
+// model is constructed with the right agent context.
 type sessionSelectedMsg struct {
 	sessionKey string
+	agentID    string
 	agentName  string
 	modelID    string
 }
@@ -245,4 +250,49 @@ type ConnStateMsg struct {
 	Status  client.ConnStatus
 	Attempt int
 	Err     error
+}
+
+// showCronsMsg signals the AppModel to switch to the cron browser.
+// filterAgentID empty means "show jobs across all agents".
+type showCronsMsg struct {
+	filterAgentID string
+	filterLabel   string // "all agents" or the agent's name; rendered in the header
+}
+
+// goBackFromCronsMsg signals the AppModel to return from the cron view.
+type goBackFromCronsMsg struct{}
+
+// cronsLoadedMsg is returned when the cron job list is fetched.
+type cronsLoadedMsg struct {
+	jobs []protocol.CronJob
+	err  error
+}
+
+// cronRunsLoadedMsg is returned when run history for a specific job is fetched.
+type cronRunsLoadedMsg struct {
+	jobID   string
+	entries []protocol.CronRunLogEntry
+	err     error
+}
+
+// cronJobToggledMsg is returned after flipping a job's enabled flag.
+type cronJobToggledMsg struct {
+	jobID   string
+	enabled bool
+	err     error
+}
+
+// cronJobRanMsg is returned after a manual run-now request completes.
+type cronJobRanMsg struct{ err error }
+
+// cronJobSavedMsg is returned after creating or updating a cron job.
+type cronJobSavedMsg struct {
+	jobID string
+	err   error
+}
+
+// cronJobRemovedMsg is returned after deleting a cron job.
+type cronJobRemovedMsg struct {
+	jobID string
+	err   error
 }

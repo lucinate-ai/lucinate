@@ -15,6 +15,7 @@ See [connections.md](connections.md) for the cross-backend connection lifecycle 
 | `SessionCompact`  | `/compact`                                |
 | `Thinking`        | `/think`                                  |
 | `SessionUsage`    | `/stats`                                  |
+| `Cron`            | `/crons` — see [crons.md](crons.md)       |
 | `AuthRecovery`    | `AuthRecoveryDeviceToken` — see below     |
 | `AgentWorkspace`  | Workspace field on the create-agent form  |
 
@@ -41,4 +42,4 @@ The check-and-mark is mutex-guarded so two concurrent sends on the same session 
 
 ## Pass-through methods
 
-`SessionsList`, `CreateSession`, `SessionDelete`, `ChatSend`, `ChatAbort`, `ChatHistory`, `ModelsList`, `SessionPatchModel`, and the capability-specific methods (`GatewayHealth`, `ExecRequest`, `ExecResolve`, `SessionCompact`, `SessionPatchThinking`, `SessionUsage`) all forward to the underlying client unchanged. The adapter exists to satisfy the `backend.Backend` interface, not to add behaviour.
+`SessionsList`, `CreateSession`, `SessionDelete`, `ChatSend`, `ChatAbort`, `ChatHistory`, `ModelsList`, `SessionPatchModel`, and the capability-specific methods (`GatewayHealth`, `ExecRequest`, `ExecResolve`, `SessionCompact`, `SessionPatchThinking`, `SessionUsage`, `CronsList`, `CronRuns`, `CronAdd`, `CronUpdate`, `CronUpdateRaw`, `CronRemove`, `CronRun`) all forward to the underlying client unchanged. The adapter exists to satisfy the `backend.Backend` interface, not to add behaviour.

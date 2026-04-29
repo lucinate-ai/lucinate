@@ -132,6 +132,7 @@ Type these in the chat input. Tab autocompletes partial commands.
 | `/compact` | Compact session context (with confirmation) — OpenClaw only |
 | `/config` | Open preferences |
 | `/connections` | Switch backend connection |
+| `/crons` | List and manage gateway cron jobs (default: filter by current agent; `/crons all` shows global) — OpenClaw only |
 | `/model` | List available models |
 | `/model <name>` | Switch model (fuzzy match) |
 | `/reset` | Delete session and start fresh (with confirmation) |
