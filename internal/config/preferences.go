@@ -35,11 +35,10 @@ func DefaultPreferences() Preferences {
 // PreferencesPath returns the path to the preferences file,
 // creating the parent directory if necessary.
 func PreferencesPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := DataDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".lucinate")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}

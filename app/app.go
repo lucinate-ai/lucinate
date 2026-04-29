@@ -179,8 +179,9 @@ type RunOptions struct {
 	// different field. The string is the new field's current value
 	// at the moment of transition (empty for a fresh field; pre-fill
 	// in Edit mode), so embedders driving an external input surface
-	// (a SwiftUI TextField on iOS, say) can hydrate it to match the
-	// TUI state without inventing their own per-field bookkeeping.
+	// (a native-platform host's text field, say) can hydrate it to
+	// match the TUI state without inventing their own per-field
+	// bookkeeping.
 	//
 	// The callback does not fire on every keystroke — only on field
 	// transitions, dedup'd by field identity — so embedders are safe

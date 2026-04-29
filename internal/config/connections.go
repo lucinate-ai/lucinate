@@ -65,13 +65,13 @@ type Connections struct {
 
 // ConnectionsPath returns the path to the connections file, creating
 // the parent directory if necessary. The file lives alongside
-// preferences under ~/.lucinate/.
+// preferences under the lucinate data dir (LUCINATE_DATA_DIR or
+// ~/.lucinate).
 func ConnectionsPath() (string, error) {
-	home, err := os.UserHomeDir()
+	dir, err := DataDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".lucinate")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}

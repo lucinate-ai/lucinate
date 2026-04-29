@@ -65,9 +65,27 @@ const (
 	ConnTypeOpenAI   = config.ConnTypeOpenAI
 )
 
-// LoadConnections reads the connection store from
-// ~/.lucinate/connections.json, returning an empty store on first run
-// or when the file is missing or unreadable.
+// DataDirEnvVar is the environment variable that overrides the
+// default lucinate state directory (where connections, secrets,
+// identity, and agents live). Embedders whose host platform doesn't
+// expose a writable user home directory — typically native-platform
+// hosts whose process inherits a read-only bundle path from
+// os.UserHomeDir() — set this before invoking app.New / app.Run;
+// pointing at a writable sandboxed location keeps every persistence
+// path inside the host's data container.
+const DataDirEnvVar = config.DataDirEnvVar
+
+// DataDir returns the resolved root directory used for all on-disk
+// lucinate state. Resolution: LUCINATE_DATA_DIR if set, else
+// <UserHomeDir>/.lucinate. Embedders typically don't need to call
+// this — every persistence helper goes through it transparently —
+// but it is exposed so embedders can surface the location to the
+// user (e.g. "your data lives at …").
+func DataDir() (string, error) { return config.DataDir() }
+
+// LoadConnections reads the connection store from the lucinate
+// data dir's connections.json, returning an empty store on first
+// run or when the file is missing or unreadable.
 func LoadConnections() Connections { return config.LoadConnections() }
 
 // SaveConnections writes the connection store to disk atomically. The

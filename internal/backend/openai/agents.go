@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // AgentMeta is the shape persisted to agent.json. Identity / soul /
@@ -56,17 +58,18 @@ type AgentStore struct {
 	root string
 }
 
-// NewAgentStore returns a Store rooted under ~/.lucinate/agents/<connID>/.
-// The directory is created lazily on first write.
+// NewAgentStore returns a Store rooted under
+// <data-dir>/agents/<connID>/. The directory is created lazily on
+// first write.
 func NewAgentStore(connID string) (*AgentStore, error) {
 	if connID == "" {
 		return nil, fmt.Errorf("connection id is required")
 	}
-	home, err := os.UserHomeDir()
+	dataDir, err := config.DataDir()
 	if err != nil {
-		return nil, fmt.Errorf("user home dir: %w", err)
+		return nil, fmt.Errorf("data dir: %w", err)
 	}
-	root := filepath.Join(home, ".lucinate", "agents", connID)
+	root := filepath.Join(dataDir, "agents", connID)
 	return &AgentStore{root: root}, nil
 }
 

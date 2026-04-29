@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -91,13 +90,14 @@ func NewWithIdentityStore(cfg *config.Config, store IdentityStore) *Client {
 	}
 }
 
-// identityDirForEndpoint returns a per-endpoint identity directory under
-// ~/.lucinate/identity/<host_port>/.  This keeps keys and device tokens
-// isolated per gateway so switching endpoints doesn't overwrite them.
+// identityDirForEndpoint returns a per-endpoint identity directory
+// under <data-dir>/identity/<host_port>/. This keeps keys and device
+// tokens isolated per gateway so switching endpoints doesn't
+// overwrite them.
 func identityDirForEndpoint(gatewayURL string) (string, error) {
-	home, err := os.UserHomeDir()
+	root, err := config.DataDir()
 	if err != nil {
-		return "", fmt.Errorf("user home dir: %w", err)
+		return "", fmt.Errorf("data dir: %w", err)
 	}
 
 	u, err := url.Parse(gatewayURL)
@@ -110,7 +110,7 @@ func identityDirForEndpoint(gatewayURL string) (string, error) {
 		return "", fmt.Errorf("gateway URL has no host: %s", gatewayURL)
 	}
 
-	return filepath.Join(home, ".lucinate", "identity", key), nil
+	return filepath.Join(root, "identity", key), nil
 }
 
 // sanitiseHost converts a host or host:port into a filesystem-safe directory

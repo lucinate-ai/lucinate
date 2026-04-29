@@ -79,8 +79,8 @@ type AppOptions struct {
 	// form, or entry into a new view that lands focus on a different
 	// field). The string is the new field's current value at the
 	// moment of transition, so embedders driving an external input
-	// surface (e.g. a SwiftUI TextField on iOS) can hydrate it to
-	// match. See app.RunOptions for the full rationale.
+	// surface (a native-platform host's text field, say) can hydrate
+	// it to match. See app.RunOptions for the full rationale.
 	OnFocusedFieldChanged func(value string)
 }
 

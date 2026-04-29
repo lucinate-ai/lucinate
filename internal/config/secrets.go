@@ -25,11 +25,11 @@ type Secrets struct {
 // SecretsPath returns the on-disk location, creating the parent
 // directory if needed.
 func SecretsPath() (string, error) {
-	home, err := os.UserHomeDir()
+	root, err := DataDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".lucinate", "secrets")
+	dir := filepath.Join(root, "secrets")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
