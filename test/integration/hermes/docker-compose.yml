@@ -1,8 +1,11 @@
 # Hermes integration-test compose, kept separate from the OpenClaw
 # compose so the two harnesses can run independently.
 #
-# - Builds from ./Dockerfile, which clones a pinned Hermes tag.
-# - Maps host port 18642 → container 8642 to avoid clashing with a
+# - Pulls the upstream Docker Hub image (nousresearch/hermes-agent).
+#   Override the tag via HERMES_TAG; pinning to a specific release
+#   bounds config-schema drift if upstream changes the cli-config
+#   shape.
+# - Maps host port 8642 → container 8642 to avoid clashing with a
 #   developer's locally-running Hermes on the default port.
 # - Mounts ./state as /opt/data so the seeded config.yaml drives the
 #   container and so teardown can wipe state cleanly.
@@ -11,14 +14,10 @@
 #   provider: "custom" with that base URL.
 services:
   hermes:
-    build:
-      context: .
-      args:
-        HERMES_REF: ${HERMES_REF:-v2026.4.23}
-    image: lucinate-hermes-integration:${HERMES_REF:-v2026.4.23}
+    image: nousresearch/hermes-agent:${HERMES_TAG:-v2026.4.23}
     user: "${HERMES_UID:-1000}:${HERMES_GID:-1000}"
     ports:
-      - "18642:8642"
+      - "8642:8642"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -26,16 +25,19 @@ services:
     environment:
       HERMES_UID: ${HERMES_UID:-1000}
       HERMES_GID: ${HERMES_GID:-1000}
-      # API server enable + auth. Both are required per the upstream
-      # docker-compose comments — host alone won't enable it.
+      # API server enable + auth. Both host + key are required per the
+      # upstream docker-compose comments — host alone won't enable it.
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: "0.0.0.0"
       API_SERVER_PORT: "8642"
       API_SERVER_KEY: "lucinate-integration-test"
+      # Hermes' gateway warns and denies traffic when no platform
+      # allowlist is configured. The container is loopback-only with
+      # API_SERVER_KEY bearer auth, so open access at the gateway
+      # layer is fine — auth is enforced one layer up.
+      GATEWAY_ALLOW_ALL_USERS: "true"
     command: ["gateway", "run"]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS -H 'Authorization: Bearer lucinate-integration-test' http://127.0.0.1:8642/v1/health || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 60
-      start_period: 60s
+    # No in-container healthcheck: the upstream nousresearch/hermes-agent
+    # image doesn't ship curl/wget, so any URL probe inside the container
+    # would fail spuriously. setup-hermes.sh polls the mapped host port
+    # instead, which is just as good for an isolated test harness.

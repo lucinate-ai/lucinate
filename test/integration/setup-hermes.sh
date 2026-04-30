@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
 # Sets up the local integration test environment for the Hermes
-# backend. Mirrors setup.sh's structure: builds and brings up a Hermes
-# container in Docker, with inference routed to host-side Ollama via
-# host.docker.internal so the harness stays fully local.
+# backend. Pulls the upstream nousresearch/hermes-agent image from
+# Docker Hub and brings up the gateway container with inference
+# routed at host-side Ollama via host.docker.internal, so the harness
+# stays fully local.
 #
-# The Hermes image is built from a pinned upstream tag (HERMES_REF) to
-# bound config-schema drift. Bump the default below deliberately when
-# tracking a new upstream release.
+# The Docker Hub tag (HERMES_TAG) pins the Hermes version. Bump the
+# default below deliberately when tracking a new upstream release.
 #
 # Steps:
 #   1. Check prerequisites (docker, jq, go, ollama, curl).
@@ -17,14 +17,13 @@
 #      cost.
 #   5. Seed state/config.yaml from profile.yaml.tmpl with the chosen
 #      model so the Hermes entrypoint adopts it on first boot.
-#   6. docker compose up -d --build (slow first time — pulls a Hermes
-#      tag, installs Node deps + Playwright + Python venv).
+#   6. docker compose up -d (pulls the published image on first run).
 #   7. Wait on the API-server healthcheck.
 #   8. Probe the backend wiring end-to-end via the Go probe.
 #   9. Write .env.hermes with the env vars the integration tests read.
 #
 # Usage:
-#   ./test/integration/setup-hermes.sh [--model MODEL] [--ref HERMES_REF]
+#   ./test/integration/setup-hermes.sh [--model MODEL] [--tag HERMES_TAG]
 #
 set -euo pipefail
 
@@ -34,8 +33,9 @@ HERMES_DIR="$SCRIPT_DIR/hermes"
 COMPOSE_FILE="$HERMES_DIR/docker-compose.yml"
 
 MODEL="${MODEL:-qwen2.5:0.5b}"
-HERMES_REF="${HERMES_REF:-v2026.4.23}"
-BASE_URL="http://localhost:18642/v1"
+HERMES_TAG="${HERMES_TAG:-v2026.4.23}"
+BASE_URL="http://localhost:8642/v1"
+HEALTH_URL="http://localhost:8642/health"
 API_KEY="lucinate-integration-test"
 OLLAMA_HEALTH_URL="http://localhost:11434/api/tags"
 OLLAMA_GEN_URL="http://localhost:11434/api/generate"
@@ -47,7 +47,7 @@ HERMES_BOOT_TIMEOUT=180
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --model) MODEL="$2"; shift 2 ;;
-        --ref)   HERMES_REF="$2"; shift 2 ;;
+        --tag)   HERMES_TAG="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
@@ -118,24 +118,25 @@ ok "Wrote state/config.yaml (model=$MODEL)"
 
 # --- Bring up the Hermes container ---------------------------------------
 
-info "Building and starting Hermes container (HERMES_REF=$HERMES_REF)"
-warn "First build clones Hermes, installs Node + Playwright + Python deps — this takes several minutes"
+info "Pulling and starting Hermes container (HERMES_TAG=$HERMES_TAG)"
 HERMES_UID="$(id -u)" \
 HERMES_GID="$(id -g)" \
-HERMES_REF="$HERMES_REF" \
-    docker compose -f "$COMPOSE_FILE" up -d --build
+HERMES_TAG="$HERMES_TAG" \
+    docker compose -f "$COMPOSE_FILE" up -d --pull missing
 
-info "Waiting for Hermes API server to become healthy (up to ${HERMES_BOOT_TIMEOUT}s)"
+# The upstream Hermes image doesn't ship curl/wget, so we can't run an
+# in-container healthcheck. Instead poll the mapped host port — the
+# port mapping makes this equivalent for our purposes.
+info "Waiting for Hermes API server to respond (up to ${HERMES_BOOT_TIMEOUT}s)"
 for i in $(seq 1 "$HERMES_BOOT_TIMEOUT"); do
-    state=$(docker compose -f "$COMPOSE_FILE" ps --format json hermes | jq -r '.Health // .State // empty' | head -n1)
-    if [ "$state" = "healthy" ]; then
-        ok "Hermes is healthy"
+    if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+        ok "Hermes API is responding"
         break
     fi
     if [ "$i" -eq "$HERMES_BOOT_TIMEOUT" ]; then
-        warn "Hermes did not become healthy in ${HERMES_BOOT_TIMEOUT}s — recent logs:"
+        warn "Hermes did not respond on $HEALTH_URL in ${HERMES_BOOT_TIMEOUT}s — recent logs:"
         docker compose -f "$COMPOSE_FILE" logs --tail=80 hermes >&2
-        fail "Hermes container is not healthy"
+        fail "Hermes API is not responding"
     fi
     sleep 1
 done
@@ -164,7 +165,7 @@ ok "Wrote .env.hermes"
 echo ""
 info "Hermes integration test environment is ready"
 echo ""
-echo "  Backend:    Hermes (pinned $HERMES_REF)"
+echo "  Backend:    Hermes (pinned $HERMES_TAG)"
 echo "  Base URL:   $BASE_URL"
 echo "  Model:      $MODEL (via host-side Ollama)"
 echo ""

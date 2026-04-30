@@ -2,7 +2,7 @@
   "gateway": {
     "auth": {
       "mode": "token",
-      "token": "repclaw-integration-test"
+      "token": "lucinate-integration-test"
     }
   },
   "models": {

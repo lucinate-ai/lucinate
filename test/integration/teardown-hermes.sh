@@ -26,6 +26,7 @@ if [ -f "$COMPOSE_FILE" ]; then
     info "Stopping Hermes container"
     HERMES_UID="$(id -u)" \
     HERMES_GID="$(id -g)" \
+    HERMES_TAG="${HERMES_TAG:-v2026.4.23}" \
         docker compose -f "$COMPOSE_FILE" down -v
     ok "Hermes container stopped"
 fi

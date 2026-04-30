@@ -118,7 +118,7 @@ After setup, list the models the gateway found in your region:
 ```bash
 docker compose -f test/integration/docker-compose.yml exec -T gateway \
   openclaw models list --json \
-  --token repclaw-integration-test \
+  --token lucinate-integration-test \
   --url ws://127.0.0.1:18789/ws
 ```
 
@@ -187,7 +187,7 @@ you can step through it manually:
 
 ```bash
 GW_URL="ws://127.0.0.1:18789/ws"
-GW_TOKEN="repclaw-integration-test"
+GW_TOKEN="lucinate-integration-test"
 COMPOSE="test/integration/docker-compose.yml"
 
 # 1. List pending devices (JSON structure: {"pending":[...], "paired":[...]})
@@ -316,11 +316,11 @@ profile state from any locally-running Hermes the developer may have.
 │                                             │
 │  go test -tags integration_hermes           │
 │      │                                      │
-│      ▼ http://localhost:18642/v1            │
+│      ▼ http://localhost:8642/v1             │
 │  ┌──────────────────────┐                   │
 │  │ Hermes API server    │ ← Docker          │
-│  │ (built from pinned   │                   │
-│  │  upstream tag)       │                   │
+│  │ (nousresearch/       │                   │
+│  │  hermes-agent image) │                   │
 │  └──────────┬───────────┘                   │
 │             │ http://host.docker.internal   │
 │             ▼                               │
@@ -329,9 +329,7 @@ profile state from any locally-running Hermes the developer may have.
 └─────────────────────────────────────────────┘
 ```
 
-Host port `18642` is mapped to the container's `8642` so this harness
-can run alongside a developer's locally-running Hermes on its default
-port.
+Host port `8642` is mapped to the container's `8642`.
 
 ### Prerequisites
 
@@ -345,29 +343,29 @@ port.
 ### Quick start
 
 ```bash
-make test-integration-hermes-setup     # slow first time — see below
+make test-integration-hermes-setup
 make test-integration-hermes
 make test-integration-hermes-teardown
 ```
 
-**First run takes several minutes.** The setup builds the Hermes image
-locally: clones a pinned upstream tag, installs Node + Playwright
-Chromium + a Python venv with all extras. Subsequent runs use the
-Docker layer cache and bring the container up in seconds.
+The first run pulls the `nousresearch/hermes-agent` image from Docker
+Hub (the image is several hundred MB — first pull takes a minute or
+so on a typical connection). Subsequent runs reuse the cached image
+and bring the container up in seconds.
 
 ### Pinning the Hermes version
 
-The image is built from a pinned upstream git tag to bound config-
-schema drift. The default lives in two places (kept in sync):
+The image tag is the version pin — bumping it bounds config-schema
+drift if upstream changes the cli-config shape. The default lives in
+two places (kept in sync):
 
-1. `test/integration/setup-hermes.sh` — `HERMES_REF` default at the top
-2. `test/integration/hermes/docker-compose.yml` — `HERMES_REF` build arg
-   default
+1. `test/integration/setup-hermes.sh` — `HERMES_TAG` default
+2. `test/integration/hermes/docker-compose.yml` — image-tag default
 
 Override on the command line:
 
 ```bash
-HERMES_REF=v2026.4.16 make test-integration-hermes-setup
+HERMES_TAG=v2026.4.16 make test-integration-hermes-setup
 ```
 
 ### Choosing a different model
@@ -389,10 +387,11 @@ inference at the host's Ollama via `provider: "custom"` in the seeded
    `profile.yaml.tmpl` with the chosen model. The Hermes entrypoint
    only writes a default `config.yaml` if none exists, so this preempts
    the interactive `hermes setup` flow.
-5. `docker compose up -d --build` against
+5. `docker compose up -d --pull missing` against
    `test/integration/hermes/docker-compose.yml`.
-6. Waits on the container's healthcheck (`/v1/health` with the seeded
-   bearer token).
+6. Polls `http://localhost:8642/health` until the API server answers
+   (the upstream image ships no curl/wget, so in-container healthchecks
+   aren't viable).
 7. Runs the Go probe to verify the backend wiring end-to-end.
 8. Writes `.env.hermes` with the env vars the integration tests read.
 
@@ -415,11 +414,12 @@ docker compose -f test/integration/hermes/docker-compose.yml logs hermes
 
 # Probe the API server manually
 curl -fsS -H 'Authorization: Bearer lucinate-integration-test' \
-    http://localhost:18642/v1/health
+    http://localhost:8642/v1/health
 
-# Force a clean rebuild (e.g. after bumping HERMES_REF)
+# Force a fresh image pull (e.g. after bumping HERMES_TAG)
 make test-integration-hermes-teardown
-docker compose -f test/integration/hermes/docker-compose.yml build --no-cache
+HERMES_TAG=v2026.4.16 \
+    docker compose -f test/integration/hermes/docker-compose.yml pull
 make test-integration-hermes-setup
 ```
 

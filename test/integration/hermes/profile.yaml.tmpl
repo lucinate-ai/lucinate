@@ -1,10 +1,10 @@
 # Seed config.yaml for the Hermes integration-test container. The
-# entrypoint copies cli-config.yaml.example → $HERMES_HOME/config.yaml
+# entrypoint copies cli-config.yaml.example to $HERMES_HOME/config.yaml
 # only if no config exists, so by mounting state/ with this file in
 # place we control which provider Hermes uses.
 #
-# setup-hermes.sh substitutes __MODEL__ with the value of $MODEL before
-# writing this to state/config.yaml.
+# setup-hermes.sh substitutes the placeholder below with the chosen
+# model name before writing this to state/config.yaml.
 model:
   default: "__MODEL__"
   # "custom" routes through any OpenAI-compatible base URL — the
@@ -14,3 +14,18 @@ model:
   # Ollama doesn't validate the bearer token but Hermes requires the
   # field to be set before it'll route to a custom provider.
   api_key: "ollama-local"
+  # Hermes refuses to use any model whose auto-detected context
+  # window is below 64K. Small Ollama models default to 32K via
+  # num_ctx, which trips the guardrail with "Internal server error:
+  # Model X has a context window of 32,768 tokens, which is below
+  # the minimum 64,000 required". Setting this explicitly bypasses
+  # the auto-detect — fine for an integration smoke test.
+  context_length: 65536
+
+# The compression model runs the same context-window guardrail; when
+# we route both the primary and auxiliary paths to the same small
+# Ollama model, the auxiliary check fails too unless we override it
+# here.
+auxiliary:
+  compression:
+    context_length: 65536
