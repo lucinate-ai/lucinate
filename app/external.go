@@ -67,20 +67,31 @@ const (
 
 // DataDirEnvVar is the environment variable that overrides the
 // default lucinate state directory (where connections, secrets,
-// identity, and agents live). Embedders whose host platform doesn't
-// expose a writable user home directory — typically native-platform
-// hosts whose process inherits a read-only bundle path from
-// os.UserHomeDir() — set this before invoking app.New / app.Run;
-// pointing at a writable sandboxed location keeps every persistence
-// path inside the host's data container.
+// identity, and agents live). Useful for shell-driven CLI invocations
+// and integration tests; embedders that drive the program from
+// in-process Go code should prefer SetDataDir.
 const DataDirEnvVar = config.DataDirEnvVar
 
+// SetDataDir programmatically overrides the default state directory.
+// Embedders whose host platform exposes a sandboxed, platform-
+// conventional state directory through host APIs (rather than a
+// writable user home directory) call this once at startup with a
+// fully-resolved absolute path. Every persistence helper
+// (connections, secrets, identity, agents, preferences) then writes
+// inside it. The lucinate code does not impose a dotfile prefix on
+// top of the supplied path — the embedder picks the user-visible
+// directory name. SetDataDir must run before any other app.* helper
+// that touches disk (LoadConnections, ResolveEntryConnection,
+// Connect, Run). The CLI does not call SetDataDir; it falls back to
+// LUCINATE_DATA_DIR and then to <UserHomeDir>/.lucinate.
+func SetDataDir(dir string) { config.SetDataDir(dir) }
+
 // DataDir returns the resolved root directory used for all on-disk
-// lucinate state. Resolution: LUCINATE_DATA_DIR if set, else
-// <UserHomeDir>/.lucinate. Embedders typically don't need to call
-// this — every persistence helper goes through it transparently —
-// but it is exposed so embedders can surface the location to the
-// user (e.g. "your data lives at …").
+// lucinate state. Resolution: SetDataDir if non-empty, else
+// LUCINATE_DATA_DIR, else <UserHomeDir>/.lucinate. Embedders
+// typically don't need to call this — every persistence helper goes
+// through it transparently — but it is exposed so embedders can
+// surface the location to the user (e.g. "your data lives at …").
 func DataDir() (string, error) { return config.DataDir() }
 
 // LoadConnections reads the connection store from the lucinate
