@@ -20,11 +20,12 @@ type ConnectionType string
 const (
 	ConnTypeOpenClaw ConnectionType = "openclaw"
 	ConnTypeOpenAI   ConnectionType = "openai"
+	ConnTypeHermes   ConnectionType = "hermes"
 )
 
 // AllConnectionTypes lists every type the picker UI knows about, in
 // the order it should render them.
-var AllConnectionTypes = []ConnectionType{ConnTypeOpenClaw, ConnTypeOpenAI}
+var AllConnectionTypes = []ConnectionType{ConnTypeOpenClaw, ConnTypeOpenAI, ConnTypeHermes}
 
 // Label returns the user-facing label for the connection type.
 func (t ConnectionType) Label() string {
@@ -33,6 +34,8 @@ func (t ConnectionType) Label() string {
 		return "OpenClaw"
 	case ConnTypeOpenAI:
 		return "OpenAI-compatible"
+	case ConnTypeHermes:
+		return "Hermes"
 	}
 	return string(t)
 }

@@ -182,6 +182,15 @@ type Capabilities struct {
 	// Soul / Model carry the agent's configuration instead.
 	AgentWorkspace bool
 
+	// AgentManagement indicates the backend supports user-driven
+	// agent CRUD: the TUI's "new agent" affordance and CreateAgent
+	// route. Backends like Hermes — where the connected profile is
+	// the agent and creation is server-managed — leave this false;
+	// the TUI hides the create button accordingly. Backends that
+	// don't set this default to false to keep the strictest UI
+	// surface; OpenClaw and OpenAI explicitly opt in.
+	AgentManagement bool
+
 	// Cron indicates the backend implements CronBackend. The TUI
 	// gates the /crons command on this so backends without server-
 	// side scheduling print a clear "not available" message rather

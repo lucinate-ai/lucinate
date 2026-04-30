@@ -1,14 +1,10 @@
 package openai
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +15,7 @@ import (
 	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
+	"github.com/lucinate-ai/lucinate/internal/backend/httpcommon"
 	"github.com/lucinate-ai/lucinate/internal/client"
 )
 
@@ -68,15 +65,17 @@ type Options struct {
 // Backend implements backend.Backend by translating /v1/chat/completions
 // SSE streams into protocol.ChatEvent messages. Agent state lives in
 // a per-connection AgentStore on disk (agent ≡ session, 1:1).
+//
+// Shared HTTP/SSE/event-emission plumbing comes from httpcommon — see
+// the package doc there for the rationale.
 type Backend struct {
-	opts   Options
-	store  *AgentStore
-	events chan protocol.Event
-	http   *http.Client
+	opts    Options
+	store   *AgentStore
+	http    *httpcommon.Client
+	emitter *httpcommon.EventEmitter
 
-	mu     sync.Mutex
-	apiKey string                          // mutable; auth modal can rewrite
-	runs   map[string]context.CancelFunc   // active runs by run ID
+	mu   sync.Mutex
+	runs map[string]context.CancelFunc // active runs by run ID
 }
 
 // New constructs a Backend. Connect() doesn't perform the network
@@ -94,17 +93,21 @@ func New(opts Options) (*Backend, error) {
 	if err != nil {
 		return nil, fmt.Errorf("openai backend: %w", err)
 	}
-	httpClient := opts.HTTPClient
-	if httpClient == nil {
-		httpClient = &http.Client{Transport: newDefaultTransport(opts.ConnectTimeout)}
+	httpClient, err := httpcommon.NewClient(httpcommon.Options{
+		BaseURL:        opts.BaseURL,
+		APIKey:         opts.APIKey,
+		HTTPClient:     opts.HTTPClient,
+		ConnectTimeout: opts.ConnectTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("openai backend: %w", err)
 	}
 	return &Backend{
-		opts:   opts,
-		store:  store,
-		events: make(chan protocol.Event, 64),
-		http:   httpClient,
-		apiKey: opts.APIKey,
-		runs:   map[string]context.CancelFunc{},
+		opts:    opts,
+		store:   store,
+		http:    httpClient,
+		emitter: httpcommon.NewEventEmitter(64),
+		runs:    map[string]context.CancelFunc{},
 	}, nil
 }
 
@@ -112,7 +115,7 @@ func New(opts Options) (*Backend, error) {
 // surfaces as the canonical "api key required" error so the TUI's
 // connecting view routes it to the API-key modal.
 func (b *Backend) Connect(ctx context.Context) error {
-	req, err := b.newRequest(ctx, http.MethodGet, "/models", nil)
+	req, err := b.http.NewRequest(ctx, http.MethodGet, "/models", nil)
 	if err != nil {
 		return err
 	}
@@ -139,12 +142,12 @@ func (b *Backend) Close() error {
 	}
 	b.runs = nil
 	b.mu.Unlock()
-	close(b.events)
+	b.emitter.Close()
 	return nil
 }
 
 // Events returns the event channel.
-func (b *Backend) Events() <-chan protocol.Event { return b.events }
+func (b *Backend) Events() <-chan protocol.Event { return b.emitter.Channel() }
 
 // Supervise emits a single "connected" transition and blocks. The
 // HTTP backend has no long-lived connection to supervise; reconnect
@@ -314,57 +317,51 @@ func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string
 		body.Messages = append(body.Messages, chatRequestMessage{Role: msg.Role, Content: msg.Content})
 	}
 
-	req, err := b.newRequest(ctx, http.MethodPost, "/chat/completions", body)
+	req, err := b.http.NewRequest(ctx, http.MethodPost, "/chat/completions", body)
 	if err != nil {
-		b.emitError(runID, sessionKey, err.Error())
+		b.emitter.EmitChatError(runID, sessionKey, err.Error())
 		return
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := b.http.Do(req)
 	if err != nil {
-		b.emitError(runID, sessionKey, err.Error())
+		b.emitter.EmitChatError(runID, sessionKey, err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		b.emitError(runID, sessionKey, fmt.Sprintf("api key required (HTTP %d)", resp.StatusCode))
+		b.emitter.EmitChatError(runID, sessionKey, fmt.Sprintf("api key required (HTTP %d)", resp.StatusCode))
 		return
 	}
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		b.emitError(runID, sessionKey, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
+		b.emitter.EmitChatError(runID, sessionKey, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
 		return
 	}
 
 	var assistant strings.Builder
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" || !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		payload := strings.TrimPrefix(line, "data: ")
+	scanErr := httpcommon.ScanSSE(resp.Body, func(payload string) bool {
 		if payload == "[DONE]" {
-			break
+			return true
 		}
 		var ev streamChunk
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
-			continue
+			return false
 		}
 		if len(ev.Choices) == 0 {
-			continue
+			return false
 		}
 		delta := ev.Choices[0].Delta.Content
 		if delta == "" {
-			continue
+			return false
 		}
 		assistant.WriteString(delta)
-		b.emitDelta(runID, sessionKey, assistant.String())
-	}
-	if err := scanner.Err(); err != nil && !errors.Is(err, context.Canceled) {
-		b.emitError(runID, sessionKey, err.Error())
+		b.emitter.EmitChatDelta(runID, sessionKey, assistant.String())
+		return false
+	})
+	if scanErr != nil {
+		b.emitter.EmitChatError(runID, sessionKey, scanErr.Error())
 		return
 	}
 
@@ -372,7 +369,7 @@ func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string
 	if final != "" {
 		_ = b.store.AppendMessage(sessionKey, Message{Role: "assistant", Content: final, Model: model})
 	}
-	b.emitFinal(runID, sessionKey, final)
+	b.emitter.EmitChatFinal(runID, sessionKey, final)
 }
 
 // ChatAbort cancels the in-flight run if any.
@@ -385,7 +382,7 @@ func (b *Backend) ChatAbort(ctx context.Context, sessionKey, runID string) error
 		return nil
 	}
 	cancel()
-	b.emitAborted(runID, sessionKey)
+	b.emitter.EmitChatAborted(runID, sessionKey)
 	return nil
 }
 
@@ -429,7 +426,7 @@ func (b *Backend) ChatHistory(ctx context.Context, sessionKey string, limit int)
 // ModelsList queries the upstream /v1/models endpoint and returns
 // the result in the gateway's protocol.ModelsListResult shape.
 func (b *Backend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, error) {
-	req, err := b.newRequest(ctx, http.MethodGet, "/models", nil)
+	req, err := b.http.NewRequest(ctx, http.MethodGet, "/models", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -467,111 +464,19 @@ func (b *Backend) SessionPatchModel(ctx context.Context, sessionKey, modelID str
 // future local summarisation pass), no thinking, no usage.
 func (b *Backend) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
-		AuthRecovery: backend.AuthRecoveryAPIKey,
+		AuthRecovery:    backend.AuthRecoveryAPIKey,
+		AgentManagement: true,
 	}
 }
 
 // --- APIKeyAuth ---
 
 func (b *Backend) StoreAPIKey(key string) error {
-	b.mu.Lock()
-	b.apiKey = key
-	b.mu.Unlock()
+	b.http.SetAPIKey(key)
 	return nil
 }
 
 // --- internals ---
-
-// newRequest constructs an HTTP request with the auth header
-// pre-populated. body, when non-nil, is JSON-encoded.
-func (b *Backend) newRequest(ctx context.Context, method, path string, body any) (*http.Request, error) {
-	u := strings.TrimRight(b.opts.BaseURL, "/") + "/" + strings.TrimLeft(path, "/")
-	var reader io.Reader
-	if body != nil {
-		buf, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("encode request body: %w", err)
-		}
-		reader = bytes.NewReader(buf)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u, reader)
-	if err != nil {
-		return nil, err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	b.mu.Lock()
-	key := b.apiKey
-	b.mu.Unlock()
-	if key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
-	}
-	return req, nil
-}
-
-func (b *Backend) emitDelta(runID, sessionKey, full string) {
-	payload, _ := json.Marshal(protocol.ChatEvent{
-		State:      "delta",
-		RunID:      runID,
-		SessionKey: sessionKey,
-		Message:    json.RawMessage(mustJSON(full)),
-	})
-	b.send(protocol.Event{EventName: protocol.EventChat, Payload: payload})
-}
-
-func (b *Backend) emitFinal(runID, sessionKey, full string) {
-	final := struct {
-		Role    string   `json:"role"`
-		Content []map[string]string `json:"content"`
-	}{
-		Role:    "assistant",
-		Content: []map[string]string{{"type": "text", "text": full}},
-	}
-	finalRaw, _ := json.Marshal(final)
-	payload, _ := json.Marshal(protocol.ChatEvent{
-		State:      "final",
-		RunID:      runID,
-		SessionKey: sessionKey,
-		Message:    finalRaw,
-	})
-	b.send(protocol.Event{EventName: protocol.EventChat, Payload: payload})
-}
-
-func (b *Backend) emitError(runID, sessionKey, msg string) {
-	payload, _ := json.Marshal(protocol.ChatEvent{
-		State:        "error",
-		RunID:        runID,
-		SessionKey:   sessionKey,
-		ErrorMessage: msg,
-	})
-	b.send(protocol.Event{EventName: protocol.EventChat, Payload: payload})
-}
-
-func (b *Backend) emitAborted(runID, sessionKey string) {
-	payload, _ := json.Marshal(protocol.ChatEvent{
-		State:      "aborted",
-		RunID:      runID,
-		SessionKey: sessionKey,
-	})
-	b.send(protocol.Event{EventName: protocol.EventChat, Payload: payload})
-}
-
-func (b *Backend) send(ev protocol.Event) {
-	defer func() {
-		_ = recover() // events channel may be closed during teardown
-	}()
-	select {
-	case b.events <- ev:
-	default:
-		// Drop on full channel — same policy as the OpenClaw client.
-	}
-}
-
-func mustJSON(s string) string {
-	buf, _ := json.Marshal(s)
-	return string(buf)
-}
 
 // skillCatalogSystemMessage formats the local skill catalog as a
 // real role:system message body. Returns the empty string when no
@@ -618,25 +523,4 @@ func removeFile(dir, name string) error {
 		return err
 	}
 	return nil
-}
-
-// newDefaultTransport clones http.DefaultTransport and overlays
-// connect-time deadlines so a slow or unreachable backend gives up at
-// the user-configured bound. Streaming reads remain unbounded — only
-// dial and TLS handshake are constrained.
-func newDefaultTransport(connectTimeout time.Duration) http.RoundTripper {
-	base, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return http.DefaultTransport
-	}
-	t := base.Clone()
-	if connectTimeout > 0 {
-		dialer := &net.Dialer{
-			Timeout:   connectTimeout,
-			KeepAlive: 30 * time.Second,
-		}
-		t.DialContext = dialer.DialContext
-		t.TLSHandshakeTimeout = connectTimeout
-	}
-	return t
 }

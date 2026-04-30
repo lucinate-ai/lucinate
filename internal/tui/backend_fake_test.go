@@ -56,14 +56,15 @@ func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
 		events: make(chan protocol.Event, 1),
 		caps: backend.Capabilities{
-			GatewayStatus:  true,
-			RemoteExec:     true,
-			SessionCompact: true,
-			Thinking:       true,
-			SessionUsage:   true,
-			AuthRecovery:   backend.AuthRecoveryDeviceToken,
-			AgentWorkspace: true,
-			Cron:           true,
+			GatewayStatus:   true,
+			RemoteExec:      true,
+			SessionCompact:  true,
+			Thinking:        true,
+			SessionUsage:    true,
+			AuthRecovery:    backend.AuthRecoveryDeviceToken,
+			AgentWorkspace:  true,
+			AgentManagement: true,
+			Cron:            true,
 		},
 	}
 }

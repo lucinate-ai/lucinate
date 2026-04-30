@@ -25,7 +25,7 @@ func TestSelectModel_Actions(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := selectModel{subState: tc.subState, loading: tc.loading, err: tc.err}
+			m := selectModel{subState: tc.subState, loading: tc.loading, err: tc.err, allowAgentManagement: true}
 			got := actionIDs(m.Actions())
 			if !equalStrings(got, tc.wantIDs) {
 				t.Fatalf("ids=%v, want=%v", got, tc.wantIDs)
@@ -35,7 +35,7 @@ func TestSelectModel_Actions(t *testing.T) {
 }
 
 func TestSelectModel_TriggerAction_NewAgent(t *testing.T) {
-	m := selectModel{subState: subStateList}
+	m := selectModel{subState: subStateList, allowAgentManagement: true}
 	next, cmd := m.TriggerAction("new-agent")
 	if next.subState != subStateCreate {
 		t.Fatalf("expected create sub-state, got %v", next.subState)
@@ -48,7 +48,7 @@ func TestSelectModel_TriggerAction_NewAgent(t *testing.T) {
 func TestSelectModel_KeyDelegatesToTriggerAction(t *testing.T) {
 	// Regression: pressing 'n' on the agent list still opens the form
 	// even though the dispatch now goes through Actions().
-	m := selectModel{subState: subStateList}
+	m := selectModel{subState: subStateList, allowAgentManagement: true}
 	next, _ := m.handleKey(tea.KeyPressMsg{Code: 'n'})
 	if next.subState != subStateCreate {
 		t.Fatalf("key 'n' should open create form via TriggerAction, got %v", next.subState)
@@ -108,8 +108,10 @@ func TestHideActionHints_Suppresses(t *testing.T) {
 	t.Run("select", func(t *testing.T) {
 		shown := newSelectModel(nil, false, false, nil)
 		shown.loading = false
+		shown.allowAgentManagement = true
 		hidden := newSelectModel(nil, true, false, nil)
 		hidden.loading = false
+		hidden.allowAgentManagement = true
 		if !strings.Contains(shown.View(), "n: new agent") {
 			t.Fatalf("expected hint with hideHints=false, got: %q", shown.View())
 		}
@@ -178,6 +180,7 @@ func TestMaybeNotifyActions_FiresOnChange(t *testing.T) {
 	var got [][]string
 	m := AppModel{
 		state:            viewSelect,
+		selectModel:      selectModel{allowAgentManagement: true},
 		onActionsChanged: func(as []Action) { got = append(got, actionIDs(as)) },
 	}
 
@@ -224,7 +227,7 @@ func TestMaybeNotifyActions_NoCallbackIsNoop(t *testing.T) {
 }
 
 func TestAppModel_TriggerActionRoutesToActiveView(t *testing.T) {
-	m := AppModel{state: viewSelect}
+	m := AppModel{state: viewSelect, selectModel: selectModel{allowAgentManagement: true}}
 	next, cmd := m.TriggerAction("new-agent")
 	if next.selectModel.subState != subStateCreate {
 		t.Fatalf("expected create form via routed TriggerAction, got %v", next.selectModel.subState)

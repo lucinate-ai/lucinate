@@ -72,6 +72,18 @@ test-integration-openai:
 test-integration-openai-teardown:
 	./test/integration/teardown-openai.sh
 
+.PHONY: test-integration-hermes-setup
+test-integration-hermes-setup:
+	./test/integration/setup-hermes.sh
+
+.PHONY: test-integration-hermes
+test-integration-hermes:
+	go test -tags integration_hermes -count=1 -v ./internal/backend/hermes/
+
+.PHONY: test-integration-hermes-teardown
+test-integration-hermes-teardown:
+	./test/integration/teardown-hermes.sh
+
 .PHONY: demo
 demo: build
 	PATH="$(CURDIR):$(PATH)" vhs docs/demo.tape

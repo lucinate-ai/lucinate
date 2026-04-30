@@ -46,7 +46,8 @@ type Connection = config.Connection
 type Connections = config.Connections
 
 // ConnectionType identifies the protocol/backend a Connection points
-// at. Use the ConnTypeOpenClaw / ConnTypeOpenAI constants.
+// at. Use the ConnTypeOpenClaw / ConnTypeOpenAI / ConnTypeHermes
+// constants.
 type ConnectionType = config.ConnectionType
 
 // ConnectionFields is the input shape Connections.Add and Update take.
@@ -63,6 +64,7 @@ type EntryConnection = config.EntryConnection
 const (
 	ConnTypeOpenClaw = config.ConnTypeOpenClaw
 	ConnTypeOpenAI   = config.ConnTypeOpenAI
+	ConnTypeHermes   = config.ConnTypeHermes
 )
 
 // DataDirEnvVar is the environment variable that overrides the

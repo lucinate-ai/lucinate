@@ -146,14 +146,15 @@ func (b *Backend) SessionPatchModel(ctx context.Context, sessionKey, modelID str
 // optional sub-interface is implemented below.
 func (b *Backend) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
-		GatewayStatus:  true,
-		RemoteExec:     true,
-		SessionCompact: true,
-		Thinking:       true,
-		SessionUsage:   true,
-		AuthRecovery:   backend.AuthRecoveryDeviceToken,
-		AgentWorkspace: true,
-		Cron:           true,
+		GatewayStatus:   true,
+		RemoteExec:      true,
+		SessionCompact:  true,
+		Thinking:        true,
+		SessionUsage:    true,
+		AuthRecovery:    backend.AuthRecoveryDeviceToken,
+		AgentWorkspace:  true,
+		AgentManagement: true,
+		Cron:            true,
 	}
 }
 

@@ -129,7 +129,7 @@ func TestIntegration_ChatSendStreams(t *testing.T) {
 	sawDelta := false
 	for {
 		select {
-		case ev := <-b.events:
+		case ev := <-b.Events():
 			ce := decodeChat(t, ev)
 			switch ce.State {
 			case "delta":
@@ -172,7 +172,7 @@ func TestIntegration_ChatAbort(t *testing.T) {
 	// Wait for the first delta so we know the stream has started, then
 	// fire the abort.
 	select {
-	case ev := <-b.events:
+	case ev := <-b.Events():
 		_ = decodeChat(t, ev)
 	case <-time.After(30 * time.Second):
 		t.Fatal("timed out waiting for first delta before abort")
@@ -185,7 +185,7 @@ func TestIntegration_ChatAbort(t *testing.T) {
 	timeout := time.After(15 * time.Second)
 	for {
 		select {
-		case ev := <-b.events:
+		case ev := <-b.Events():
 			ce := decodeChat(t, ev)
 			if ce.State == "aborted" {
 				return

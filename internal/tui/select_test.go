@@ -80,6 +80,7 @@ func TestSelectModel_CreateFormActivation(t *testing.T) {
 	m := newSelectModel(nil, false, false, nil)
 	// Simulate agents loaded so the list is ready.
 	m.loading = false
+	m.allowAgentManagement = true
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
 
@@ -91,6 +92,7 @@ func TestSelectModel_CreateFormActivation(t *testing.T) {
 func TestSelectModel_CreateFormCancel(t *testing.T) {
 	m := newSelectModel(nil, false, false, nil)
 	m.loading = false
+	m.allowAgentManagement = true
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
 	if m.subState != subStateCreate {
 		t.Fatal("expected create form to be active")

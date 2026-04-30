@@ -24,7 +24,7 @@ func newSeededStore(t *testing.T) *config.Connections {
 // focusTypeRadio walks the form's focus order until the type radio
 // is selected. The new-connection form lands focus on Name so plain
 // typing produces visible input; tests that exercise preset cycling
-// (Left/Right is the radio's own affordance, gated on the radio
+// (Left/Down is the radio's own affordance, gated on the radio
 // being the active field) shift-tab back to it explicitly.
 func focusTypeRadio(m connectionsModel) connectionsModel {
 	for m.currentField() != formFieldType {
@@ -189,16 +189,16 @@ func TestConnectionsModel_TypeCycleUpdatesPreset(t *testing.T) {
 		t.Fatalf("expected initial preset OpenClaw, got %v", m.formPreset)
 	}
 
-	// Right cycles OpenClaw → OpenAI.
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	// Down cycles OpenClaw → OpenAI.
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.formPreset != presetOpenAI {
-		t.Errorf("expected OpenAI after Right, got %v", m.formPreset)
+		t.Errorf("expected OpenAI after Down, got %v", m.formPreset)
 	}
 
-	// Right again cycles OpenAI → Ollama, prefilling the URL and name.
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	// Down again cycles OpenAI → Ollama, prefilling the URL and name.
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.formPreset != presetOllama {
-		t.Errorf("expected Ollama after second Right, got %v", m.formPreset)
+		t.Errorf("expected Ollama after second Down, got %v", m.formPreset)
 	}
 	if m.urlInput.Value() != "http://localhost:11434/v1" {
 		t.Errorf("Ollama preset did not prefill URL: %q", m.urlInput.Value())
@@ -207,18 +207,32 @@ func TestConnectionsModel_TypeCycleUpdatesPreset(t *testing.T) {
 		t.Errorf("Ollama preset did not prefill name: %q", m.nameInput.Value())
 	}
 
-	// Right again wraps back to OpenClaw and clears the Ollama
+	// Down again advances Ollama → Hermes, clears the Ollama
+	// prefill, and prefills the Hermes URL/name so the user isn't
+	// stuck with localhost in the wrong field.
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.formPreset != presetHermes {
+		t.Errorf("expected Hermes after third Down, got %v", m.formPreset)
+	}
+	if m.urlInput.Value() != "http://127.0.0.1:8642/v1" {
+		t.Errorf("Hermes preset did not prefill URL: %q", m.urlInput.Value())
+	}
+	if m.nameInput.Value() != "hermes" {
+		t.Errorf("Hermes preset did not prefill name: %q", m.nameInput.Value())
+	}
+
+	// Down again wraps back to OpenClaw and clears the Hermes
 	// prefill so the user isn't stuck with localhost in a gateway
 	// URL field.
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.formPreset != presetOpenClaw {
 		t.Errorf("expected wrap to OpenClaw, got %v", m.formPreset)
 	}
 	if m.urlInput.Value() != "" {
-		t.Errorf("expected URL cleared on switch away from Ollama, got %q", m.urlInput.Value())
+		t.Errorf("expected URL cleared on switch away from Hermes, got %q", m.urlInput.Value())
 	}
 	if m.nameInput.Value() != "" {
-		t.Errorf("expected name cleared on switch away from Ollama, got %q", m.nameInput.Value())
+		t.Errorf("expected name cleared on switch away from Hermes, got %q", m.nameInput.Value())
 	}
 }
 
@@ -229,8 +243,8 @@ func TestConnectionsModel_OllamaPresetPersistsAsOpenAI(t *testing.T) {
 	m = focusTypeRadio(m)
 
 	// OpenClaw → OpenAI → Ollama.
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.formPreset != presetOllama {
 		t.Fatalf("expected Ollama preset, got %v", m.formPreset)
 	}
@@ -258,6 +272,43 @@ func TestConnectionsModel_OllamaPresetPersistsAsOpenAI(t *testing.T) {
 	}
 }
 
+func TestConnectionsModel_HermesPresetPersistsAsHermes(t *testing.T) {
+	store := &config.Connections{}
+	m := newConnectionsModel(store, false)
+	m, _ = m.TriggerAction("new-connection")
+	m = focusTypeRadio(m)
+
+	// OpenClaw → OpenAI → Ollama → Hermes.
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.formPreset != presetHermes {
+		t.Fatalf("expected Hermes preset, got %v", m.formPreset)
+	}
+
+	m.modelInput.SetValue("hermes-agent")
+	m, _ = m.submitForm()
+	if m.formErr != "" {
+		t.Fatalf("submit error: %s", m.formErr)
+	}
+	if len(store.Connections) != 1 {
+		t.Fatalf("expected 1 connection, got %d", len(store.Connections))
+	}
+	got := store.Connections[0]
+	if got.Type != config.ConnTypeHermes {
+		t.Errorf("Hermes preset should persist as Hermes, got %q", got.Type)
+	}
+	if got.URL != "http://127.0.0.1:8642/v1" {
+		t.Errorf("URL = %q", got.URL)
+	}
+	if got.Name != "hermes" {
+		t.Errorf("Name = %q", got.Name)
+	}
+	if got.DefaultModel != "hermes-agent" {
+		t.Errorf("DefaultModel = %q", got.DefaultModel)
+	}
+}
+
 func TestConnectionsModel_OpenAITabOrderIncludesModel(t *testing.T) {
 	store := &config.Connections{}
 	m := newConnectionsModel(store, false)
@@ -265,7 +316,7 @@ func TestConnectionsModel_OpenAITabOrderIncludesModel(t *testing.T) {
 	m = focusTypeRadio(m)
 
 	// Switch to OpenAI so the model field joins the tab order.
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 
 	steps := []formField{formFieldName, formFieldURL, formFieldModel, formFieldType}
 	for i, want := range steps {
@@ -306,7 +357,7 @@ func TestConnectionsModel_NewOpenAIConnectionPersistsModel(t *testing.T) {
 	m = focusTypeRadio(m)
 
 	// Switch type to OpenAI.
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 
 	m.nameInput.SetValue("local llm")
 	m.urlInput.SetValue("http://localhost:11434/v1")
@@ -344,7 +395,7 @@ func TestConnectionsModel_NewFormRendersOnlyRelevantFields(t *testing.T) {
 
 	// Switch to OpenAI: model field appears, URL relabels.
 	m = focusTypeRadio(m)
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	out = m.viewForm()
 	if !strings.Contains(out, "Default model") {
 		t.Errorf("OpenAI form missing model field, got:\n%s", out)

@@ -118,7 +118,7 @@ After setup, list the models the gateway found in your region:
 ```bash
 docker compose -f test/integration/docker-compose.yml exec -T gateway \
   openclaw models list --json \
-  --token repclaw-integration-test \
+  --token lucinate-integration-test \
   --url ws://127.0.0.1:18789/ws
 ```
 
@@ -187,7 +187,7 @@ you can step through it manually:
 
 ```bash
 GW_URL="ws://127.0.0.1:18789/ws"
-GW_TOKEN="repclaw-integration-test"
+GW_TOKEN="lucinate-integration-test"
 COMPOSE="test/integration/docker-compose.yml"
 
 # 1. List pending devices (JSON structure: {"pending":[...], "paired":[...]})
@@ -301,3 +301,153 @@ The OpenAI integration tests live in
 - `SessionPatchModel` persists to disk
 - Local agent state is written under a `t.TempDir()`-scoped HOME so the
   tests don't pollute `~/.lucinate/agents/`
+
+---
+
+## Hermes
+
+Exercises lucinate's Hermes backend against a real Hermes API server
+running in Docker, with inference routed to host-side Ollama via
+`host.docker.internal`. Docker isolates the Hermes process and its
+profile state from any locally-running Hermes the developer may have.
+
+```
+┌──────────────── macOS host ─────────────────┐
+│                                             │
+│  go test -tags integration_hermes           │
+│      │                                      │
+│      ▼ http://localhost:8642/v1             │
+│  ┌──────────────────────┐                   │
+│  │ Hermes API server    │ ← Docker          │
+│  │ (nousresearch/       │                   │
+│  │  hermes-agent image) │                   │
+│  └──────────┬───────────┘                   │
+│             │ http://host.docker.internal   │
+│             ▼                               │
+│  Ollama (Metal-accelerated on host)         │
+│  Model: qwen2.5:0.5b (default)              │
+└─────────────────────────────────────────────┘
+```
+
+Host port `8642` is mapped to the container's `8642`.
+
+### Prerequisites
+
+| Requirement     | Install                                     |
+|-----------------|---------------------------------------------|
+| Docker Desktop  | https://docker.com/products/docker-desktop/ |
+| Ollama          | `brew install ollama`                       |
+| jq              | `brew install jq`                           |
+| Go 1.22+        | https://go.dev/dl/                          |
+
+### Quick start
+
+```bash
+make test-integration-hermes-setup
+make test-integration-hermes
+make test-integration-hermes-teardown
+```
+
+The first run pulls the `nousresearch/hermes-agent` image from Docker
+Hub (the image is several hundred MB — first pull takes a minute or
+so on a typical connection). Subsequent runs reuse the cached image
+and bring the container up in seconds.
+
+### Pinning the Hermes version
+
+The image tag is the version pin — bumping it bounds config-schema
+drift if upstream changes the cli-config shape. The default lives in
+two places (kept in sync):
+
+1. `test/integration/setup-hermes.sh` — `HERMES_TAG` default
+2. `test/integration/hermes/docker-compose.yml` — image-tag default
+
+Override on the command line:
+
+```bash
+HERMES_TAG=v2026.4.16 make test-integration-hermes-setup
+```
+
+### Choosing a different model
+
+```bash
+MODEL=llama3.2:1b make test-integration-hermes-setup
+```
+
+Same model table as the OpenAI section above applies — Hermes routes
+inference at the host's Ollama via `provider: "custom"` in the seeded
+`config.yaml`.
+
+### What `setup-hermes.sh` does
+
+1. Checks prereqs (Docker, jq, Go, Ollama, curl).
+2. Starts host Ollama if not running and pulls the test model.
+3. Warms the model so the first chat turn isn't paying lazy-load cost.
+4. Seeds `test/integration/hermes/state/config.yaml` from
+   `profile.yaml.tmpl` with the chosen model. The Hermes entrypoint
+   only writes a default `config.yaml` if none exists, so this preempts
+   the interactive `hermes setup` flow.
+5. `docker compose up -d --pull missing` against
+   `test/integration/hermes/docker-compose.yml`.
+6. Polls `http://localhost:8642/health` until the API server answers
+   (the upstream image ships no curl/wget, so in-container healthchecks
+   aren't viable).
+7. Runs the Go probe to verify the backend wiring end-to-end.
+8. Writes `.env.hermes` with the env vars the integration tests read.
+
+### What `teardown-hermes.sh` does
+
+1. `docker compose down -v` on the Hermes compose file (volumes are
+   removed; only the host bind-mount under `state/` is named volume-
+   adjacent — see step 2).
+2. Removes `test/integration/hermes/state/` (the seeded config and any
+   state Hermes wrote there).
+3. Removes `.env.hermes`.
+
+Host Ollama is left running.
+
+### Troubleshooting
+
+```bash
+# Hermes container logs
+docker compose -f test/integration/hermes/docker-compose.yml logs hermes
+
+# Probe the API server manually
+curl -fsS -H 'Authorization: Bearer lucinate-integration-test' \
+    http://localhost:8642/v1/health
+
+# Force a fresh image pull (e.g. after bumping HERMES_TAG)
+make test-integration-hermes-teardown
+HERMES_TAG=v2026.4.16 \
+    docker compose -f test/integration/hermes/docker-compose.yml pull
+make test-integration-hermes-setup
+```
+
+### Test scope
+
+The Hermes integration tests live in
+`internal/backend/hermes/integration_test.go` under the
+`//go:build integration_hermes` build tag. They exercise the
+`/v1/responses` server-state path against the Docker-isolated Hermes
+API server. The Hermes backend is a sibling of (not a subclass of) the
+OpenAI backend — both share `internal/backend/httpcommon/` for the
+HTTP request builder, SSE scanner, and event emitter — so the surfaces
+look similar but the assertions differ:
+
+- `Connect` against the live endpoint
+- `ListAgents` returns one synthetic entry (the connected profile is
+  the agent — Hermes connections don't support multi-agent CRUD)
+- `CreateAgent` is rejected with a clear error
+- `ChatSend` posts to `/v1/responses` with a named conversation,
+  streams `response.output_text.delta` events, and persists a
+  `last_response_id` pointer on `response.completed`
+- `ChatHistory` walks the `previous_response_id` chain (capped at 3
+  hops to bound first-load latency, since there's no list-by-
+  conversation endpoint upstream) and pairs server-side assistant
+  output with the client-side prompts log to reconstruct full turns
+- `ChatAbort` mid-stream emits an `aborted` event
+
+The only client-side state is a tiny per-connection
+`~/.lucinate/hermes/<connID>/` directory holding the last response
+ID and an append-only prompts log capped at 100 entries (matching
+Hermes' server-side LRU cap).

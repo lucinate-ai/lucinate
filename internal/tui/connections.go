@@ -120,10 +120,11 @@ const (
 	presetOpenClaw formPreset = iota
 	presetOpenAI
 	presetOllama
+	presetHermes
 )
 
 // allFormPresets is the picker's display order.
-var allFormPresets = []formPreset{presetOpenClaw, presetOpenAI, presetOllama}
+var allFormPresets = []formPreset{presetOpenClaw, presetOpenAI, presetOllama, presetHermes}
 
 // label returns the user-visible name in the type radio.
 func (p formPreset) label() string {
@@ -134,6 +135,8 @@ func (p formPreset) label() string {
 		return "OpenAI-compatible"
 	case presetOllama:
 		return "Ollama"
+	case presetHermes:
+		return "Hermes"
 	}
 	return ""
 }
@@ -143,9 +146,20 @@ func (p formPreset) connectionType() config.ConnectionType {
 	switch p {
 	case presetOpenClaw:
 		return config.ConnTypeOpenClaw
+	case presetHermes:
+		return config.ConnTypeHermes
 	default:
 		return config.ConnTypeOpenAI
 	}
+}
+
+// usesBaseURLAndModel reports whether the preset's persisted type is
+// the OpenAI-compatible HTTP shape — i.e. the form should render
+// "Base URL" + "Default model" rather than "Gateway URL". OpenAI,
+// Ollama, and Hermes all share that shape.
+func (p formPreset) usesBaseURLAndModel() bool {
+	t := p.connectionType()
+	return t == config.ConnTypeOpenAI || t == config.ConnTypeHermes
 }
 
 // presetForConnection returns the picker preset that best matches an
@@ -153,8 +167,11 @@ func (p formPreset) connectionType() config.ConnectionType {
 // connections aren't distinguishable from generic OpenAI ones
 // post-save, so edit always falls back to OpenAI for type=openai.
 func presetForConnection(conn config.Connection) formPreset {
-	if conn.Type == config.ConnTypeOpenClaw {
+	switch conn.Type {
+	case config.ConnTypeOpenClaw:
 		return presetOpenClaw
+	case config.ConnTypeHermes:
+		return presetHermes
 	}
 	return presetOpenAI
 }
@@ -357,34 +374,54 @@ func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
 // We never overwrite user-entered text — switching back to OpenClaw
 // after typing in Ollama mode keeps whatever's in the URL field.
 func (m *connectionsModel) applyPresetDefaults(prev formPreset) {
+	const ollamaURL = "http://localhost:11434/v1"
+	const hermesURL = "http://127.0.0.1:8642/v1"
+	// Step 1: clear any prefill from the previous preset *before*
+	// applying the new one's defaults, so the new preset sees an
+	// empty field and can populate it. Without this ordering,
+	// Ollama → Hermes would skip the Hermes prefill because the
+	// fields still hold the Ollama values.
+	if prev == presetOllama && m.formPreset != presetOllama {
+		if m.urlInput.Value() == ollamaURL {
+			m.urlInput.SetValue("")
+		}
+		if m.nameInput.Value() == "ollama" {
+			m.nameInput.SetValue("")
+		}
+	}
+	if prev == presetHermes && m.formPreset != presetHermes {
+		if m.urlInput.Value() == hermesURL {
+			m.urlInput.SetValue("")
+		}
+		if m.nameInput.Value() == "hermes" {
+			m.nameInput.SetValue("")
+		}
+	}
+
+	// Step 2: apply the new preset's placeholder and (when fields
+	// are empty) prefill values.
 	switch m.formPreset {
 	case presetOllama:
-		const ollamaURL = "http://localhost:11434/v1"
 		m.urlInput.Placeholder = ollamaURL
-		// Auto-fill the URL only if the user hasn't typed anything,
-		// or if they had previously selected Ollama and are
-		// returning to it after toggling away.
 		if m.urlInput.Value() == "" {
 			m.urlInput.SetValue(ollamaURL)
 		}
 		if m.nameInput.Value() == "" {
 			m.nameInput.SetValue("ollama")
 		}
+	case presetHermes:
+		m.urlInput.Placeholder = hermesURL
+		m.modelInput.Placeholder = "hermes-agent"
+		if m.urlInput.Value() == "" {
+			m.urlInput.SetValue(hermesURL)
+		}
+		if m.nameInput.Value() == "" {
+			m.nameInput.SetValue("hermes")
+		}
 	case presetOpenAI:
 		m.urlInput.Placeholder = "https://api.openai.com/v1"
 	default:
 		m.urlInput.Placeholder = "https://gateway.example.com"
-	}
-	// If the previous preset was Ollama and its prefilled URL is
-	// still in the field, clear it on switch so the new preset's
-	// placeholder is what the user sees.
-	if prev == presetOllama && m.formPreset != presetOllama {
-		if m.urlInput.Value() == "http://localhost:11434/v1" {
-			m.urlInput.SetValue("")
-		}
-		if m.nameInput.Value() == "ollama" {
-			m.nameInput.SetValue("")
-		}
 	}
 }
 
@@ -397,7 +434,7 @@ func (m connectionsModel) formFields() []formField {
 		fields = append(fields, formFieldType)
 	}
 	fields = append(fields, formFieldName, formFieldURL)
-	if m.formPreset.connectionType() == config.ConnTypeOpenAI {
+	if m.formPreset.usesBaseURLAndModel() {
 		fields = append(fields, formFieldModel)
 	}
 	return fields
@@ -462,11 +499,13 @@ func (m connectionsModel) handleFormKey(msg tea.KeyPressMsg) (connectionsModel, 
 		return m.advanceFocus(1)
 	case "shift+tab":
 		return m.advanceFocus(-1)
-	case "left", "right":
-		// Type-radio navigation: cycle through preset options when
-		// the radio is focused.
+	case "up", "down":
+		// Type-radio navigation: with the radio rendered vertically,
+		// up/down cycles through presets. Falls through to textinput
+		// updates when any other field is focused (single-line inputs
+		// ignore vertical motion, so this is a no-op there).
 		if m.currentField() == formFieldType {
-			m.cyclePreset(msg.String() == "right")
+			m.cyclePreset(msg.String() == "down")
 			return m, nil
 		}
 	case "enter":
@@ -647,47 +686,52 @@ func (m connectionsModel) viewForm() string {
 
 	b.WriteString("  Type:")
 	if m.editingID == "" && m.currentField() == formFieldType {
-		b.WriteString(helpStyle.Render("  (← →)"))
+		b.WriteString(helpStyle.Render("  (↑ ↓)"))
 	}
 	b.WriteString("\n")
 	// On edit the type radio is read-only — only the active preset
 	// is rendered (and dimmed) since the others are unreachable.
+	// Render one preset per line so the list reflows cleanly on
+	// narrow terminals (and matches conventional radio-group layout).
 	presets := allFormPresets
 	if m.editingID != "" {
 		presets = []formPreset{m.formPreset}
 	}
-	b.WriteString("  ")
-	for i, p := range presets {
+	for _, p := range presets {
 		marker := "( )"
 		if p == m.formPreset {
 			marker = "(•)"
 		}
 		label := p.label()
-		if m.editingID == "" && m.currentField() == formFieldType && p == m.formPreset {
-			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accent).Render(marker + " " + label))
-		} else if m.editingID != "" {
-			b.WriteString(helpStyle.Render(marker + " " + label))
-		} else {
-			b.WriteString(marker + " " + label)
+		row := marker + " " + label
+		switch {
+		case m.editingID == "" && m.currentField() == formFieldType && p == m.formPreset:
+			b.WriteString("  " + lipgloss.NewStyle().Bold(true).Foreground(accent).Render(row))
+		case m.editingID != "":
+			b.WriteString("  " + helpStyle.Render(row))
+		default:
+			b.WriteString("  " + row)
 		}
-		if i < len(presets)-1 {
-			b.WriteString("   ")
-		}
+		b.WriteString("\n")
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	b.WriteString("  Name:\n")
 	b.WriteString("  " + m.nameInput.View() + "\n\n")
 
 	urlLabel := "Gateway URL:"
-	if m.formPreset.connectionType() == config.ConnTypeOpenAI {
+	if m.formPreset.usesBaseURLAndModel() {
 		urlLabel = "Base URL:"
 	}
 	b.WriteString("  " + urlLabel + "\n")
 	b.WriteString("  " + m.urlInput.View() + "\n\n")
 
-	if m.formPreset.connectionType() == config.ConnTypeOpenAI {
-		b.WriteString("  Default model (optional):\n")
+	if m.formPreset.usesBaseURLAndModel() {
+		modelLabel := "Default model (optional):"
+		if m.formPreset == presetHermes {
+			modelLabel = "Profile name:"
+		}
+		b.WriteString("  " + modelLabel + "\n")
 		b.WriteString("  " + m.modelInput.View() + "\n\n")
 	}
 

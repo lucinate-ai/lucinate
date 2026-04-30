@@ -195,12 +195,12 @@ func TestBackend_ChatSendStreamsDeltasAndFinal(t *testing.T) {
 
 	// Three deltas + one final.
 	for i := 0; i < 3; i++ {
-		ev := parseChat(t, drainEvent(t, b.events))
+		ev := parseChat(t, drainEvent(t, b.Events()))
 		if ev.State != "delta" {
 			t.Fatalf("expected delta, got %s", ev.State)
 		}
 	}
-	final := parseChat(t, drainEvent(t, b.events))
+	final := parseChat(t, drainEvent(t, b.Events()))
 	if final.State != "final" {
 		t.Fatalf("expected final, got %s", final.State)
 	}
@@ -278,15 +278,15 @@ func TestBackend_ChatSendSkipsMalformedSSEChunks(t *testing.T) {
 		return s
 	}
 
-	first := parseChat(t, drainEvent(t, b.events))
+	first := parseChat(t, drainEvent(t, b.Events()))
 	if first.State != "delta" || deltaText(first) != "Hel" {
 		t.Fatalf("first delta: state=%s body=%q", first.State, deltaText(first))
 	}
-	second := parseChat(t, drainEvent(t, b.events))
+	second := parseChat(t, drainEvent(t, b.Events()))
 	if second.State != "delta" || deltaText(second) != "Hello" {
 		t.Fatalf("second delta: state=%s body=%q", second.State, deltaText(second))
 	}
-	final := parseChat(t, drainEvent(t, b.events))
+	final := parseChat(t, drainEvent(t, b.Events()))
 	if final.State != "final" {
 		t.Fatalf("expected final, got state=%s err=%q", final.State, final.ErrorMessage)
 	}
@@ -322,7 +322,7 @@ func TestBackend_ChatSendErrorEmitsErrorEvent(t *testing.T) {
 	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"}); err != nil {
 		t.Fatal(err)
 	}
-	ev := parseChat(t, drainEvent(t, b.events))
+	ev := parseChat(t, drainEvent(t, b.Events()))
 	if ev.State != "error" {
 		t.Fatalf("expected error event, got %s", ev.State)
 	}
@@ -340,7 +340,7 @@ func TestBackend_ChatSendUnauthorisedEmitsAPIKeyMessage(t *testing.T) {
 	b := newBackend(t, srv)
 	_ = b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"})
 	_, _ = b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"})
-	ev := parseChat(t, drainEvent(t, b.events))
+	ev := parseChat(t, drainEvent(t, b.Events()))
 	if !strings.Contains(ev.ErrorMessage, "api key required") {
 		t.Errorf("expected api-key error message, got %q", ev.ErrorMessage)
 	}
@@ -519,7 +519,7 @@ func TestBackend_ChatSend_PassesSkillsAsRealSystemMessage(t *testing.T) {
 	// Drain the synthetic final/aborted event so the run goroutine
 	// finishes before the test ends.
 	select {
-	case <-b.events:
+	case <-b.Events():
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for stream completion")
 	}

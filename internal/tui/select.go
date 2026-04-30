@@ -92,6 +92,13 @@ type selectModel struct {
 	// defaults: IDENTITY/SOUL markdown for the OpenAI-compat case).
 	useWorkspace bool
 
+	// allowAgentManagement mirrors backend.Capabilities.AgentManagement.
+	// When false, the picker hides the "New agent" affordance entirely
+	// — used for backends like Hermes whose agents are server-managed
+	// (one profile = one agent, configured via the Hermes CLI). The
+	// agent list still renders normally.
+	allowAgentManagement bool
+
 	// activeConn is rendered as a thin status row above the picker
 	// so the user always sees which connection is in scope. May be
 	// nil for legacy embedders without a connections store.
@@ -125,8 +132,11 @@ type agentsLoadedMsg struct {
 // so the user can see which connection is in scope.
 func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeConn *config.Connection) selectModel {
 	useWorkspace := false
+	allowAgentMgmt := false
 	if b != nil {
-		useWorkspace = b.Capabilities().AgentWorkspace
+		caps := b.Capabilities()
+		useWorkspace = caps.AgentWorkspace
+		allowAgentMgmt = caps.AgentManagement
 	}
 	l := list.New(nil, agentDelegate{}, 0, 0)
 	l.Title = "Select an agent"
@@ -141,13 +151,14 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 	l.SetFilteringEnabled(false)
 
 	return selectModel{
-		list:            l,
-		backend:         b,
-		loading:         true,
-		hideHints:       hideHints,
-		showConnections: showConnections,
-		useWorkspace:    useWorkspace,
-		activeConn:      activeConn,
+		list:                 l,
+		backend:              b,
+		loading:              true,
+		hideHints:            hideHints,
+		showConnections:      showConnections,
+		useWorkspace:         useWorkspace,
+		allowAgentManagement: allowAgentMgmt,
+		activeConn:           activeConn,
 	}
 }
 
@@ -336,7 +347,7 @@ func (m selectModel) Actions() []Action {
 		return nil
 	}
 	var actions []Action
-	if !m.loading && m.err == nil {
+	if !m.loading && m.err == nil && m.allowAgentManagement {
 		actions = append(actions, Action{ID: "new-agent", Label: "New agent", Key: "n"})
 	}
 	if m.err != nil {
@@ -354,7 +365,7 @@ func (m selectModel) Actions() []Action {
 func (m selectModel) TriggerAction(id string) (selectModel, tea.Cmd) {
 	switch id {
 	case "new-agent":
-		if m.loading || m.err != nil {
+		if m.loading || m.err != nil || !m.allowAgentManagement {
 			return m, nil
 		}
 		return m, m.initCreateForm()
