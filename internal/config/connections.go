@@ -35,7 +35,7 @@ func (t ConnectionType) Label() string {
 	case ConnTypeOpenAI:
 		return "OpenAI-compatible"
 	case ConnTypeHermes:
-		return "Hermes (Nous Research)"
+		return "Hermes"
 	}
 	return string(t)
 }

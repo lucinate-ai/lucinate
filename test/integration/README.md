@@ -304,7 +304,7 @@ The OpenAI integration tests live in
 
 ---
 
-## Hermes (Nous Research)
+## Hermes
 
 Exercises lucinate's Hermes backend against a real Hermes API server
 running in Docker, with inference routed to host-side Ollama via

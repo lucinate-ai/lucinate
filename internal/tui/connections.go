@@ -136,7 +136,7 @@ func (p formPreset) label() string {
 	case presetOllama:
 		return "Ollama"
 	case presetHermes:
-		return "Hermes (Nous Research)"
+		return "Hermes"
 	}
 	return ""
 }
@@ -499,11 +499,13 @@ func (m connectionsModel) handleFormKey(msg tea.KeyPressMsg) (connectionsModel, 
 		return m.advanceFocus(1)
 	case "shift+tab":
 		return m.advanceFocus(-1)
-	case "left", "right":
-		// Type-radio navigation: cycle through preset options when
-		// the radio is focused.
+	case "up", "down":
+		// Type-radio navigation: with the radio rendered vertically,
+		// up/down cycles through presets. Falls through to textinput
+		// updates when any other field is focused (single-line inputs
+		// ignore vertical motion, so this is a no-op there).
 		if m.currentField() == formFieldType {
-			m.cyclePreset(msg.String() == "right")
+			m.cyclePreset(msg.String() == "down")
 			return m, nil
 		}
 	case "enter":
@@ -684,34 +686,35 @@ func (m connectionsModel) viewForm() string {
 
 	b.WriteString("  Type:")
 	if m.editingID == "" && m.currentField() == formFieldType {
-		b.WriteString(helpStyle.Render("  (← →)"))
+		b.WriteString(helpStyle.Render("  (↑ ↓)"))
 	}
 	b.WriteString("\n")
 	// On edit the type radio is read-only — only the active preset
 	// is rendered (and dimmed) since the others are unreachable.
+	// Render one preset per line so the list reflows cleanly on
+	// narrow terminals (and matches conventional radio-group layout).
 	presets := allFormPresets
 	if m.editingID != "" {
 		presets = []formPreset{m.formPreset}
 	}
-	b.WriteString("  ")
-	for i, p := range presets {
+	for _, p := range presets {
 		marker := "( )"
 		if p == m.formPreset {
 			marker = "(•)"
 		}
 		label := p.label()
-		if m.editingID == "" && m.currentField() == formFieldType && p == m.formPreset {
-			b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(accent).Render(marker + " " + label))
-		} else if m.editingID != "" {
-			b.WriteString(helpStyle.Render(marker + " " + label))
-		} else {
-			b.WriteString(marker + " " + label)
+		row := marker + " " + label
+		switch {
+		case m.editingID == "" && m.currentField() == formFieldType && p == m.formPreset:
+			b.WriteString("  " + lipgloss.NewStyle().Bold(true).Foreground(accent).Render(row))
+		case m.editingID != "":
+			b.WriteString("  " + helpStyle.Render(row))
+		default:
+			b.WriteString("  " + row)
 		}
-		if i < len(presets)-1 {
-			b.WriteString("   ")
-		}
+		b.WriteString("\n")
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	b.WriteString("  Name:\n")
 	b.WriteString("  " + m.nameInput.View() + "\n\n")
