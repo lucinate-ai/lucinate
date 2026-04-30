@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.26.0] - 2026-04-30
+### Added
+- feat(app): add SetDataDir programmatic seam for embedder data root (#85)
+- feat: add Hermes Agent backend over /v1/responses
+
+### Changed
+- refactor: surface a connection-managed embedder API for non-CLI hosts (#84)
+
 ## [0.25.0] - 2026-04-29
 ### Added
 - feat(tui): show last-message timestamp on the history separator
