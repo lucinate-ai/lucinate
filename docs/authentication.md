@@ -1,6 +1,6 @@
 # Authentication
 
-This document covers OpenClaw device pairing — the auth flow used by the OpenClaw backend. The OpenAI-compatible backend uses a simpler bearer-token model documented in [connections.md](connections.md#auth-recovery-modals) and [connections.md](connections.md#secrets-storage).
+This document covers OpenClaw device pairing — the auth flow used by the OpenClaw backend. The OpenAI-compatible and Hermes backends use a simpler bearer-token model documented in [connections.md](connections.md#auth-recovery-modals) and [connections.md](connections.md#secrets-storage).
 
 For OpenClaw connections, lucinate authenticates using device pairing — no usernames or passwords. Each device generates a persistent Ed25519 keypair and an administrator approves it on the gateway.
 
@@ -72,6 +72,7 @@ The client connects with operator-level scopes: `ScopeOperatorRead`, `ScopeOpera
 | Path | Contents |
 |---|---|
 | `~/.lucinate/identity/<endpoint>/` | Ed25519 keypair and device token (per gateway endpoint) |
-| `~/.lucinate/secrets/secrets.json` | OpenAI-compat API keys, keyed by connection ID (mode 0600) — see [connections.md](connections.md#secrets-storage) |
+| `~/.lucinate/secrets/secrets.json` | OpenAI-compat and Hermes API keys, keyed by connection ID (mode 0600) — see [connections.md](connections.md#secrets-storage) |
 | `~/.lucinate/connections.json` | Saved connection records — see [connections.md](connections.md) |
+| `~/.lucinate/hermes/<conn-id>/` | Per-connection Hermes state: `last_response_id` pointer + capped prompts log — see [backend_hermes.md](backend_hermes.md#local-state) |
 | `~/.lucinate/config.json` | UI preferences — not authentication-related |

@@ -5,7 +5,7 @@
 <h1 align="center">lucinate — the terminal-native AI chat client</h1>
 
 <p align="center">
-  Chat with your <a href="https://github.com/openclaw/openclaw">OpenClaw</a> agents — or any OpenAI-compatible endpoint, including <a href="https://ollama.com">Ollama</a>, vLLM, LM Studio, and OpenAI — from the terminal. Streaming responses, markdown rendering, no mouse required.
+  Chat with your <a href="https://github.com/openclaw/openclaw">OpenClaw</a> agents, a <a href="https://github.com/nousresearch/hermes-agent">Hermes</a> profile, or any OpenAI-compatible endpoint (<a href="https://ollama.com">Ollama</a>, vLLM, LM Studio, OpenAI proper) — from the terminal. Streaming responses, markdown rendering, no mouse required.
 </p>
 
 <p align="center">
@@ -20,9 +20,9 @@ No file browsers, no task boards, no dashboards. Just chat.
 
 ### Highlights
 
-- **Multiple backends** — connect to an [OpenClaw](https://github.com/openclaw/openclaw) gateway, or any OpenAI-compatible endpoint ([Ollama](https://ollama.com), vLLM, LM Studio, llamafile, OpenAI proper). Switch between saved connections with `/connections`.
+- **Multiple backends** — connect to an [OpenClaw](https://github.com/openclaw/openclaw) gateway, a [Hermes Agent](https://github.com/nousresearch/hermes-agent) profile, or any OpenAI-compatible endpoint ([Ollama](https://ollama.com), vLLM, LM Studio, llamafile, OpenAI proper). Switch between saved connections with `/connections`.
 - **Streaming responses, conversation history, and multi-agent support**
-- **Create agents** directly from the TUI — gateway-managed for OpenClaw, or local `IDENTITY.md` + `SOUL.md` markdown for OpenAI-compatible backends
+- **Create agents** directly from the TUI — gateway-managed for OpenClaw, or local `IDENTITY.md` + `SOUL.md` markdown for OpenAI-compatible backends. Hermes profiles are configured server-side via `hermes profile create`
 - **Markdown rendering** for assistant messages
 - **Shell commands** — run locally with `!` or remotely on the gateway with `!!`
 - **Message queueing** so you can keep typing while the agent is responding
@@ -56,12 +56,13 @@ go build -o lucinate .
 
 On first launch lucinate opens a **Connections** picker so you can add a backend.
 
-Two connection types are supported:
+Three connection types are supported:
 
 - **[OpenClaw](docs/backend_openclaw.md)** — connect to an OpenClaw gateway over WebSocket. Auth uses Ed25519 device pairing.
 - **[OpenAI-compatible](docs/backend_openai.md)** — connect to any `/v1/chat/completions` endpoint (Ollama, vLLM, LM Studio, llamafile, OpenAI).
+- **[Hermes (Nous Research)](docs/backend_hermes.md)** — connect to a Hermes Agent profile's `/v1/responses` API server. One Lucinate connection maps to one Hermes profile; chat state lives server-side.
 
-OpenClaw URLs can use `https`, `http`, `wss`, or `ws` — lucinate derives the WebSocket endpoint automatically. OpenAI-compatible URLs are HTTP(S) base URLs ending in `/v1`.
+OpenClaw URLs can use `https`, `http`, `wss`, or `ws` — lucinate derives the WebSocket endpoint automatically. OpenAI-compatible and Hermes URLs are HTTP(S) base URLs ending in `/v1`.
 
 Switch between saved connections at any time with `/connections` from the chat view. Use `n` to add a new one, `e` to edit, `d` to delete (with confirmation).
 

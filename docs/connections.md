@@ -4,17 +4,19 @@ A connection is a saved target lucinate can connect to (URL + type + auth identi
 
 ## Connection types
 
-Two backend types ship today; both implement `backend.Backend` (`internal/backend/backend.go`) so the chat / sessions / commands views are backend-agnostic. Backend-specific behaviour (capabilities, agent storage, auth) is documented in dedicated files:
+Three backend types ship today; all implement `backend.Backend` (`internal/backend/backend.go`) so the chat / sessions / commands views are backend-agnostic. The OpenAI and Hermes backends both speak HTTP+SSE+JSON over Bearer-token auth and share the request builder, SSE scanner, and event emitter in `internal/backend/httpcommon` — but they're sibling implementations, not a base class and a subclass. Backend-specific behaviour is documented in dedicated files:
 
 - [backend_openclaw.md](backend_openclaw.md) — full capability surface, device-token auth, server-side agents
 - [backend_openai.md](backend_openai.md) — `/v1/chat/completions` streaming, on-disk agents (IDENTITY.md + SOUL.md), API-key auth
+- [backend_hermes.md](backend_hermes.md) — `/v1/responses` server-state chaining, one synthetic agent per connection, API-key auth
 
-| Type      | URL shape                              | Auth                                   | Agent storage                 |
-|-----------|----------------------------------------|----------------------------------------|-------------------------------|
-| OpenClaw  | `https://`/`http://`/`wss://`/`ws://` (WS endpoint derived) | Ed25519 device pairing                 | Server-side on the gateway   |
-| OpenAI    | `http(s)://host/v1`                    | Optional `Authorization: Bearer <key>` | Local under `~/.lucinate/agents/<conn-id>/<agent-id>/` |
+| Type      | URL shape                                                   | Auth                                   | Agent storage                                                                  |
+|-----------|-------------------------------------------------------------|----------------------------------------|--------------------------------------------------------------------------------|
+| OpenClaw  | `https://`/`http://`/`wss://`/`ws://` (WS endpoint derived) | Ed25519 device pairing                 | Server-side on the gateway                                                     |
+| OpenAI    | `http(s)://host/v1`                                         | Optional `Authorization: Bearer <key>` | Local under `~/.lucinate/agents/<conn-id>/<agent-id>/`                         |
+| Hermes    | `http(s)://host:8642/v1` (default loopback)                 | `Authorization: Bearer <API_SERVER_KEY>` | Server-side in the Hermes profile; only `last_response_id` + prompts log local |
 
-`AllConnectionTypes` (`internal/config/connections.go`) drives the picker form's type radio. Adding a third backend means: implementing `backend.Backend`, extending the enum, dispatching in `backendFactory` (`main.go`), adjusting the form's type-conditional rendering, and writing a `backend_<name>.md` doc for it.
+`AllConnectionTypes` (`internal/config/connections.go`) drives the picker form's type radio. Adding a fourth backend means: implementing `backend.Backend`, extending the enum, dispatching in `DefaultBackendFactory` (`app/factory.go`), adjusting the form's type-conditional rendering, and writing a `backend_<name>.md` doc for it.
 
 ## Startup decision tree
 
@@ -40,7 +42,9 @@ Legacy mode (`AppOptions.Backend != nil`, no `Store`) is for native-platform emb
 
 ## Capability negotiation
 
-`backend.Backend.Capabilities()` reports a `Capabilities` struct (`internal/backend/backend.go`); the TUI type-asserts against optional sub-interfaces (`StatusBackend`, `ExecBackend`, `CompactBackend`, `ThinkingBackend`, `UsageBackend`, `CronBackend`, `DeviceTokenAuth`, `APIKeyAuth`) at the relevant call sites. OpenClaw implements all of them. OpenAI implements only `APIKeyAuth` — backend-only commands (`/status`, `/compact`, `/think`, `/stats`, `/crons`, `!!`) render a "not available on this connection" system message instead of erroring.
+`backend.Backend.Capabilities()` reports a `Capabilities` struct (`internal/backend/backend.go`); the TUI type-asserts against optional sub-interfaces (`StatusBackend`, `ExecBackend`, `CompactBackend`, `ThinkingBackend`, `UsageBackend`, `CronBackend`, `DeviceTokenAuth`, `APIKeyAuth`) at the relevant call sites. OpenClaw implements all of them. OpenAI and Hermes implement only `APIKeyAuth` — backend-only commands (`/status`, `/compact`, `/think`, `/stats`, `/crons`, `!!`) render a "not available on this connection" system message instead of erroring.
+
+The `Capabilities.AgentManagement` flag gates the picker's "new agent" affordance. OpenClaw and OpenAI opt in (the user creates agents via the form). Hermes leaves it false because profiles are configured server-side via `hermes profile create` on the host, so the create-agent button is hidden on Hermes connections.
 
 ## Auth-recovery modals
 
@@ -64,14 +68,15 @@ A future enhancement is to back this with the OS keychain (Keychain on macOS, li
 
 `internal/tui/connections.go` implements the picker. The form has a fixed type radio plus type-conditional fields:
 
-| Preset   | Persisted Type | Fields                                            |
-|----------|----------------|---------------------------------------------------|
-| OpenClaw | `openclaw`     | Type, Name, Gateway URL                           |
-| OpenAI   | `openai`       | Type, Name, Base URL, Default model (optional)    |
-| Ollama   | `openai`       | Type, Name, Base URL, Default model (optional)    |
+| Preset   | Persisted Type | Fields                                                     |
+|----------|----------------|------------------------------------------------------------|
+| OpenClaw | `openclaw`     | Type, Name, Gateway URL                                    |
+| OpenAI   | `openai`       | Type, Name, Base URL, Default model (optional)             |
+| Ollama   | `openai`       | Type, Name, Base URL, Default model (optional)             |
+| Hermes   | `hermes`       | Type, Name, Base URL, Profile name                         |
 
-The picker offers three presets but only two persisted types — Ollama is an opinionated OpenAI preset that pre-fills `Name = ollama` and `Base URL = http://localhost:11434/v1`. Switching to Ollama and away clears the prefill so the user isn't stranded with localhost in a gateway URL field.
+The picker offers four presets but only three persisted types — Ollama is an opinionated OpenAI preset that pre-fills `Name = ollama` and `Base URL = http://localhost:11434/v1`. Hermes is its own type with a pre-filled `Base URL = http://127.0.0.1:8642/v1` and a "Profile name" model field. Switching to either preset and back clears the prefill so the user isn't stranded with the wrong localhost URL in a gateway field.
 
-Tab cycles through the visible fields only. ←/→ on the type radio cycles through the presets; the URL placeholder, name suggestion, and model field tracking update to match. Edit forms drop the radio entirely (type is immutable post-create) and start focus on the name field. Edited connections show the persisted type as a dimmed read-only label — Ollama-created connections render as "OpenAI-compatible" on edit because the Ollama preset isn't distinguishable post-save.
+The type radio renders vertically (one preset per line) so the list reflows cleanly on narrow terminals. ↑/↓ cycles the presets when the radio is focused; Tab moves between fields. Edit forms drop the radio entirely (type is immutable post-create) and start focus on the name field. Edited connections show the persisted type as a dimmed read-only label — Ollama-created connections render as "OpenAI-compatible" on edit because the Ollama preset isn't distinguishable post-save.
 
 Delete confirmation is exposed as a sub-state with confirm/cancel pairs in `Actions()`, so native-platform embedders render them as buttons rather than relying on inline `y/n` keys.
