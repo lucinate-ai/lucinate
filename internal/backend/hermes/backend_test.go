@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -280,6 +281,95 @@ func TestSessionDelete_ClearsLastResponseID(t *testing.T) {
 	}
 	if got, _ := readLastResponseID(b.opts.ConnectionID); got != "" {
 		t.Errorf("file not cleared: %q", got)
+	}
+}
+
+// TestSessionDelete_NextChatStartsFreshChain is the regression test
+// for the /reset bug. Before the fix ChatSend pinned the
+// `conversation` field to the connection ID, so the server kept the
+// thread alive across resets even though the local pointer was
+// cleared. Now ChatSend chains via previous_response_id, so a cleared
+// pointer must produce a request with NO previous_response_id field.
+func TestSessionDelete_NextChatStartsFreshChain(t *testing.T) {
+	type capturedRequest struct {
+		PreviousResponseID string `json:"previous_response_id"`
+		Conversation       string `json:"conversation"`
+	}
+	var captured []capturedRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/models"):
+			_, _ = w.Write([]byte(`{"data":[{"id":"hermes-agent"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/responses"):
+			body, _ := io.ReadAll(r.Body)
+			var req capturedRequest
+			_ = json.Unmarshal(body, &req)
+			captured = append(captured, req)
+			id := fmt.Sprintf("resp_%d", len(captured))
+			streamingResponsesHandler(id, "ok").ServeHTTP(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.Connect(context.Background()); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+
+	// First turn: empty chain.
+	sendAndDrain(t, b, "first")
+	if got := captured[0].PreviousResponseID; got != "" {
+		t.Errorf("first turn previous_response_id = %q, want empty", got)
+	}
+
+	// Second turn: chains off resp_1.
+	sendAndDrain(t, b, "second")
+	if got := captured[1].PreviousResponseID; got != "resp_1" {
+		t.Errorf("second turn previous_response_id = %q, want resp_1", got)
+	}
+
+	// /reset clears the pointer.
+	if err := b.SessionDelete(context.Background(), syntheticAgentID); err != nil {
+		t.Fatalf("SessionDelete: %v", err)
+	}
+
+	// Third turn after reset: must send no previous_response_id.
+	sendAndDrain(t, b, "third")
+	if got := captured[2].PreviousResponseID; got != "" {
+		t.Errorf("post-reset previous_response_id = %q, want empty", got)
+	}
+	// And no named conversation either — the bug used to pin this to
+	// the connection ID which kept the server-side thread alive.
+	if got := captured[2].Conversation; got != "" {
+		t.Errorf("post-reset conversation = %q, want empty", got)
+	}
+}
+
+// sendAndDrain helper: send a chat message and consume events until
+// the final event arrives. Used by the regression test above to step
+// through multiple turns.
+func sendAndDrain(t *testing.T, b *Backend, msg string) {
+	t.Helper()
+	if _, err := b.ChatSend(context.Background(), syntheticAgentID, backend.ChatSendParams{Message: msg, IdempotencyKey: msg}); err != nil {
+		t.Fatalf("ChatSend(%q): %v", msg, err)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case ev := <-b.Events():
+			ce := decodeChat(t, ev)
+			if ce.State == "final" {
+				return
+			}
+			if ce.State == "error" {
+				t.Fatalf("error: %s", ce.ErrorMessage)
+			}
+		case <-deadline:
+			t.Fatalf("timeout waiting for final on %q", msg)
+		}
 	}
 }
 

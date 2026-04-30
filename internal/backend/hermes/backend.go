@@ -248,10 +248,11 @@ func (b *Backend) SessionDelete(ctx context.Context, sessionKey string) error {
 	return b.prompts.Clear()
 }
 
-// ChatSend posts the user message to /v1/responses with the named
-// conversation set to the connection ID. Hermes maintains chain
-// continuity server-side, so we don't send history with each turn.
-// On first delta we kick off a goroutine that streams events.
+// ChatSend posts the user message to /v1/responses chained off the
+// last response ID we got back. Hermes maintains chain continuity
+// server-side, so we don't resend history each turn; clearing the
+// local last-response pointer (via /reset / SessionDelete) yields a
+// fresh chain on the next turn.
 func (b *Backend) ChatSend(ctx context.Context, sessionKey string, params backend.ChatSendParams) (*protocol.ChatSendResult, error) {
 	if sessionKey != syntheticAgentID {
 		return nil, fmt.Errorf("session not found: %s", sessionKey)
@@ -289,12 +290,19 @@ func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model, userM
 		b.mu.Unlock()
 	}()
 
+	// Chain via previous_response_id rather than a named conversation
+	// so /reset (which clears lastResponseID) actually starts a fresh
+	// server-side chat. A named conversation would be remembered on
+	// the Hermes side regardless of local state.
+	b.mu.Lock()
+	prev := b.lastResponseID
+	b.mu.Unlock()
 	body := responsesRequest{
-		Model:        model,
-		Input:        userMessage,
-		Stream:       true,
-		Store:        true,
-		Conversation: b.opts.ConnectionID,
+		Model:              model,
+		Input:              userMessage,
+		Stream:             true,
+		Store:              true,
+		PreviousResponseID: prev,
 	}
 
 	req, err := b.http.NewRequest(ctx, http.MethodPost, "/responses", body)
