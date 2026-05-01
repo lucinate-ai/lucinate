@@ -213,7 +213,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 			return nil
 		}
 		var cmds []tea.Cmd
-		if m.prefs.CompletionBell {
+		if m.shouldRingBell() {
 			cmds = append(cmds, bellCmd())
 		}
 		drainCmd := m.drainQueue()
@@ -263,6 +263,14 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		return m.drainQueue()
 	}
 	return nil
+}
+
+// shouldRingBell reports whether the completion bell should fire on a final
+// chat event. The bell is intended as a "look back at me" cue when the user
+// has switched away, so a focused terminal suppresses it even when the pref
+// is on.
+func (m *chatModel) shouldRingBell() bool {
+	return m.prefs.CompletionBell && !m.terminalFocused
 }
 
 // bellCmd returns a command that writes a BEL character to the terminal.

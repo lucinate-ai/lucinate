@@ -6,7 +6,10 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 func TestFormatCost(t *testing.T) {
@@ -241,6 +244,108 @@ func TestUpdateViewport_BottomAnchoring(t *testing.T) {
 
 	if len(m.viewport.View()) == 0 {
 		t.Error("viewport content should not be empty")
+	}
+}
+
+func TestUpdateViewport_PreservesScrollWhenUserScrolledUp(t *testing.T) {
+	vp := viewport.New()
+	vp.SetWidth(80)
+	vp.SetHeight(5)
+	m := &chatModel{
+		viewport:  vp,
+		width:     80,
+		agentName: "main",
+	}
+	for i := 0; i < 30; i++ {
+		m.messages = append(m.messages, chatMessage{role: "user", content: "filler line"})
+	}
+	m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
+	m.updateViewport()
+
+	m.viewport.SetYOffset(0)
+	if m.viewport.AtBottom() {
+		t.Fatalf("precondition: viewport should not be at bottom after scrolling up")
+	}
+	scrolledOffset := m.viewport.YOffset()
+
+	last := &m.messages[len(m.messages)-1]
+	last.content = "incoming delta text"
+	last.awaitingDelta = false
+	m.updateViewport()
+
+	if got := m.viewport.YOffset(); got != scrolledOffset {
+		t.Errorf("scroll position should be preserved while user is scrolled up: got YOffset=%d, want %d", got, scrolledOffset)
+	}
+}
+
+func TestUpdate_MouseWheelScrollSurvivesStreamingDeltas(t *testing.T) {
+	m := newChatModel(nil, "main", "", "test", "", config.DefaultPreferences(), false, "")
+	m.viewport = viewport.New()
+	m.width = 80
+	m.height = 30
+	m.viewport.SetWidth(80)
+	m.viewport.SetHeight(5)
+	for i := 0; i < 30; i++ {
+		m.messages = append(m.messages, chatMessage{role: "user", content: "filler line"})
+	}
+	m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
+	m.updateViewport()
+
+	if !m.viewport.AtBottom() {
+		t.Fatalf("precondition: should start pinned at bottom")
+	}
+
+	wheelUp := tea.MouseWheelMsg{Button: tea.MouseWheelUp}
+	m, _ = m.Update(wheelUp)
+	if m.viewport.AtBottom() {
+		t.Fatalf("after MouseWheelUp the viewport should no longer be at bottom; YOffset=%d", m.viewport.YOffset())
+	}
+	scrolledOffset := m.viewport.YOffset()
+
+	last := &m.messages[len(m.messages)-1]
+	for i, deltaText := range []string{"a", "a b", "a b c", "a b c d"} {
+		last.content = deltaText
+		last.awaitingDelta = false
+		m.updateViewport()
+		if got := m.viewport.YOffset(); got != scrolledOffset {
+			t.Errorf("delta %d (%q): YOffset=%d, want %d (user should remain scrolled up)", i, deltaText, got, scrolledOffset)
+		}
+	}
+
+	tick := spinnerTickMsg{}
+	m.spinnerTicking = true
+	m, _ = m.Update(tick)
+	if got := m.viewport.YOffset(); got != scrolledOffset {
+		t.Errorf("spinner tick reset scroll: YOffset=%d, want %d", got, scrolledOffset)
+	}
+}
+
+func TestUpdateViewport_FollowsBottomWhenPinned(t *testing.T) {
+	vp := viewport.New()
+	vp.SetWidth(80)
+	vp.SetHeight(5)
+	m := &chatModel{
+		viewport:  vp,
+		width:     80,
+		agentName: "main",
+	}
+	for i := 0; i < 30; i++ {
+		m.messages = append(m.messages, chatMessage{role: "user", content: "filler line"})
+	}
+	m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
+	m.updateViewport()
+
+	if !m.viewport.AtBottom() {
+		t.Fatalf("precondition: viewport should be at bottom after initial render")
+	}
+
+	last := &m.messages[len(m.messages)-1]
+	last.content = strings.Repeat("delta line\n", 10)
+	last.awaitingDelta = false
+	m.updateViewport()
+
+	if !m.viewport.AtBottom() {
+		t.Errorf("viewport should follow new content to bottom when user was pinned at bottom")
 	}
 }
 

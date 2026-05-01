@@ -969,6 +969,7 @@ func TestHandleEvent_FinalWithBellPref(t *testing.T) {
 	m := newTestChatModel()
 	m.sending = true
 	m.prefs.CompletionBell = true
+	m.terminalFocused = false
 	m.messages = []chatMessage{
 		{role: "user", content: "hello"},
 		{role: "assistant", content: "text", streaming: true},
@@ -976,7 +977,31 @@ func TestHandleEvent_FinalWithBellPref(t *testing.T) {
 	finalMsg := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"text"}],"timestamp":123}`)
 	cmd := m.handleEvent(makeChatEvent("final", "run1", 3, finalMsg))
 	if cmd == nil {
-		t.Error("expected a non-nil cmd (should include bell)")
+		t.Error("expected a non-nil cmd (should include bell when terminal is blurred)")
+	}
+}
+
+func TestShouldRingBell(t *testing.T) {
+	tests := []struct {
+		name     string
+		pref     bool
+		focused  bool
+		wantRing bool
+	}{
+		{"pref off, focused", false, true, false},
+		{"pref off, blurred", false, false, false},
+		{"pref on, focused", true, true, false},
+		{"pref on, blurred", true, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestChatModel()
+			m.prefs.CompletionBell = tt.pref
+			m.terminalFocused = tt.focused
+			if got := m.shouldRingBell(); got != tt.wantRing {
+				t.Errorf("shouldRingBell() = %v, want %v", got, tt.wantRing)
+			}
+		})
 	}
 }
 

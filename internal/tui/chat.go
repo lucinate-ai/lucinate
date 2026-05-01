@@ -116,6 +116,7 @@ type chatModel struct {
 	thinkingLevel    string // current thinking level; "" means not set / using gateway default
 	connState        ConnStateMsg
 	hideInput        bool // when true, the textarea + help line are not rendered; the textarea model still receives input bytes
+	terminalFocused  bool // tracks tea.FocusMsg/BlurMsg so the completion bell only rings when the user is looking elsewhere
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -183,9 +184,10 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 		agentName:    agentName,
 		renderer:     renderer,
 		modelID:      modelID,
-		prefs:        prefs,
-		historyLimit: prefs.HistoryLimit,
-		hideInput:    hideInput,
+		prefs:           prefs,
+		historyLimit:    prefs.HistoryLimit,
+		hideInput:       hideInput,
+		terminalFocused: true,
 	}
 }
 

@@ -428,6 +428,14 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		m.chatModel.applyConnState(msg)
 		return m, nil
 
+	case tea.FocusMsg:
+		m.chatModel.terminalFocused = true
+		return m, nil
+
+	case tea.BlurMsg:
+		m.chatModel.terminalFocused = false
+		return m, nil
+
 	case showConnectionsMsg:
 		if !m.managed {
 			return m, nil
@@ -799,5 +807,6 @@ func (m AppModel) View() tea.View {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	v.KeyboardEnhancements.ReportEventTypes = true
+	v.ReportFocus = true
 	return v
 }

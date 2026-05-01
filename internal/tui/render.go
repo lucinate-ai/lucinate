@@ -86,8 +86,14 @@ func (m *chatModel) updateViewport() {
 		content = padding + content
 	}
 
+	// Only auto-follow when the user is already pinned at the bottom. If they've
+	// scrolled up to read earlier messages, leave their position alone — otherwise
+	// the next delta or spinner tick would yank them back down.
+	wasAtBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(content)
-	m.viewport.GotoBottom()
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 // narrowBodyMinWidth is the minimum body column width below which the inline
