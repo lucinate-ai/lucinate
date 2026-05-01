@@ -65,6 +65,10 @@ func (b *Backend) CreateAgent(ctx context.Context, params backend.CreateAgentPar
 	return b.client.CreateAgent(ctx, params.Name, params.Workspace)
 }
 
+func (b *Backend) DeleteAgent(ctx context.Context, params backend.DeleteAgentParams) error {
+	return b.client.DeleteAgent(ctx, params.AgentID, params.DeleteFiles)
+}
+
 func (b *Backend) SessionsList(ctx context.Context, agentID string) (json.RawMessage, error) {
 	return b.client.SessionsList(ctx, agentID)
 }

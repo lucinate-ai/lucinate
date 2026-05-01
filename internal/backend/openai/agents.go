@@ -24,11 +24,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
+
+// archiveDir is the subdirectory under each connection's agent root
+// where archived agent dirs live. It's intentionally a hidden name so
+// AgentStore.List skips it (List filters on parsable agent.json at
+// the top level of each direct child; .archive itself has none).
+const archiveDir = ".archive"
 
 // AgentMeta is the shape persisted to agent.json. Identity / soul /
 // history are stored alongside in their own files because they're
@@ -169,9 +176,29 @@ func (s *AgentStore) Create(name, identity, soul, model string) (AgentMeta, erro
 
 // Delete removes an agent and its transcript. Used by /reset to
 // clear an agent's history (the TUI re-creates it immediately so the
-// user perceives it as a clean slate).
+// user perceives it as a clean slate) and by the picker's delete
+// affordance when the user chose "delete files".
 func (s *AgentStore) Delete(agentID string) error {
 	return os.RemoveAll(s.AgentDir(agentID))
+}
+
+// Archive moves an agent directory to <root>/.archive/<id>-<unixts>/
+// so the user can recover IDENTITY.md, SOUL.md and history.jsonl from
+// disk later. The agent disappears from List because the archive
+// lives outside the picker's enumeration root (List skips entries
+// without a parsable agent.json at their top level, and the .archive
+// directory itself is one).
+func (s *AgentStore) Archive(agentID string) error {
+	src := s.AgentDir(agentID)
+	if _, err := os.Stat(src); err != nil {
+		return err
+	}
+	dest := filepath.Join(s.root, archiveDir)
+	if err := os.MkdirAll(dest, 0700); err != nil {
+		return err
+	}
+	target := filepath.Join(dest, agentID+"-"+strconv.FormatInt(time.Now().Unix(), 10))
+	return os.Rename(src, target)
 }
 
 // LoadIdentity returns the IDENTITY.md body. Missing file returns

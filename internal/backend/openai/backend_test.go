@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +132,91 @@ func TestBackend_CreateAndListAgent(t *testing.T) {
 	}
 	if result.DefaultID != "researcher" {
 		t.Errorf("DefaultID = %q", result.DefaultID)
+	}
+}
+
+func TestBackend_DeleteAgent_DestroyRemovesDirectory(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{
+		Name: "tonuke", Identity: "id", Soul: "soul", Model: "m",
+	}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+
+	if err := b.DeleteAgent(context.Background(), backend.DeleteAgentParams{
+		AgentID:     "tonuke",
+		DeleteFiles: true,
+	}); err != nil {
+		t.Fatalf("DeleteAgent: %v", err)
+	}
+
+	if _, err := os.Stat(b.store.AgentDir("tonuke")); !os.IsNotExist(err) {
+		t.Errorf("agent dir should be removed: %v", err)
+	}
+	// And nothing should have been written to the archive — the
+	// destructive path bypasses Archive entirely.
+	if entries, _ := os.ReadDir(filepath.Join(b.store.Root(), ".archive")); len(entries) != 0 {
+		t.Errorf("destructive delete should not archive, got %d entries", len(entries))
+	}
+
+	result, _ := b.ListAgents(context.Background())
+	if len(result.Agents) != 0 {
+		t.Errorf("agent should be gone from list, got %d", len(result.Agents))
+	}
+}
+
+func TestBackend_DeleteAgent_KeepFilesArchives(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{
+		Name: "toarchive", Identity: "id", Soul: "soul", Model: "m",
+	}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+
+	if err := b.DeleteAgent(context.Background(), backend.DeleteAgentParams{
+		AgentID:     "toarchive",
+		DeleteFiles: false,
+	}); err != nil {
+		t.Fatalf("DeleteAgent: %v", err)
+	}
+
+	if _, err := os.Stat(b.store.AgentDir("toarchive")); !os.IsNotExist(err) {
+		t.Errorf("original dir should be moved: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(b.store.Root(), ".archive"))
+	if err != nil {
+		t.Fatalf("read .archive: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 archived agent, got %d", len(entries))
+	}
+
+	result, _ := b.ListAgents(context.Background())
+	if len(result.Agents) != 0 {
+		t.Errorf("archived agent should not appear in list, got %d", len(result.Agents))
+	}
+}
+
+func TestBackend_DeleteAgent_MissingAgent(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	err := b.DeleteAgent(context.Background(), backend.DeleteAgentParams{
+		AgentID:     "ghost",
+		DeleteFiles: true,
+	})
+	if err == nil {
+		t.Error("expected error for missing agent")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' error, got %v", err)
 	}
 }
 

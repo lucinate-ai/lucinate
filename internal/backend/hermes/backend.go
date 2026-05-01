@@ -199,6 +199,13 @@ func (b *Backend) CreateAgent(ctx context.Context, params backend.CreateAgentPar
 	return fmt.Errorf("agents are not user-creatable on Hermes connections; configure profiles with `hermes profile create`")
 }
 
+// DeleteAgent rejects for the same reason as CreateAgent: Hermes
+// profiles are managed server-side. AgentManagement=false hides the
+// affordance in the TUI; this is the defensive guard.
+func (b *Backend) DeleteAgent(ctx context.Context, params backend.DeleteAgentParams) error {
+	return fmt.Errorf("agents are not user-deletable on Hermes connections; manage profiles with `hermes profile delete`")
+}
+
 // SessionsList returns one synthetic session for the synthetic agent.
 // Last-message and updatedAt are best-effort: we hit the last
 // response we know about for the title preview, but if there's no

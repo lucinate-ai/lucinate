@@ -37,6 +37,11 @@ type fakeBackend struct {
 	clearedToken   bool
 	resetIdentity  bool
 
+	// Recorded DeleteAgent calls so tests can assert keep-files /
+	// delete-files routing.
+	deletedAgents []backend.DeleteAgentParams
+	deleteAgentErr error
+
 	// Cron RPC seams — tests pre-seed jobs / runs / errors and read
 	// back the recorded calls through these fields.
 	cronJobs        []protocol.CronJob
@@ -81,6 +86,10 @@ func (f *fakeBackend) ListAgents(ctx context.Context) (*protocol.AgentsListResul
 }
 func (f *fakeBackend) CreateAgent(ctx context.Context, params backend.CreateAgentParams) error {
 	return nil
+}
+func (f *fakeBackend) DeleteAgent(ctx context.Context, params backend.DeleteAgentParams) error {
+	f.deletedAgents = append(f.deletedAgents, params)
+	return f.deleteAgentErr
 }
 func (f *fakeBackend) SessionsList(ctx context.Context, agentID string) (json.RawMessage, error) {
 	return json.RawMessage(`{"sessions":[]}`), nil

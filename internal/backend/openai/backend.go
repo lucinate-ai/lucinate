@@ -210,6 +210,22 @@ func (b *Backend) CreateAgent(ctx context.Context, params backend.CreateAgentPar
 	return err
 }
 
+// DeleteAgent removes an agent from disk. When DeleteFiles is true
+// the agent directory is wiped (os.RemoveAll); when false the
+// directory is moved to <root>/.archive/<id>-<unixts>/ so the user
+// can recover IDENTITY.md, SOUL.md and history.jsonl from disk
+// later. Returns a wrapped error if the agent doesn't exist so a
+// stale UI doesn't silent-succeed.
+func (b *Backend) DeleteAgent(ctx context.Context, params backend.DeleteAgentParams) error {
+	if _, err := b.store.LoadMeta(params.AgentID); err != nil {
+		return fmt.Errorf("agent not found: %s: %w", params.AgentID, err)
+	}
+	if params.DeleteFiles {
+		return b.store.Delete(params.AgentID)
+	}
+	return b.store.Archive(params.AgentID)
+}
+
 // SessionsList returns a single-entry "session list" so the existing
 // TUI session browser keeps working: agent ≡ session 1:1, the
 // session key equals the agent ID.

@@ -63,8 +63,9 @@ func (d agentDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 type selectSubState int
 
 const (
-	subStateList   selectSubState = iota
+	subStateList selectSubState = iota
 	subStateCreate
+	subStateConfirmDelete
 )
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
@@ -114,12 +115,33 @@ type selectModel struct {
 	newAgentID     string
 	workspaceEdited bool
 	nameValidMsg   string
+
+	// Confirm-delete substate.
+	pendingDeleteID   string
+	pendingDeleteName string
+	confirmInput      textinput.Model
+	deleting          bool
+	deleteErr         error
+	// keepFiles is the user's "preserve content / destroy content"
+	// toggle. False (the default) maps to backend.DeleteAgentParams
+	// DeleteFiles=true — i.e. the destructive option is the default,
+	// but the user still has to type the agent name to fire it.
+	keepFiles bool
 }
 
 // agentsLoadedMsg is sent when agents are fetched from the gateway.
 type agentsLoadedMsg struct {
 	result *protocol.AgentsListResult
 	err    error
+}
+
+// agentDeletedMsg is sent when a delete-agent RPC completes. err is
+// nil on success; the picker reloads the list. On error the confirm
+// substate stays open with deleteErr surfaced inline so the user can
+// retry or cancel.
+type agentDeletedMsg struct {
+	name string
+	err  error
 }
 
 // newSelectModel constructs the agent picker. showConnections=true
@@ -180,6 +202,21 @@ func (m selectModel) createAgent(name, workspace string) tea.Cmd {
 	}
 }
 
+// deleteAgent dispatches the backend delete RPC. keepFiles inverts to
+// DeleteAgentParams.DeleteFiles so the on-screen toggle reads
+// naturally ("keep files" / "delete files") while the backend
+// receives the destructive flag.
+func (m selectModel) deleteAgent(agentID, name string, keepFiles bool) tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		err := b.DeleteAgent(context.Background(), backend.DeleteAgentParams{
+			AgentID:     agentID,
+			DeleteFiles: !keepFiles,
+		})
+		return agentDeletedMsg{name: name, err: err}
+	}
+}
+
 func (m selectModel) Init() tea.Cmd {
 	return m.loadAgents()
 }
@@ -224,6 +261,50 @@ func (m *selectModel) initCreateForm() tea.Cmd {
 	}
 
 	return cmd
+}
+
+// initConfirmDelete prepares the delete-confirm substate from the
+// passed-in item. The display name and ID are snapshotted at entry
+// so a list re-render mid-flight cannot resolve to the wrong agent.
+// keepFiles defaults to false (destructive); the user has to actively
+// type the name to fire either path, so they're not one keystroke
+// away from data loss.
+func (m *selectModel) initConfirmDelete(item agentItem) tea.Cmd {
+	display := item.agent.Name
+	if display == "" {
+		display = item.agent.ID
+	}
+	m.subState = subStateConfirmDelete
+	m.pendingDeleteID = item.agent.ID
+	m.pendingDeleteName = display
+	m.deleting = false
+	m.deleteErr = nil
+	m.keepFiles = false
+
+	m.confirmInput = textinput.New()
+	m.confirmInput.CharLimit = 64
+	m.confirmInput.Placeholder = display
+	return m.confirmInput.Focus()
+}
+
+// nameMatches reports whether the typed confirmation matches the
+// pending agent's display name. Comparison is case-insensitive with
+// whitespace trim — exact-character pedantry is hostile UX, and the
+// destructive intent is gated by the typing act, not by perfect
+// transcription.
+func (m selectModel) nameMatches() bool {
+	return m.pendingDeleteName != "" &&
+		strings.EqualFold(strings.TrimSpace(m.confirmInput.Value()), m.pendingDeleteName)
+}
+
+// keepFilesLabel renders the toggle button label so its current state
+// reads off the action surface ("Keep files" when about to switch
+// from destructive to preserve, and vice versa).
+func (m selectModel) keepFilesLabel() string {
+	if m.keepFiles {
+		return "Delete files"
+	}
+	return "Keep files"
 }
 
 // switchFocus toggles between the form's input fields. With the
@@ -292,12 +373,34 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 		m.loading = true
 		return m, m.loadAgents()
 
+	case agentDeletedMsg:
+		if msg.err != nil {
+			// Stay in the confirm substate so the user can read
+			// the error and either retry (correct the typed name
+			// if needed) or cancel cleanly. Don't clear the
+			// pending fields — those are needed for retry.
+			m.deleting = false
+			m.deleteErr = msg.err
+			return m, nil
+		}
+		m.subState = subStateList
+		m.pendingDeleteID = ""
+		m.pendingDeleteName = ""
+		m.deleting = false
+		m.deleteErr = nil
+		m.keepFiles = false
+		m.loading = true
+		return m, m.loadAgents()
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 
 	if m.subState == subStateCreate {
 		return m.updateCreateForm(msg)
+	}
+	if m.subState == subStateConfirmDelete {
+		return m.updateConfirmDelete(msg)
 	}
 
 	var cmd tea.Cmd
@@ -308,6 +411,9 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 func (m selectModel) handleKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 	if m.subState == subStateCreate {
 		return m.handleCreateKey(msg)
+	}
+	if m.subState == subStateConfirmDelete {
+		return m.handleConfirmDeleteKey(msg)
 	}
 
 	// Enter is intrinsic list navigation (select the highlighted item)
@@ -343,12 +449,30 @@ func (m selectModel) handleKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 // interactions and intentionally exposes no actions — those keys are
 // inherent form navigation, not discoverable commands.
 func (m selectModel) Actions() []Action {
+	if m.subState == subStateConfirmDelete {
+		// In confirm-delete the only available actions are the
+		// destructive ones. confirm-delete only appears when the
+		// typed name matches and no request is in flight — that's
+		// how the disabled state is expressed for native embedders
+		// (the Action struct has no Enabled flag).
+		actions := []Action{
+			{ID: "toggle-keep-files", Label: m.keepFilesLabel(), Key: "tab"},
+			{ID: "cancel-delete", Label: "Cancel", Key: "esc"},
+		}
+		if m.nameMatches() && !m.deleting {
+			actions = append([]Action{{ID: "confirm-delete", Label: "Delete", Key: "enter"}}, actions...)
+		}
+		return actions
+	}
 	if m.subState != subStateList {
 		return nil
 	}
 	var actions []Action
 	if !m.loading && m.err == nil && m.allowAgentManagement {
 		actions = append(actions, Action{ID: "new-agent", Label: "New agent", Key: "n"})
+		if m.list.SelectedItem() != nil {
+			actions = append(actions, Action{ID: "delete-agent", Label: "Delete agent", Key: "d"})
+		}
 	}
 	if m.err != nil {
 		actions = append(actions, Action{ID: "retry", Label: "Retry", Key: "r"})
@@ -369,6 +493,36 @@ func (m selectModel) TriggerAction(id string) (selectModel, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.initCreateForm()
+	case "delete-agent":
+		if m.loading || m.err != nil || !m.allowAgentManagement {
+			return m, nil
+		}
+		item, ok := m.list.SelectedItem().(agentItem)
+		if !ok {
+			return m, nil
+		}
+		return m, m.initConfirmDelete(item)
+	case "confirm-delete":
+		// Re-validate even though Actions() only emits this when
+		// nameMatches()&&!deleting — embedders are still in charge of
+		// their own dispatch and we don't trust them to filter.
+		if !m.nameMatches() || m.deleting {
+			return m, nil
+		}
+		m.deleting = true
+		m.deleteErr = nil
+		return m, m.deleteAgent(m.pendingDeleteID, m.pendingDeleteName, m.keepFiles)
+	case "cancel-delete":
+		m.subState = subStateList
+		m.pendingDeleteID = ""
+		m.pendingDeleteName = ""
+		m.deleting = false
+		m.deleteErr = nil
+		m.keepFiles = false
+		return m, nil
+	case "toggle-keep-files":
+		m.keepFiles = !m.keepFiles
+		return m, nil
 	case "retry":
 		if m.err == nil {
 			return m, nil
@@ -413,6 +567,50 @@ func (m selectModel) handleCreateKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd)
 	}
 
 	return m.updateCreateForm(msg)
+}
+
+// handleConfirmDeleteKey routes keystrokes inside the confirm-delete
+// substate. The name input is the focal element so most printable
+// keys are passed straight through to it; only intrinsic form keys
+// (esc / enter / tab) are intercepted. Plain `d` for "delete-agent"
+// is intentionally NOT bound here — it's a printable character the
+// user might type as part of the agent name. The action key surface
+// (Action{ID:"toggle-keep-files", Key:"tab"}) handles native
+// embedder dispatch; tab/esc/enter handle direct keystrokes.
+func (m selectModel) handleConfirmDeleteKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
+	if m.deleting {
+		// Request in flight; ignore further input. The user can't
+		// cancel an in-flight DeleteAgent — the network call has
+		// already left.
+		return m, nil
+	}
+	switch msg.String() {
+	case "esc":
+		return m.TriggerAction("cancel-delete")
+	case "tab", "shift+tab":
+		return m.TriggerAction("toggle-keep-files")
+	case "enter":
+		if m.nameMatches() {
+			return m.TriggerAction("confirm-delete")
+		}
+		// Enter without a matching name is a no-op so the user
+		// can't bypass the type-to-confirm gate.
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.confirmInput, cmd = m.confirmInput.Update(msg)
+	return m, cmd
+}
+
+// updateConfirmDelete forwards non-key messages (cursor blink, etc.)
+// to the textinput so it animates correctly while focused.
+func (m selectModel) updateConfirmDelete(msg tea.Msg) (selectModel, tea.Cmd) {
+	if m.deleting {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.confirmInput, cmd = m.confirmInput.Update(msg)
+	return m, cmd
 }
 
 func (m selectModel) updateCreateForm(msg tea.Msg) (selectModel, tea.Cmd) {
@@ -472,6 +670,9 @@ func (m selectModel) View() string {
 	if m.subState == subStateCreate {
 		return banner + m.viewCreateForm()
 	}
+	if m.subState == subStateConfirmDelete {
+		return banner + m.viewConfirmDelete()
+	}
 	return banner + m.list.View() + "\n" + hints
 }
 
@@ -524,6 +725,98 @@ func (m selectModel) viewCreateForm() string {
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+// viewConfirmDelete renders the loud delete-confirmation view. The
+// page deliberately spends real estate on warnings: the user is
+// about to lose the agent's identity, soul, transcript, and (unless
+// they toggle Keep files) the underlying file content.
+func (m selectModel) viewConfirmDelete() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render(" Delete agent "))
+	b.WriteString("\n\n")
+
+	heading := fmt.Sprintf("  Delete %q?", m.pendingDeleteName)
+	b.WriteString(errorStyle.Render(heading))
+	b.WriteString("\n")
+	b.WriteString(errorStyle.Render("  ⚠  This is permanent and cannot be undone."))
+	b.WriteString("\n\n")
+
+	b.WriteString("  This will remove:\n")
+	b.WriteString("    • The agent's metadata and listing\n")
+	b.WriteString("    • The full conversation transcript\n")
+	if m.useWorkspace {
+		b.WriteString("    • Gateway bindings for this agent\n")
+	}
+	b.WriteString("\n")
+
+	b.WriteString("  Files mode: " + toggleView(m.keepFilesLabel(), "Delete files", "Keep files"))
+	b.WriteString(helpStyle.Render("   (tab to toggle)"))
+	b.WriteString("\n")
+	b.WriteString("    " + helpStyle.Render(m.filesModeDescription()))
+	b.WriteString("\n\n")
+
+	b.WriteString("  Back up anything you want to keep first:\n")
+	b.WriteString("    " + helpStyle.Render(m.backupHint()))
+	b.WriteString("\n\n")
+
+	b.WriteString(fmt.Sprintf("  Type the agent name (%q) to confirm:\n", m.pendingDeleteName))
+	b.WriteString("  " + m.confirmInput.View() + "\n")
+	if v := strings.TrimSpace(m.confirmInput.Value()); v != "" && !m.nameMatches() {
+		b.WriteString("  " + errorStyle.Render("Name doesn't match") + "\n")
+	}
+	b.WriteString("\n")
+
+	switch {
+	case m.deleting:
+		b.WriteString(statusStyle.Render("  Deleting..."))
+	case m.deleteErr != nil:
+		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.deleteErr)))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("  enter: retry (when name matches)  ·  esc: cancel"))
+	case m.nameMatches():
+		b.WriteString(helpStyle.Render("  enter: delete  ·  tab: toggle files mode  ·  esc: cancel"))
+	default:
+		b.WriteString(helpStyle.Render("  type the name above, then enter to delete  ·  tab: toggle files mode  ·  esc: cancel"))
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// filesModeDescription explains what the current Keep/Delete files
+// toggle will actually do — wording is backend-aware so OpenClaw users
+// see "gateway workspace" copy and OpenAI-compat users see the local
+// archive path.
+func (m selectModel) filesModeDescription() string {
+	if m.useWorkspace {
+		if m.keepFiles {
+			return "Agent workspace files on the gateway will be left in place; only bindings are removed."
+		}
+		return "Agent workspace files on the gateway will be deleted along with the agent."
+	}
+	if m.keepFiles {
+		return "The agent directory will be moved to <root>/.archive/<id>-<timestamp>/ so IDENTITY.md, SOUL.md and the transcript are recoverable on disk."
+	}
+	return "IDENTITY.md, SOUL.md, and history.jsonl will be removed from disk."
+}
+
+// backupHint returns the path the user should back up before deleting,
+// formatted for the active backend type. For local-disk agents we try
+// to render the actual conn-id-rooted path; for OpenClaw the relevant
+// data lives on the gateway filesystem and we describe it in words.
+func (m selectModel) backupHint() string {
+	if m.useWorkspace {
+		return "Agent workspace and bindings on the gateway"
+	}
+	connID := ""
+	if m.activeConn != nil {
+		connID = m.activeConn.ID
+	}
+	if connID == "" {
+		connID = "<connection>"
+	}
+	return fmt.Sprintf("~/.lucinate/agents/%s/%s/", connID, m.pendingDeleteID)
 }
 
 func (m selectModel) selectedAgent() (agentItem, bool) {

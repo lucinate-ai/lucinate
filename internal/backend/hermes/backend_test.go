@@ -102,6 +102,16 @@ func TestCreateAgent_Rejected(t *testing.T) {
 	}
 }
 
+func TestDeleteAgent_Rejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	b := newBackend(t, srv)
+	err := b.DeleteAgent(context.Background(), backend.DeleteAgentParams{AgentID: "x", DeleteFiles: true})
+	if err == nil || !strings.Contains(err.Error(), "not user-deletable") {
+		t.Errorf("expected rejection, got %v", err)
+	}
+}
+
 func TestCapabilities_AgentManagementOff(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()

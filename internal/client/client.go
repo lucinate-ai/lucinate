@@ -243,6 +243,24 @@ func (c *Client) ListAgents(ctx context.Context) (*protocol.AgentsListResult, er
 	return c.currentGW().AgentsList(ctx)
 }
 
+// DeleteAgent removes an agent via the gateway API. deleteFiles is
+// the user's explicit choice from the confirm view: when true, the
+// gateway also wipes the agent's workspace files; when false, only
+// bindings drop and the workspace stays on disk so the user can
+// reuse it. The result payload (ok / removed bindings count) is
+// discarded — callers care only about success vs failure.
+func (c *Client) DeleteAgent(ctx context.Context, agentID string, deleteFiles bool) error {
+	gw := c.currentGW()
+	flag := deleteFiles
+	if _, err := gw.AgentsDelete(ctx, protocol.AgentsDeleteParams{
+		AgentID:     agentID,
+		DeleteFiles: &flag,
+	}); err != nil {
+		return fmt.Errorf("agents delete: %w", err)
+	}
+	return nil
+}
+
 // CreateAgent provisions a new agent via the gateway API and seeds an
 // IDENTITY.md file for it.
 func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error {

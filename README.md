@@ -22,7 +22,7 @@ No file browsers, no task boards, no dashboards. Just chat.
 
 - **Multiple backends** — connect to an [OpenClaw](https://github.com/openclaw/openclaw) gateway, a [Hermes Agent](https://github.com/nousresearch/hermes-agent) profile, or any OpenAI-compatible endpoint ([Ollama](https://ollama.com), vLLM, LM Studio, llamafile, OpenAI proper). Switch between saved connections with `/connections`.
 - **Streaming responses, conversation history, and multi-agent support**
-- **Create agents** directly from the TUI — gateway-managed for OpenClaw, or local `IDENTITY.md` + `SOUL.md` markdown for OpenAI-compatible backends. Hermes profiles are configured server-side via `hermes profile create`
+- **Create and delete agents** directly from the TUI — gateway-managed for OpenClaw, or local `IDENTITY.md` + `SOUL.md` markdown for OpenAI-compatible backends. Delete is type-the-name to confirm, with an optional "keep files" toggle so you can drop the listing without nuking the content. Hermes profiles are configured server-side via `hermes profile create`
 - **Markdown rendering** for assistant messages
 - **Shell commands** — run locally with `!` or remotely on the gateway with `!!`
 - **Message queueing** so you can keep typing while the agent is responding
@@ -96,6 +96,7 @@ Select an agent from the list to start chatting.
 |-----|--------|
 | `Enter` | Select agent |
 | `n` | Create a new agent |
+| `d` | Delete the highlighted agent (type-to-confirm) |
 | `Ctrl+C` | Quit |
 
 ### 4. Chat

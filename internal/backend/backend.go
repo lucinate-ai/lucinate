@@ -67,6 +67,17 @@ type Backend interface {
 	// correctly.
 	CreateAgent(ctx context.Context, params CreateAgentParams) error
 
+	// DeleteAgent removes an agent. The DeleteFiles field carries the
+	// user's explicit choice from the confirm view: when true, the
+	// agent's content (workspace files for OpenClaw; the agent
+	// directory for OpenAI-compat) is destroyed; when false, the
+	// content is preserved (gateway-side files left in place; local
+	// agents archived under <root>/.archive/<id>-<timestamp>/) so the
+	// user can recover anything they needed. Backends without user-
+	// driven CRUD (Hermes) reject; the TUI hides the affordance for
+	// those via the AgentManagement capability.
+	DeleteAgent(ctx context.Context, params DeleteAgentParams) error
+
 	// SessionsList returns the raw protocol.SessionsListResult JSON
 	// for the given agent so the existing TUI session browser keeps
 	// working unchanged.
@@ -136,6 +147,24 @@ type ChatSendParams struct {
 type SkillCatalogEntry struct {
 	Name        string
 	Description string
+}
+
+// DeleteAgentParams is the parameter struct for Backend.DeleteAgent.
+// AgentID is required; DeleteFiles carries the user's "keep files /
+// delete files" toggle from the confirm view. Backends interpret
+// DeleteFiles per their storage model — OpenClaw maps it to the
+// gateway's deleteFiles flag, OpenAI-compat maps true to a full
+// os.RemoveAll and false to an archive-and-rename, and Hermes
+// rejects.
+type DeleteAgentParams struct {
+	// AgentID is the agent to delete. Required.
+	AgentID string
+
+	// DeleteFiles is the user's explicit choice — true means
+	// destroy the agent's persisted content, false means preserve it
+	// (archived locally for OpenAI-compat, left on the gateway
+	// filesystem for OpenClaw).
+	DeleteFiles bool
 }
 
 // CreateAgentParams is the kitchen-sink parameter struct for

@@ -33,6 +33,8 @@ All files are mode `0600` and the agent directory is `0700`. `agent.json` is rew
 
 The agent ID is derived from the user-supplied name via `slugify` (lowercase, alphanumerics and hyphens only) — the ID is also the session key, so it has to round-trip through gateway-protocol fields without escaping.
 
+A sibling `~/.lucinate/agents/<connection-id>/.archive/` directory holds agents the user deleted with the "Keep files" option set — see below.
+
 ### IDENTITY.md and SOUL.md seeding
 
 On create, the form seeds both files with placeholders the user can edit on disk later:
@@ -50,6 +52,17 @@ Users can edit either file between sessions without going through the TUI — `S
 - Identity only → `# Identity\n\n…`
 - Soul only → `# Soul\n\n…`
 - Neither → empty string (model gets no preamble)
+
+### Delete vs archive
+
+`Backend.DeleteAgent(ctx, params)` dispatches on `params.DeleteFiles` (the user's keep-vs-delete-files toggle on the picker — see [agents.md](agents.md#deleting-an-agent)):
+
+- `DeleteFiles=true` → `AgentStore.Delete` (`os.RemoveAll(AgentDir(id))`). The on-disk content is gone.
+- `DeleteFiles=false` → `AgentStore.Archive` renames the agent dir to `<root>/.archive/<id>-<unixts>/`. IDENTITY.md, SOUL.md, history.jsonl, and agent.json all survive verbatim so the user can recover them by hand.
+
+`AgentStore.List` filters by parsable `agent.json` at the top of each direct child of the picker root, so the `.archive` directory is naturally skipped (it has no `agent.json` of its own and `LoadMeta` returns an error). No special-case is needed.
+
+`DeleteAgent` calls `LoadMeta` first to surface a "not found" error rather than silently succeeding on a stale agent ID — important because the UI presence-toggles its `confirm-delete` action on `nameMatches()`, which can theoretically pass while the underlying agent has already vanished.
 
 ## Sessions and history
 

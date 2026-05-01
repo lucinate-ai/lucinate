@@ -188,6 +188,56 @@ func TestAgentStore_DeleteRemovesDirectory(t *testing.T) {
 	}
 }
 
+func TestAgentStore_ArchiveMovesDirectoryAndPreservesContent(t *testing.T) {
+	store := newTestStore(t)
+	meta, _ := store.Create("alpha", "id-body", "soul-body", "model-x")
+	_ = store.AppendMessage(meta.ID, Message{Role: "user", Content: "hi"})
+
+	if err := store.Archive(meta.ID); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+	if _, err := os.Stat(store.AgentDir(meta.ID)); !os.IsNotExist(err) {
+		t.Errorf("original agent dir should be gone: %v", err)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(store.Root(), archiveDir))
+	if err != nil {
+		t.Fatalf("read archive: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 archived agent, got %d", len(entries))
+	}
+	archived := filepath.Join(store.Root(), archiveDir, entries[0].Name())
+	if !strings.HasPrefix(entries[0].Name(), meta.ID+"-") {
+		t.Errorf("archive name = %q, want prefix %q", entries[0].Name(), meta.ID+"-")
+	}
+
+	// Identity, soul, history all preserved verbatim under the
+	// archive — the whole point of the keep-files toggle.
+	for _, f := range []string{"IDENTITY.md", "SOUL.md", "history.jsonl", "agent.json"} {
+		if _, err := os.Stat(filepath.Join(archived, f)); err != nil {
+			t.Errorf("expected %s preserved under archive: %v", f, err)
+		}
+	}
+
+	// And List() ignores the archive dir — only directories with a
+	// parsable agent.json at the picker root count as agents.
+	list, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 0 {
+		t.Errorf("List should skip archived agents, got %d", len(list))
+	}
+}
+
+func TestAgentStore_ArchiveMissingAgent(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.Archive("ghost"); err == nil {
+		t.Error("expected error archiving non-existent agent")
+	}
+}
+
 func TestAgentStore_FilesArePrivate(t *testing.T) {
 	store := newTestStore(t)
 	meta, _ := store.Create("alpha", "ident", "soul", "")

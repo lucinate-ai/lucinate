@@ -11,12 +11,12 @@ See [connections.md](connections.md) for the cross-backend connection lifecycle 
 `Backend.Capabilities()` reports:
 
 - `AuthRecovery: AuthRecoveryAPIKey` — bearer-token auth-recovery modal, same as OpenAI.
-- `AgentManagement: false` — Hermes profiles are configured server-side (`hermes profile create` on the host), so the TUI's "new agent" affordance is hidden. `CreateAgent` returns an error if it ever gets called regardless.
+- `AgentManagement: false` — Hermes profiles are configured server-side (`hermes profile create` / `hermes profile delete` on the host), so the TUI's "new agent" and "delete agent" affordances are both hidden. `CreateAgent` and `DeleteAgent` both return clear errors if ever called regardless.
 - Everything else is off — `/status`, `/compact`, `/think`, `/stats`, `/crons`, `!!` render a "not available on this connection" system message.
 
 ## One profile, one agent
 
-`ListAgents` returns a single synthetic entry (ID `hermes`) representing the connected Hermes profile. The display name is the model surfaced by `GET /v1/models` — Hermes advertises the profile's pinned upstream model there. `CreateAgent` is rejected with a clear error pointing the user at `hermes profile create` on the host.
+`ListAgents` returns a single synthetic entry (ID `hermes`) representing the connected Hermes profile. The display name is the model surfaced by `GET /v1/models` — Hermes advertises the profile's pinned upstream model there. `CreateAgent` and `DeleteAgent` are both rejected with clear errors pointing the user at `hermes profile create` / `hermes profile delete` on the host.
 
 `SessionsList` returns one session keyed off the same synthetic ID. `CreateSession` is a no-op that round-trips the agent ID. There is no concept of multi-agent or multi-session within a single Hermes connection — to talk to a different personality, configure a different Hermes profile (which runs on its own port) and add it as a separate connection.
 

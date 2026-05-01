@@ -34,6 +34,8 @@ Agents are owned by the gateway. `ListAgents` and `CreateAgent` (with name + wor
 
 The gateway seeds an `IDENTITY.md` file in the agent's workspace on creation; lucinate does not author it.
 
+`DeleteAgent` forwards to `Client.DeleteAgent(ctx, agentID, deleteFiles)`, which sends `protocol.AgentsDeleteParams{AgentID, DeleteFiles: &flag}` over the wire. The `*bool` is always populated explicitly from the picker's keep-vs-delete-files toggle (see [agents.md](agents.md#deleting-an-agent)) — the gateway's implicit "preserve files" default never applies. When `deleteFiles=false` the gateway drops bindings but leaves the agent's workspace files in place; when true the workspace is wiped along with the bindings.
+
 ## Skill catalog injection
 
 The chat layer passes the active skill catalog through `ChatSendParams.Skills`. The backend prepends a `System:`-prefixed block — `Available agent skills (activate with /skill-name): …` — to the first turn of each session via `takePendingCatalog(sessionKey, skills)`. After the first turn, `catalogSent[sessionKey] = true` and subsequent sends omit the block.

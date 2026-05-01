@@ -6,7 +6,27 @@ import (
 
 	"github.com/a3tai/openclaw-go/protocol"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/lucinate-ai/lucinate/internal/backend"
 )
+
+// loadAgents seeds the picker with a set of agents via agentsLoadedMsg,
+// matching the path the picker takes once ListAgents returns. Used by
+// the delete-flow tests.
+func loadAgents(m selectModel, agents ...protocol.AgentSummary) selectModel {
+	defaultID := ""
+	if len(agents) > 0 {
+		defaultID = agents[0].ID
+	}
+	m, _ = m.Update(agentsLoadedMsg{
+		result: &protocol.AgentsListResult{
+			DefaultID: defaultID,
+			MainKey:   defaultID,
+			Agents:    agents,
+		},
+	})
+	return m
+}
 
 func TestSelectModel_AutoSelectSingleAgent(t *testing.T) {
 	m := newSelectModel(nil, false, false, nil)
@@ -297,6 +317,305 @@ func TestSelectModel_ConnectionsActionOnlyInManagedMode(t *testing.T) {
 		t.Errorf("expected key 'c', got %q", found.Key)
 	}
 }
+
+// hasAction reports whether the picker currently exposes an action
+// with the given ID. Used by the delete-flow tests to verify the
+// confirm-delete action toggles correctly with the typed-name match.
+func hasAction(m selectModel, id string) bool {
+	for _, a := range m.Actions() {
+		if a.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSelectModel_DeleteActionAppearsWhenManagementEnabled(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+
+	if !hasAction(m, "delete-agent") {
+		t.Errorf("expected delete-agent action when management is enabled and a list item is selected, got %+v", m.Actions())
+	}
+}
+
+func TestSelectModel_DeleteActionHiddenWhenManagementDisabled(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	// allowAgentManagement remains false (Hermes-style)
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+
+	if hasAction(m, "delete-agent") {
+		t.Errorf("expected delete-agent to be hidden when AgentManagement=false, got %+v", m.Actions())
+	}
+}
+
+func TestSelectModel_DeleteActionHiddenWhenLoading(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	// loading=true is the initial state — list never received a load msg.
+
+	if hasAction(m, "delete-agent") {
+		t.Errorf("expected delete-agent to be hidden while loading, got %+v", m.Actions())
+	}
+}
+
+func TestSelectModel_DeleteActionHiddenWhenEmptyList(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	m = loadAgents(m) // no agents
+
+	if hasAction(m, "delete-agent") {
+		t.Errorf("expected delete-agent to be hidden when list is empty, got %+v", m.Actions())
+	}
+}
+
+func TestSelectModel_TriggerDeleteEntersConfirmSubstate(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha Agent"})
+
+	m, _ = m.TriggerAction("delete-agent")
+
+	if m.subState != subStateConfirmDelete {
+		t.Fatalf("expected subStateConfirmDelete, got %v", m.subState)
+	}
+	if m.pendingDeleteID != "alpha" {
+		t.Errorf("pendingDeleteID = %q, want alpha", m.pendingDeleteID)
+	}
+	if m.pendingDeleteName != "Alpha Agent" {
+		t.Errorf("pendingDeleteName = %q, want %q", m.pendingDeleteName, "Alpha Agent")
+	}
+	if m.keepFiles {
+		t.Error("keepFiles should default to false (destructive)")
+	}
+	if m.deleting {
+		t.Error("deleting should be false at substate entry")
+	}
+}
+
+func TestSelectModel_TriggerDeleteUsesIDWhenNameEmpty(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	m = loadAgents(m, protocol.AgentSummary{ID: "id-only"})
+
+	m, _ = m.TriggerAction("delete-agent")
+	if m.pendingDeleteName != "id-only" {
+		t.Errorf("pendingDeleteName = %q, expected fallback to ID", m.pendingDeleteName)
+	}
+}
+
+func TestSelectModel_ConfirmDeleteRequiresNameMatch(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+	m, _ = m.TriggerAction("delete-agent")
+
+	if hasAction(m, "confirm-delete") {
+		t.Error("confirm-delete should not appear before name is typed")
+	}
+
+	m.confirmInput.SetValue("wrong-name")
+	if hasAction(m, "confirm-delete") {
+		t.Error("confirm-delete should not appear with mismatched name")
+	}
+
+	m.confirmInput.SetValue("Alpha")
+	if !hasAction(m, "confirm-delete") {
+		t.Errorf("confirm-delete should appear when name matches, got %+v", m.Actions())
+	}
+}
+
+func TestSelectModel_ConfirmDeleteCaseInsensitive(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "My Agent"})
+	m, _ = m.TriggerAction("delete-agent")
+
+	m.confirmInput.SetValue("MY AGENT")
+	if !m.nameMatches() {
+		t.Error("expected case-insensitive match")
+	}
+
+	m.confirmInput.SetValue("  my agent  ")
+	if !m.nameMatches() {
+		t.Error("expected whitespace-trimmed match")
+	}
+}
+
+func TestSelectModel_ConfirmDeleteEscClearsState(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+	m, _ = m.TriggerAction("delete-agent")
+	m.confirmInput.SetValue("Alpha")
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+
+	if m.subState != subStateList {
+		t.Errorf("expected return to subStateList, got %v", m.subState)
+	}
+	if m.pendingDeleteID != "" || m.pendingDeleteName != "" {
+		t.Errorf("expected pending fields cleared, got id=%q name=%q", m.pendingDeleteID, m.pendingDeleteName)
+	}
+}
+
+func TestSelectModel_ToggleKeepFilesFlipsState(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+	m, _ = m.TriggerAction("delete-agent")
+
+	if m.keepFiles {
+		t.Fatal("expected keepFiles=false at entry")
+	}
+
+	m, _ = m.TriggerAction("toggle-keep-files")
+	if !m.keepFiles {
+		t.Error("expected keepFiles=true after first toggle")
+	}
+
+	// Action label should now read the inverse — i.e. the button
+	// offers to flip back to "Delete files".
+	for _, a := range m.Actions() {
+		if a.ID == "toggle-keep-files" && a.Label != "Delete files" {
+			t.Errorf("toggle label = %q, want %q", a.Label, "Delete files")
+		}
+	}
+
+	m, _ = m.TriggerAction("toggle-keep-files")
+	if m.keepFiles {
+		t.Error("expected keepFiles=false after second toggle")
+	}
+}
+
+func TestSelectModel_ToggleKeepFilesViaTabKey(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.allowAgentManagement = true
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+	m, _ = m.TriggerAction("delete-agent")
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !m.keepFiles {
+		t.Error("expected tab key to toggle keepFiles")
+	}
+}
+
+func TestSelectModel_DeleteCmdPassesKeepFilesChoice(t *testing.T) {
+	fb := newFakeBackend()
+	fb.caps.AgentManagement = true
+	m := newSelectModel(fb, false, false, nil)
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+	m, _ = m.TriggerAction("delete-agent")
+	m.confirmInput.SetValue("Alpha")
+	// Toggle to keep files.
+	m, _ = m.TriggerAction("toggle-keep-files")
+
+	m, cmd := m.TriggerAction("confirm-delete")
+	if !m.deleting {
+		t.Fatal("expected deleting=true after confirm")
+	}
+	if cmd == nil {
+		t.Fatal("expected a cmd from confirm-delete")
+	}
+	// Run the cmd to actually call the backend (the cmd's body
+	// invokes b.DeleteAgent and returns agentDeletedMsg).
+	_ = cmd()
+
+	if len(fb.deletedAgents) != 1 {
+		t.Fatalf("expected 1 DeleteAgent call, got %d", len(fb.deletedAgents))
+	}
+	got := fb.deletedAgents[0]
+	if got.AgentID != "alpha" {
+		t.Errorf("AgentID = %q, want alpha", got.AgentID)
+	}
+	if got.DeleteFiles {
+		t.Error("expected DeleteFiles=false (keepFiles=true was set)")
+	}
+}
+
+func TestSelectModel_ConfirmDeleteIgnoredWithoutMatch(t *testing.T) {
+	fb := newFakeBackend()
+	fb.caps.AgentManagement = true
+	m := newSelectModel(fb, false, false, nil)
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+	m, _ = m.TriggerAction("delete-agent")
+	m.confirmInput.SetValue("nope")
+
+	m, cmd := m.TriggerAction("confirm-delete")
+	if cmd != nil {
+		t.Error("expected no cmd when name doesn't match")
+	}
+	if m.deleting {
+		t.Error("expected deleting to remain false")
+	}
+}
+
+func TestSelectModel_AgentDeletedSuccessReloads(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.subState = subStateConfirmDelete
+	m.deleting = true
+	m.pendingDeleteID = "alpha"
+	m.pendingDeleteName = "Alpha"
+
+	m, _ = m.Update(agentDeletedMsg{name: "Alpha"})
+
+	if m.subState != subStateList {
+		t.Errorf("subState = %v, want subStateList", m.subState)
+	}
+	if !m.loading {
+		t.Error("expected loading=true (reload) after successful delete")
+	}
+	if m.pendingDeleteID != "" || m.pendingDeleteName != "" {
+		t.Error("expected pending fields cleared on success")
+	}
+	if m.deleting {
+		t.Error("expected deleting=false on success")
+	}
+}
+
+func TestSelectModel_AgentDeletedErrorStaysInConfirm(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.subState = subStateConfirmDelete
+	m.deleting = true
+	m.pendingDeleteID = "alpha"
+	m.pendingDeleteName = "Alpha"
+
+	m, _ = m.Update(agentDeletedMsg{name: "Alpha", err: fmt.Errorf("boom")})
+
+	if m.subState != subStateConfirmDelete {
+		t.Errorf("expected to stay in confirm substate on error, got %v", m.subState)
+	}
+	if m.deleting {
+		t.Error("expected deleting=false on error")
+	}
+	if m.deleteErr == nil {
+		t.Error("expected deleteErr to be set")
+	}
+	// Pending fields preserved so the user can retry without
+	// re-typing.
+	if m.pendingDeleteID != "alpha" || m.pendingDeleteName != "Alpha" {
+		t.Errorf("expected pending fields preserved on error, got id=%q name=%q", m.pendingDeleteID, m.pendingDeleteName)
+	}
+}
+
+func TestSelectModel_DeletingBlocksKeystrokes(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil)
+	m.subState = subStateConfirmDelete
+	m.deleting = true
+	m.pendingDeleteID = "alpha"
+	m.pendingDeleteName = "Alpha"
+
+	prev := m.keepFiles
+	// Tab while deleting should NOT flip the toggle.
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.keepFiles != prev {
+		t.Error("tab should be ignored while a delete is in flight")
+	}
+}
+
+// Compile-time guard so the fake backend tracks DeleteAgent calls.
+var _ = backend.DeleteAgentParams{}
 
 func TestSelectModel_ConnectionsActionEmitsShowConnections(t *testing.T) {
 	m := newSelectModel(nil, false, true, nil)

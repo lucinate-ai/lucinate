@@ -44,7 +44,7 @@ Legacy mode (`AppOptions.Backend != nil`, no `Store`) is for native-platform emb
 
 `backend.Backend.Capabilities()` reports a `Capabilities` struct (`internal/backend/backend.go`); the TUI type-asserts against optional sub-interfaces (`StatusBackend`, `ExecBackend`, `CompactBackend`, `ThinkingBackend`, `UsageBackend`, `CronBackend`, `DeviceTokenAuth`, `APIKeyAuth`) at the relevant call sites. OpenClaw implements all of them. OpenAI and Hermes implement only `APIKeyAuth` — backend-only commands (`/status`, `/compact`, `/think`, `/stats`, `/crons`, `!!`) render a "not available on this connection" system message instead of erroring.
 
-The `Capabilities.AgentManagement` flag gates the picker's "new agent" affordance. OpenClaw and OpenAI opt in (the user creates agents via the form). Hermes leaves it false because profiles are configured server-side via `hermes profile create` on the host, so the create-agent button is hidden on Hermes connections.
+The `Capabilities.AgentManagement` flag gates both the picker's "new agent" affordance and its "delete agent" affordance. OpenClaw and OpenAI opt in (the user creates and deletes agents via the picker). Hermes leaves it false because profiles are configured server-side via `hermes profile create` on the host, so both buttons are hidden on Hermes connections; `Backend.DeleteAgent` and `Backend.CreateAgent` both reject defensively if reached.
 
 ## Auth-recovery modals
 
