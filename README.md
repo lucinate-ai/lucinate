@@ -59,7 +59,7 @@ On first launch lucinate opens a **Connections** picker so you can add a backend
 Three connection types are supported:
 
 - **[OpenClaw](docs/backend_openclaw.md)** — connect to an OpenClaw gateway over WebSocket. Auth uses Ed25519 device pairing.
-- **[OpenAI-compatible](docs/backend_openai.md)** — connect to any `/v1/chat/completions` endpoint (Ollama, vLLM, LM Studio, llamafile, OpenAI).
+- **[OpenAI-compatible](docs/backend_openai.md)** — Ollama, vLLM, LM Studio, llamafile, OpenAI - connect to any `/v1/chat/completions` endpoint.
 - **[Hermes (Nous Research)](docs/backend_hermes.md)** — connect to a Hermes Agent profile's `/v1/responses` API server. One Lucinate connection maps to one Hermes profile; chat state lives server-side.
 
 OpenClaw URLs can use `https`, `http`, `wss`, or `ws` — lucinate derives the WebSocket endpoint automatically. OpenAI-compatible and Hermes URLs are HTTP(S) base URLs ending in `/v1`.
