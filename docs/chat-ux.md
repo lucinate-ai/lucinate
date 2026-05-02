@@ -40,7 +40,7 @@ The spinner also appears while the model is thinking before any response deltas 
 
 The header line shows:
 
-- **Left:** agent name · model ID (last path component) · thinking level (if set and not `off`) · connection status (only when not connected)
+- **Left:** agent name · model ID (last path component) · thinking level (if set and not `off`) · connection status (only when not connected) · update-available badge (only when `prefs.UpdateChecksEnabled()` and the startup check found a newer release)
 - **Right:** token summary (input / output / cache) · total cost
 
 Stats are loaded on init and refreshed after each message exchange via `loadStats()`. The header is re-rendered on every `statsLoadedMsg`. Token and cost values come from `client.SessionUsage()`.
@@ -54,6 +54,12 @@ The connection-status badge is rendered in the error colour and only appears whe
 | `✖ auth failed — restart` | The gateway rejected the device token after restart. The supervisor has stopped retrying — Ctrl+C and re-run `lucinate` so the interactive auth recovery flow can run on stdin. |
 
 A matching one-line system message is also added to the chat scrollback on disconnect (`Lost gateway connection — attempting to reconnect…`) and on recovery (`Reconnected to gateway.`) so the event is visible even after the badge clears. See [authentication.md](authentication.md#reconnect-after-disconnection) for the full lifecycle.
+
+### Update-available badge
+
+A second header badge — `↑ vX.Y.Z`, rendered in the same warn style as `⚠ disconnected` — appears when the daily startup update check finds a newer release. The check is owned by `internal/update`: a single `GET https://lucinate.ai/latest.json` with a 5-second timeout, fired once per day from `AppModel.Init()`. Anything goes wrong (offline, captive portal, malformed manifest, non-stable build) and `update.Check` returns `nil, nil` — no badge, no error.
+
+The badge is suppressed once the user has seen it: `prefs.LatestSeenVersion` records the manifest version on every successful check, and the badge only appears when the manifest moves *past* that version. Toggle the whole thing off via the `Check for updates on startup` row in `/config`, or set `LUCINATE_DISABLE_UPDATE_CHECK=1` for an unconditional opt-out (useful in CI). The manifest URL itself can be overridden via `LUCINATE_UPDATE_MANIFEST_URL` for local testing.
 
 ## Tool call cards
 

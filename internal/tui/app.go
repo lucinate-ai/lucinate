@@ -121,6 +121,12 @@ type AppModel struct {
 	onFocusedFieldChanged func(string)
 	lastFocusedFieldKey   string
 	focusedFieldReported  bool
+
+	// Update-check state. Populated when the daily startup check
+	// finds a release the user hasn't yet seen.
+	updateAvailable bool
+	updateLatest    string
+	updateURL       string
 }
 
 // NewApp creates the root application model.
@@ -170,15 +176,19 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 }
 
 func (m AppModel) Init() tea.Cmd {
+	var cmd tea.Cmd
 	switch m.state {
 	case viewSelect:
-		return m.selectModel.Init()
+		cmd = m.selectModel.Init()
 	case viewConnecting:
-		return m.startConnect(m.connectingModel.connection)
+		cmd = m.startConnect(m.connectingModel.connection)
 	case viewConnections:
-		return m.connectionsModel.Init()
+		cmd = m.connectionsModel.Init()
 	}
-	return nil
+	if upd := updateCheckCmd(m.prefs); upd != nil {
+		cmd = tea.Batch(cmd, upd)
+	}
+	return cmd
 }
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -426,6 +436,26 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		m.prefs = msg.prefs
 		m.chatModel.prefs = msg.prefs
 		return m, nil
+
+	case updateCheckDoneMsg:
+		// Mutate prefs on the main loop so this never races the
+		// config view's writer. Newer is set only when there is a
+		// genuinely new version the user hasn't already seen.
+		m.prefs.LastUpdateCheck = msg.At
+		if msg.LatestSeen != "" {
+			m.prefs.LatestSeenVersion = msg.LatestSeen
+		}
+		if msg.Newer {
+			m.updateAvailable = true
+			m.updateLatest = msg.LatestSeen
+			m.updateURL = msg.URL
+			m.chatModel.updateLatest = msg.LatestSeen
+		}
+		prefs := m.prefs
+		return m, func() tea.Msg {
+			_ = config.SavePreferences(prefs)
+			return nil
+		}
 
 	case ConnStateMsg:
 		m.chatModel.applyConnState(msg)

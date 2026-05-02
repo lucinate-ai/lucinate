@@ -46,3 +46,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ steps.tap-token.outputs.token }}
+
+      # Notify the website repo so it can refresh public/latest.json,
+      # which the in-app update check fetches on startup. Skip
+      # pre-release tags (anything containing "-") so users on the
+      # stable channel never see an RC badge.
+      - name: Mint website dispatch token
+        id: website-token
+        if: ${{ !contains(github.ref_name, '-') }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.WEBSITE_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.WEBSITE_DISPATCH_APP_PRIVATE_KEY }}
+          owner: lucinate-ai
+          repositories: website
+
+      - name: Notify website of new release
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          GH_TOKEN: ${{ steps.website-token.outputs.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            /repos/lucinate-ai/website/dispatches \
+            -f event_type=release-published \
+            -f "client_payload[version]=${TAG}"

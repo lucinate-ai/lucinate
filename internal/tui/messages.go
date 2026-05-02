@@ -305,3 +305,14 @@ type cronJobRemovedMsg struct {
 	jobID string
 	err   error
 }
+
+// updateCheckDoneMsg carries the outcome of the startup update check.
+// It always fires when a check runs (so the AppModel can persist the
+// new last-check timestamp on the main loop, never racing the config
+// view's writer); Newer is true only when the user should see a badge.
+type updateCheckDoneMsg struct {
+	At         int64  // unix seconds when the check completed
+	LatestSeen string // manifest version, or "" when the check returned nothing
+	Newer      bool   // true iff badge should appear (also implies caller hasn't already seen Latest)
+	URL        string // release URL when Newer is true
+}
