@@ -7,11 +7,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
@@ -72,13 +72,13 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // selectModel is the agent selection view.
 type selectModel struct {
-	list             list.Model
-	backend          backend.Backend
-	loading          bool
-	err              error
-	mainKey          string
-	selected         bool
-	hideHints        bool
+	list      list.Model
+	backend   backend.Backend
+	loading   bool
+	err       error
+	mainKey   string
+	selected  bool
+	hideHints bool
 	// showConnections enables the "Connections" action so the user
 	// can jump back to the connections picker from the agent list
 	// without going through chat first. Only meaningful in managed
@@ -106,15 +106,15 @@ type selectModel struct {
 	activeConn *config.Connection
 
 	// Create-agent form state.
-	subState       selectSubState
-	nameInput      textinput.Model
-	workInput      textinput.Model
-	focusedField   int // 0 = name, 1 = workspace (when useWorkspace)
-	creating       bool
-	createErr      error
-	newAgentID     string
+	subState        selectSubState
+	nameInput       textinput.Model
+	workInput       textinput.Model
+	focusedField    int // 0 = name, 1 = workspace (when useWorkspace)
+	creating        bool
+	createErr       error
+	newAgentID      string
 	workspaceEdited bool
-	nameValidMsg   string
+	nameValidMsg    string
 
 	// Confirm-delete substate.
 	pendingDeleteID   string
@@ -152,7 +152,7 @@ type agentDeletedMsg struct {
 // here so the picker doesn't have to keep asking. activeConn (when
 // non-nil) is rendered as a thin status row at the top of the view
 // so the user can see which connection is in scope.
-func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeConn *config.Connection) selectModel {
+func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeConn *config.Connection, disableExitKeys bool) selectModel {
 	useWorkspace := false
 	allowAgentMgmt := false
 	if b != nil {
@@ -171,6 +171,10 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 	l.SetShowHelp(!hideHints)
 	l.Styles.Title = headerStyle
 	l.SetFilteringEnabled(false)
+	if disableExitKeys {
+		l.KeyMap.Quit.Unbind()
+		l.KeyMap.ForceQuit.Unbind()
+	}
 
 	return selectModel{
 		list:                 l,

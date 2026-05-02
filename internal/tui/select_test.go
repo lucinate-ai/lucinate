@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	tea "charm.land/bubbletea/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 )
@@ -29,7 +29,7 @@ func loadAgents(m selectModel, agents ...protocol.AgentSummary) selectModel {
 }
 
 func TestSelectModel_AutoSelectSingleAgent(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 
 	msg := agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -59,7 +59,7 @@ func TestSelectModel_AutoSelectSingleAgent(t *testing.T) {
 }
 
 func TestSelectModel_NoAutoSelectMultipleAgents(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 
 	msg := agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -80,7 +80,7 @@ func TestSelectModel_NoAutoSelectMultipleAgents(t *testing.T) {
 }
 
 func TestSelectModel_NoAutoSelectOnError(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 
 	msg := agentsLoadedMsg{
 		err: fmt.Errorf("connection failed"),
@@ -97,7 +97,7 @@ func TestSelectModel_NoAutoSelectOnError(t *testing.T) {
 }
 
 func TestSelectModel_CreateFormActivation(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	// Simulate agents loaded so the list is ready.
 	m.loading = false
 	m.allowAgentManagement = true
@@ -110,7 +110,7 @@ func TestSelectModel_CreateFormActivation(t *testing.T) {
 }
 
 func TestSelectModel_CreateFormCancel(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.loading = false
 	m.allowAgentManagement = true
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
@@ -126,7 +126,7 @@ func TestSelectModel_CreateFormCancel(t *testing.T) {
 }
 
 func TestSelectModel_CreateFormNotActivatedWhileLoading(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	// loading is true by default
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
@@ -179,7 +179,7 @@ func TestValidateName(t *testing.T) {
 }
 
 func TestSelectModel_WorkspaceAutoSuggest(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.loading = false
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
 
@@ -202,7 +202,7 @@ func TestSelectModel_WorkspaceAutoSuggest(t *testing.T) {
 }
 
 func TestSelectModel_WorkspaceManualEditStopsAutoSuggest(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.loading = false
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n'})
 
@@ -221,7 +221,7 @@ func TestSelectModel_WorkspaceManualEditStopsAutoSuggest(t *testing.T) {
 }
 
 func TestSelectModel_AgentCreatedSuccess(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.subState = subStateCreate
 	m.creating = true
 
@@ -244,7 +244,7 @@ func TestSelectModel_AgentCreatedSuccess(t *testing.T) {
 }
 
 func TestSelectModel_AgentCreatedError(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.subState = subStateCreate
 	m.creating = true
 
@@ -264,7 +264,7 @@ func TestSelectModel_AgentCreatedError(t *testing.T) {
 }
 
 func TestSelectModel_AutoSelectNewAgent(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.newAgentID = "new-agent"
 
 	m, _ = m.Update(agentsLoadedMsg{
@@ -294,14 +294,14 @@ func TestSelectModel_AutoSelectNewAgent(t *testing.T) {
 }
 
 func TestSelectModel_ConnectionsActionOnlyInManagedMode(t *testing.T) {
-	legacy := newSelectModel(nil, false, false, nil)
+	legacy := newSelectModel(nil, false, false, nil, false)
 	for _, a := range legacy.Actions() {
 		if a.ID == "connections" {
 			t.Errorf("legacy mode should not expose connections action, got %+v", legacy.Actions())
 		}
 	}
 
-	managed := newSelectModel(nil, false, true, nil)
+	managed := newSelectModel(nil, false, true, nil, false)
 	// Loaded state — no error — so the new-agent action is also
 	// present. Find the connections action.
 	var found *Action
@@ -331,7 +331,7 @@ func hasAction(m selectModel, id string) bool {
 }
 
 func TestSelectModel_DeleteActionAppearsWhenManagementEnabled(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 
@@ -341,7 +341,7 @@ func TestSelectModel_DeleteActionAppearsWhenManagementEnabled(t *testing.T) {
 }
 
 func TestSelectModel_DeleteActionHiddenWhenManagementDisabled(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	// allowAgentManagement remains false (Hermes-style)
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 
@@ -351,7 +351,7 @@ func TestSelectModel_DeleteActionHiddenWhenManagementDisabled(t *testing.T) {
 }
 
 func TestSelectModel_DeleteActionHiddenWhenLoading(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	// loading=true is the initial state — list never received a load msg.
 
@@ -361,7 +361,7 @@ func TestSelectModel_DeleteActionHiddenWhenLoading(t *testing.T) {
 }
 
 func TestSelectModel_DeleteActionHiddenWhenEmptyList(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	m = loadAgents(m) // no agents
 
@@ -371,7 +371,7 @@ func TestSelectModel_DeleteActionHiddenWhenEmptyList(t *testing.T) {
 }
 
 func TestSelectModel_TriggerDeleteEntersConfirmSubstate(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha Agent"})
 
@@ -395,7 +395,7 @@ func TestSelectModel_TriggerDeleteEntersConfirmSubstate(t *testing.T) {
 }
 
 func TestSelectModel_TriggerDeleteUsesIDWhenNameEmpty(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	m = loadAgents(m, protocol.AgentSummary{ID: "id-only"})
 
@@ -406,7 +406,7 @@ func TestSelectModel_TriggerDeleteUsesIDWhenNameEmpty(t *testing.T) {
 }
 
 func TestSelectModel_ConfirmDeleteRequiresNameMatch(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 	m, _ = m.TriggerAction("delete-agent")
@@ -427,7 +427,7 @@ func TestSelectModel_ConfirmDeleteRequiresNameMatch(t *testing.T) {
 }
 
 func TestSelectModel_ConfirmDeleteCaseInsensitive(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "My Agent"})
 	m, _ = m.TriggerAction("delete-agent")
@@ -444,7 +444,7 @@ func TestSelectModel_ConfirmDeleteCaseInsensitive(t *testing.T) {
 }
 
 func TestSelectModel_ConfirmDeleteEscClearsState(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 	m, _ = m.TriggerAction("delete-agent")
@@ -461,7 +461,7 @@ func TestSelectModel_ConfirmDeleteEscClearsState(t *testing.T) {
 }
 
 func TestSelectModel_ToggleKeepFilesFlipsState(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 	m, _ = m.TriggerAction("delete-agent")
@@ -490,7 +490,7 @@ func TestSelectModel_ToggleKeepFilesFlipsState(t *testing.T) {
 }
 
 func TestSelectModel_ToggleKeepFilesViaTabKey(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.allowAgentManagement = true
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 	m, _ = m.TriggerAction("delete-agent")
@@ -504,7 +504,7 @@ func TestSelectModel_ToggleKeepFilesViaTabKey(t *testing.T) {
 func TestSelectModel_DeleteCmdPassesKeepFilesChoice(t *testing.T) {
 	fb := newFakeBackend()
 	fb.caps.AgentManagement = true
-	m := newSelectModel(fb, false, false, nil)
+	m := newSelectModel(fb, false, false, nil, false)
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 	m, _ = m.TriggerAction("delete-agent")
 	m.confirmInput.SetValue("Alpha")
@@ -537,7 +537,7 @@ func TestSelectModel_DeleteCmdPassesKeepFilesChoice(t *testing.T) {
 func TestSelectModel_ConfirmDeleteIgnoredWithoutMatch(t *testing.T) {
 	fb := newFakeBackend()
 	fb.caps.AgentManagement = true
-	m := newSelectModel(fb, false, false, nil)
+	m := newSelectModel(fb, false, false, nil, false)
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 	m, _ = m.TriggerAction("delete-agent")
 	m.confirmInput.SetValue("nope")
@@ -552,7 +552,7 @@ func TestSelectModel_ConfirmDeleteIgnoredWithoutMatch(t *testing.T) {
 }
 
 func TestSelectModel_AgentDeletedSuccessReloads(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.subState = subStateConfirmDelete
 	m.deleting = true
 	m.pendingDeleteID = "alpha"
@@ -575,7 +575,7 @@ func TestSelectModel_AgentDeletedSuccessReloads(t *testing.T) {
 }
 
 func TestSelectModel_AgentDeletedErrorStaysInConfirm(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.subState = subStateConfirmDelete
 	m.deleting = true
 	m.pendingDeleteID = "alpha"
@@ -600,7 +600,7 @@ func TestSelectModel_AgentDeletedErrorStaysInConfirm(t *testing.T) {
 }
 
 func TestSelectModel_DeletingBlocksKeystrokes(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.subState = subStateConfirmDelete
 	m.deleting = true
 	m.pendingDeleteID = "alpha"
@@ -618,7 +618,7 @@ func TestSelectModel_DeletingBlocksKeystrokes(t *testing.T) {
 var _ = backend.DeleteAgentParams{}
 
 func TestSelectModel_ConnectionsActionEmitsShowConnections(t *testing.T) {
-	m := newSelectModel(nil, false, true, nil)
+	m := newSelectModel(nil, false, true, nil, false)
 	_, cmd := m.TriggerAction("connections")
 	if cmd == nil {
 		t.Fatal("expected cmd from connections action")

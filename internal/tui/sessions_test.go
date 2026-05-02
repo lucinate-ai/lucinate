@@ -7,7 +7,7 @@ import (
 )
 
 func newTestSessionsModel() sessionsModel {
-	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, nil)
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, nil, false)
 	m.setSize(120, 40)
 	return m
 }
@@ -202,7 +202,7 @@ func TestSkipHeaders_SkipsGroupHeader(t *testing.T) {
 	// After loading, the list has [header, s1, s2] and selection is at index 1.
 	// Move up should skip the header.
 	m.list.Select(0) // put on the header
-	m.skipHeaders(1)  // move down
+	m.skipHeaders(1) // move down
 	if m.list.Index() != 1 {
 		t.Errorf("expected index 1 after skipping header, got %d", m.list.Index())
 	}

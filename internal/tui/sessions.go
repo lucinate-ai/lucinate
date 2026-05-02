@@ -104,7 +104,7 @@ type sessionsModel struct {
 	activeConn *config.Connection // rendered above the session list — see renderConnectionBanner.
 }
 
-func newSessionsModel(b backend.Backend, agentID, agentName, modelID, mainKey string, hideHints bool, activeConn *config.Connection) sessionsModel {
+func newSessionsModel(b backend.Backend, agentID, agentName, modelID, mainKey string, hideHints bool, activeConn *config.Connection, disableExitKeys bool) sessionsModel {
 	l := list.New(nil, sessionDelegate{}, 0, 0)
 	l.Title = "Sessions"
 	l.SetShowStatusBar(false)
@@ -113,6 +113,10 @@ func newSessionsModel(b backend.Backend, agentID, agentName, modelID, mainKey st
 	l.SetShowHelp(!hideHints)
 	l.Styles.Title = headerStyle
 	l.SetFilteringEnabled(false)
+	if disableExitKeys {
+		l.KeyMap.Quit.Unbind()
+		l.KeyMap.ForceQuit.Unbind()
+	}
 
 	return sessionsModel{
 		list:       l,

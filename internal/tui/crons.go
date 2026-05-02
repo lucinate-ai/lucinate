@@ -8,12 +8,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
@@ -229,10 +229,10 @@ type cronForm struct {
 	deliveryMode  string // "none", "announce", "webhook"
 	enabled       bool
 
-	focused      cronFormField
-	saving       bool
-	err          error
-	unsupported  string // non-empty when the existing job's kind cannot be edited; rendered as a banner
+	focused     cronFormField
+	saving      bool
+	err         error
+	unsupported string // non-empty when the existing job's kind cannot be edited; rendered as a banner
 }
 
 // cronsModel is the cron browser view.
@@ -270,13 +270,17 @@ type cronsModel struct {
 	height     int
 }
 
-func newCronsModel(cron backend.CronBackend, filterAgentID, filterLabel string, hideHints bool, activeConn *config.Connection) cronsModel {
+func newCronsModel(cron backend.CronBackend, filterAgentID, filterLabel string, hideHints bool, activeConn *config.Connection, disableExitKeys bool) cronsModel {
 	l := list.New(nil, cronDelegate{}, 0, 0)
 	l.Title = "Cron"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(!hideHints)
 	l.Styles.Title = headerStyle
 	l.SetFilteringEnabled(false)
+	if disableExitKeys {
+		l.KeyMap.Quit.Unbind()
+		l.KeyMap.ForceQuit.Unbind()
+	}
 
 	return cronsModel{
 		list:          l,

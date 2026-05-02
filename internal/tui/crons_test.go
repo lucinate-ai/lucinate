@@ -3,14 +3,14 @@ package tui
 import (
 	"testing"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	tea "charm.land/bubbletea/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 )
 
 func newTestCronsModel(t *testing.T) (cronsModel, *fakeBackend) {
 	t.Helper()
 	fake := newFakeBackend()
-	m := newCronsModel(fake, "agent-1", "Scout", false, nil)
+	m := newCronsModel(fake, "agent-1", "Scout", false, nil, false)
 	m.setSize(120, 40)
 	return m, fake
 }
@@ -294,7 +294,7 @@ func TestCronsForm_EditSubmitUsesRawUpdate(t *testing.T) {
 		Payload:       protocol.CronPayload{Kind: "agentTurn", Text: "old text", Model: "haiku-4-5"},
 	}}
 	m, _ = m.Update(cronsLoadedMsg{jobs: jobs})
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})  // open detail
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})   // open detail
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: 'e', Text: "e"}) // open edit form
 	if m.subset != cronSubForm {
 		t.Fatalf("expected form substate, got %v", m.subset)

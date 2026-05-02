@@ -34,7 +34,7 @@ func focusTypeRadio(m connectionsModel) connectionsModel {
 }
 
 func TestConnectionsModel_RendersEmptyState(t *testing.T) {
-	m := newConnectionsModel(&config.Connections{}, false)
+	m := newConnectionsModel(&config.Connections{}, false, false)
 	out := m.View()
 	if !strings.Contains(out, "No connections yet") {
 		t.Errorf("expected empty-state hint in view, got:\n%s", out)
@@ -43,7 +43,7 @@ func TestConnectionsModel_RendersEmptyState(t *testing.T) {
 
 func TestConnectionsModel_RendersListItems(t *testing.T) {
 	store := newSeededStore(t)
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m.setSize(80, 20)
 	m.rebuildItems()
 	out := m.View()
@@ -58,7 +58,7 @@ func TestConnectionsModel_RendersListItems(t *testing.T) {
 func TestConnectionsModel_DefaultBadge(t *testing.T) {
 	store := newSeededStore(t)
 	store.MarkUsed(store.Connections[0].ID)
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m.setSize(80, 20)
 	m.rebuildItems()
 	if !strings.Contains(m.View(), "(default)") {
@@ -68,7 +68,7 @@ func TestConnectionsModel_DefaultBadge(t *testing.T) {
 
 func TestConnectionsModel_NewConnectionFlow(t *testing.T) {
 	store := &config.Connections{}
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m.setSize(80, 20)
 
 	// Trigger 'n' (new).
@@ -100,7 +100,7 @@ func TestConnectionsModel_NewConnectionFlow(t *testing.T) {
 
 func TestConnectionsModel_NewConnectionRejectsInvalidURL(t *testing.T) {
 	store := &config.Connections{}
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m, _ = m.TriggerAction("new-connection")
 
 	m.nameInput.SetValue("bad")
@@ -120,7 +120,7 @@ func TestConnectionsModel_NewConnectionRejectsInvalidURL(t *testing.T) {
 
 func TestConnectionsModel_DeleteConfirmFlow(t *testing.T) {
 	store := newSeededStore(t)
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m.setSize(80, 20)
 	m.rebuildItems()
 
@@ -160,7 +160,7 @@ func TestConnectionsModel_DeleteConfirmFlow(t *testing.T) {
 
 func TestConnectionsModel_EnterEmitsPickedMsg(t *testing.T) {
 	store := newSeededStore(t)
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m.setSize(80, 20)
 	m.rebuildItems()
 	m.list.Select(0)
@@ -181,7 +181,7 @@ func TestConnectionsModel_EnterEmitsPickedMsg(t *testing.T) {
 
 func TestConnectionsModel_TypeCycleUpdatesPreset(t *testing.T) {
 	store := &config.Connections{}
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m, _ = m.TriggerAction("new-connection")
 	m = focusTypeRadio(m)
 
@@ -239,7 +239,7 @@ func TestConnectionsModel_TypeCycleUpdatesPreset(t *testing.T) {
 
 func TestConnectionsModel_OllamaPresetPersistsAsOpenAI(t *testing.T) {
 	store := &config.Connections{}
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m, _ = m.TriggerAction("new-connection")
 	m = focusTypeRadio(m)
 
@@ -275,7 +275,7 @@ func TestConnectionsModel_OllamaPresetPersistsAsOpenAI(t *testing.T) {
 
 func TestConnectionsModel_HermesPresetPersistsAsHermes(t *testing.T) {
 	store := &config.Connections{}
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m, _ = m.TriggerAction("new-connection")
 	m = focusTypeRadio(m)
 
@@ -312,7 +312,7 @@ func TestConnectionsModel_HermesPresetPersistsAsHermes(t *testing.T) {
 
 func TestConnectionsModel_OpenAITabOrderIncludesModel(t *testing.T) {
 	store := &config.Connections{}
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m, _ = m.TriggerAction("new-connection")
 	m = focusTypeRadio(m)
 
@@ -330,7 +330,7 @@ func TestConnectionsModel_OpenAITabOrderIncludesModel(t *testing.T) {
 
 func TestConnectionsModel_EditFormSkipsTypeRadio(t *testing.T) {
 	store := newSeededStore(t)
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m.setSize(80, 20)
 	m.rebuildItems()
 	m.list.Select(0)
@@ -353,7 +353,7 @@ func TestConnectionsModel_EditFormSkipsTypeRadio(t *testing.T) {
 
 func TestConnectionsModel_NewOpenAIConnectionPersistsModel(t *testing.T) {
 	store := &config.Connections{}
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m, _ = m.TriggerAction("new-connection")
 	m = focusTypeRadio(m)
 
@@ -382,7 +382,7 @@ func TestConnectionsModel_NewOpenAIConnectionPersistsModel(t *testing.T) {
 
 func TestConnectionsModel_NewFormRendersOnlyRelevantFields(t *testing.T) {
 	store := &config.Connections{}
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m, _ = m.TriggerAction("new-connection")
 
 	// OpenClaw form: no model field rendered.
@@ -411,7 +411,7 @@ func TestConnectionsModel_NewFormRendersOnlyRelevantFields(t *testing.T) {
 
 func TestConnectionsModel_TabAdvancesFocus(t *testing.T) {
 	store := &config.Connections{}
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m, _ = m.TriggerAction("new-connection")
 
 	// New form lands focus on Name so the host's first keystroke
@@ -441,7 +441,7 @@ func TestConnectionsModel_TabAdvancesFocus(t *testing.T) {
 
 func TestConnectionsModel_EditFlow(t *testing.T) {
 	store := newSeededStore(t)
-	m := newConnectionsModel(store, false)
+	m := newConnectionsModel(store, false, false)
 	m.setSize(80, 20)
 	m.rebuildItems()
 	m.list.Select(0)
@@ -461,14 +461,33 @@ func TestConnectionsModel_EditFlow(t *testing.T) {
 	}
 }
 
+func TestConnectionsModel_DisableExitKeysUnbindsListQuit(t *testing.T) {
+	// With DisableExitKeys=false the bubbles list still binds q/esc to
+	// Quit and ctrl+c to ForceQuit, and the help footer renders
+	// "q quit". Embedded hosts that can't be dismissed by terminating
+	// the process (iOS) need both shortcuts and the hint gone.
+	on := newConnectionsModel(&config.Connections{}, false, true)
+	if on.list.KeyMap.Quit.Enabled() {
+		t.Error("DisableExitKeys=true should unbind list Quit (q/esc)")
+	}
+	if on.list.KeyMap.ForceQuit.Enabled() {
+		t.Error("DisableExitKeys=true should unbind list ForceQuit (ctrl+c)")
+	}
+
+	off := newConnectionsModel(&config.Connections{}, false, false)
+	if !off.list.KeyMap.Quit.Enabled() {
+		t.Error("DisableExitKeys=false should keep the default Quit binding for the CLI")
+	}
+}
+
 func TestConnectionsModel_ActionsListReflectsState(t *testing.T) {
-	m := newConnectionsModel(&config.Connections{}, false)
+	m := newConnectionsModel(&config.Connections{}, false, false)
 	if got := m.Actions(); len(got) != 1 || got[0].ID != "new-connection" {
 		t.Errorf("empty store should expose only New, got %+v", got)
 	}
 
 	store := newSeededStore(t)
-	m = newConnectionsModel(store, false)
+	m = newConnectionsModel(store, false, false)
 	m.rebuildItems()
 	m.list.Select(0)
 	gotIDs := []string{}

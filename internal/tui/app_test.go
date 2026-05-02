@@ -144,7 +144,7 @@ func TestNewApp_LegacyClientStartsAtSelect(t *testing.T) {
 func TestNewApp_ManagedNoInitialStartsAtConnections(t *testing.T) {
 	store := &config.Connections{}
 	m := NewApp(nil, AppOptions{
-		Store:         store,
+		Store:          store,
 		BackendFactory: func(*config.Connection) (backend.Backend, error) { return nil, nil },
 	})
 	if m.state != viewConnections {
@@ -158,12 +158,50 @@ func TestNewApp_ManagedWithInitialStartsAtConnecting(t *testing.T) {
 	store := &config.Connections{}
 	conn, _ := store.Add(config.ConnectionFields{Name: "home", Type: config.ConnTypeOpenClaw, URL: "https://home.example.com"})
 	m := NewApp(nil, AppOptions{
-		Store:         store,
-		Initial:       conn,
+		Store:          store,
+		Initial:        conn,
 		BackendFactory: func(*config.Connection) (backend.Backend, error) { return nil, nil },
 	})
 	if m.state != viewConnecting {
 		t.Errorf("managed-with-initial should start at viewConnecting, got %v", m.state)
+	}
+}
+
+// TestAppModel_DisableExitKeysSwallowsCtrlC: when an embedded host can't
+// be dismissed by terminating the process (iOS), ctrl+c at the app level
+// must not return tea.Quit — it would only stop the TUI loop while the
+// host view stays mounted, leaving a dead Go session behind a frozen UI.
+func TestAppModel_DisableExitKeysSwallowsCtrlC(t *testing.T) {
+	store := &config.Connections{}
+
+	// Default behaviour: ctrl+c quits.
+	cli := NewApp(nil, AppOptions{
+		Store:          store,
+		BackendFactory: func(*config.Connection) (backend.Backend, error) { return nil, nil },
+	})
+	_, cmd := cli.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("expected ctrl+c to return a tea.Quit command on the CLI")
+	}
+	if msg := cmd(); msg == nil {
+		t.Fatal("expected non-nil quit message from ctrl+c")
+	} else if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg, got %T", msg)
+	}
+
+	// DisableExitKeys=true: ctrl+c is a no-op.
+	embedded := NewApp(nil, AppOptions{
+		Store:           store,
+		BackendFactory:  func(*config.Connection) (backend.Backend, error) { return nil, nil },
+		DisableExitKeys: true,
+	})
+	_, cmd = embedded.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(tea.QuitMsg); ok {
+				t.Fatal("DisableExitKeys=true should suppress tea.Quit on ctrl+c")
+			}
+		}
 	}
 }
 

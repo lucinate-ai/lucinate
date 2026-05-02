@@ -37,6 +37,7 @@ type BackendFactory func(*config.Connection) (backend.Backend, error)
 type AppOptions struct {
 	HideInputArea   bool
 	HideActionHints bool
+	DisableExitKeys bool
 	DisableMouse    bool
 
 	// Store, when non-nil, enables managed mode: the TUI owns the
@@ -86,27 +87,28 @@ type AppOptions struct {
 
 // AppModel is the root bubbletea model.
 type AppModel struct {
-	state             viewState
-	connectionsModel  connectionsModel
-	connectingModel   connectingModel
-	selectModel       selectModel
-	chatModel         chatModel
-	sessionsModel     sessionsModel
-	configModel       configModel
-	cronsModel        cronsModel
-	backend           backend.Backend
-	activeConn        *config.Connection // the connection backend belongs to; rendered in status bars
-	store             *config.Connections
-	backendFactory    BackendFactory
-	onBackendChanged  func(backend.Backend)
-	onConnsChanged    func(config.Connections)
-	prefs             config.Preferences
-	width             int
-	height            int
-	hideInput         bool
-	hideActionHints   bool
-	disableMouse      bool
-	managed           bool
+	state            viewState
+	connectionsModel connectionsModel
+	connectingModel  connectingModel
+	selectModel      selectModel
+	chatModel        chatModel
+	sessionsModel    sessionsModel
+	configModel      configModel
+	cronsModel       cronsModel
+	backend          backend.Backend
+	activeConn       *config.Connection // the connection backend belongs to; rendered in status bars
+	store            *config.Connections
+	backendFactory   BackendFactory
+	onBackendChanged func(backend.Backend)
+	onConnsChanged   func(config.Connections)
+	prefs            config.Preferences
+	width            int
+	height           int
+	hideInput        bool
+	hideActionHints  bool
+	disableExitKeys  bool
+	disableMouse     bool
+	managed          bool
 
 	onInputFocusChanged func(bool)
 	lastWantsInput      bool
@@ -131,18 +133,19 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 	managed := opts.Store != nil
 
 	m := AppModel{
-		backend:              b,
-		prefs:                config.LoadPreferences(),
-		hideInput:            opts.HideInputArea,
-		hideActionHints:      opts.HideActionHints,
-		disableMouse:         opts.DisableMouse,
-		store:                opts.Store,
-		backendFactory:       opts.BackendFactory,
-		onBackendChanged:     opts.OnBackendChanged,
-		onConnsChanged:       opts.OnConnectionsChanged,
-		managed:              managed,
-		onInputFocusChanged:  opts.OnInputFocusChanged,
-		onActionsChanged:     opts.OnActionsChanged,
+		backend:               b,
+		prefs:                 config.LoadPreferences(),
+		hideInput:             opts.HideInputArea,
+		hideActionHints:       opts.HideActionHints,
+		disableExitKeys:       opts.DisableExitKeys,
+		disableMouse:          opts.DisableMouse,
+		store:                 opts.Store,
+		backendFactory:        opts.BackendFactory,
+		onBackendChanged:      opts.OnBackendChanged,
+		onConnsChanged:        opts.OnConnectionsChanged,
+		managed:               managed,
+		onInputFocusChanged:   opts.OnInputFocusChanged,
+		onActionsChanged:      opts.OnActionsChanged,
 		onFocusedFieldChanged: opts.OnFocusedFieldChanged,
 	}
 
@@ -151,7 +154,7 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 		// Legacy: jump straight into the agent picker. No active
 		// connection — embedders manage that elsewhere.
 		m.state = viewSelect
-		m.selectModel = newSelectModel(b, opts.HideActionHints, managed, nil)
+		m.selectModel = newSelectModel(b, opts.HideActionHints, managed, nil, opts.DisableExitKeys)
 	case opts.Initial != nil:
 		// Managed with an initial pick: try to connect first, surface
 		// errors / auth modals from there.
@@ -160,7 +163,7 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 	default:
 		// Managed without an initial pick: open the connections picker.
 		m.state = viewConnections
-		m.connectionsModel = newConnectionsModel(opts.Store, opts.HideActionHints)
+		m.connectionsModel = newConnectionsModel(opts.Store, opts.HideActionHints, opts.DisableExitKeys)
 	}
 
 	return m
@@ -451,7 +454,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		}
 		m.backend = nil
 		m.activeConn = nil
-		m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints)
+		m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints, m.disableExitKeys)
 		m.connectionsModel.setSize(m.width, m.height)
 		m.state = viewConnections
 		return m, m.connectionsModel.Init()
@@ -468,7 +471,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case authResolvedMsg:
 		if msg.cancelled {
 			// User backed out of the auth modal — return to the picker.
-			m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints)
+			m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints, m.disableExitKeys)
 			m.connectionsModel.setSize(m.width, m.height)
 			m.state = viewConnections
 			if msg.backend != nil {
@@ -501,7 +504,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			// branch implies a programming error elsewhere.
 			return m, nil
 		}
-		m.cronsModel = newCronsModel(cron, msg.filterAgentID, msg.filterLabel, m.hideActionHints, m.activeConn)
+		m.cronsModel = newCronsModel(cron, msg.filterAgentID, msg.filterLabel, m.hideActionHints, m.activeConn, m.disableExitKeys)
 		m.cronsModel.setSize(m.width, m.height)
 		m.state = viewCrons
 		return m, m.cronsModel.Init()
@@ -511,7 +514,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		return m, nil
 
 	case showSessionsMsg:
-		m.sessionsModel = newSessionsModel(m.backend, msg.agentID, msg.agentName, msg.modelID, msg.mainKey, m.hideActionHints, m.activeConn)
+		m.sessionsModel = newSessionsModel(m.backend, msg.agentID, msg.agentName, msg.modelID, msg.mainKey, m.hideActionHints, m.activeConn, m.disableExitKeys)
 		m.sessionsModel.setSize(m.width, m.height)
 		m.state = viewSessions
 		return m, m.sessionsModel.Init()
@@ -558,6 +561,14 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			if m.disableExitKeys {
+				// Embedded host disallows process termination
+				// (e.g. iOS, where Apple's HIG forbids quitting and
+				// tea.Quit would only stop the TUI loop while the
+				// host view stays mounted). Swallow the keypress so
+				// it doesn't accidentally tear down half the program.
+				return m, nil
+			}
 			return m, tea.Quit
 		case "esc":
 			if m.state == viewConfig {
@@ -759,7 +770,7 @@ func (m AppModel) handleConnectResult(msg connectResultMsg) (AppModel, tea.Cmd) 
 			b := msg.backend
 			go cb(b) // blocking send; do off the event loop
 		}
-		m.selectModel = newSelectModel(msg.backend, m.hideActionHints, m.managed, m.activeConn)
+		m.selectModel = newSelectModel(msg.backend, m.hideActionHints, m.managed, m.activeConn, m.disableExitKeys)
 		m.selectModel.setSize(m.width, m.height)
 		m.state = viewSelect
 		var cmd tea.Cmd = m.selectModel.Init()
@@ -781,7 +792,7 @@ func (m AppModel) handleConnectResult(msg connectResultMsg) (AppModel, tea.Cmd) 
 	}
 
 	// Unrecoverable: bounce back to the picker with the error.
-	m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints)
+	m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints, m.disableExitKeys)
 	m.connectionsModel.setSize(m.width, m.height)
 	if msg.err != nil {
 		m.connectionsModel.lastErr = msg.err

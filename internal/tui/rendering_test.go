@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	tea "charm.land/bubbletea/v2"
-	teatest "github.com/charmbracelet/x/exp/teatest/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 	"github.com/charmbracelet/x/ansi"
+	teatest "github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
@@ -291,7 +291,7 @@ func TestRender_ChatView_RemoteExecModeHelpText(t *testing.T) {
 // tests assert against).
 func newLoadedSelectAdapter(t *testing.T, agents ...protocol.AgentSummary) selectModelAdapter {
 	t.Helper()
-	m := newSelectModel(newFakeBackend(), false, false, nil)
+	m := newSelectModel(newFakeBackend(), false, false, nil, false)
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -328,7 +328,7 @@ func TestRender_SelectView_ShowsCreateHint(t *testing.T) {
 }
 
 func TestRender_SelectView_LoadingState(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.setSize(120, 40)
 	adapter := selectModelAdapter{inner: m}
 
@@ -358,7 +358,7 @@ func TestRender_SelectView_CreateFormLabels(t *testing.T) {
 func TestRender_SelectView_CreateFormHidesWorkspaceForLocalBackend(t *testing.T) {
 	fb := newFakeBackend()
 	fb.caps.AgentWorkspace = false
-	m := newSelectModel(fb, false, false, nil)
+	m := newSelectModel(fb, false, false, nil, false)
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -387,7 +387,7 @@ func TestRender_SelectView_CreateFormHidesWorkspaceForLocalBackend(t *testing.T)
 func TestSelectModel_LocalBackendCreateFormShape(t *testing.T) {
 	fb := newFakeBackend()
 	fb.caps.AgentWorkspace = false
-	m := newSelectModel(fb, true, false, nil)
+	m := newSelectModel(fb, true, false, nil, false)
 	m.initCreateForm()
 	out := m.viewCreateForm()
 	if strings.Contains(out, "Workspace:") {
@@ -405,7 +405,7 @@ func TestSelectModel_LocalBackendCreateFormShape(t *testing.T) {
 }
 
 func TestRender_SelectView_ErrorStateShowsRetryHint(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil)
+	m := newSelectModel(nil, false, false, nil, false)
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{err: errString("gateway unreachable")})
 	adapter := selectModelAdapter{inner: m}
@@ -440,7 +440,7 @@ func (a sessionsModelAdapter) View() tea.View {
 // newLoadedSessionsAdapter returns a sessionsModelAdapter with sessions already loaded.
 func newLoadedSessionsAdapter(t *testing.T, sessions ...sessionItem) sessionsModelAdapter {
 	t.Helper()
-	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, nil)
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, nil, false)
 	m.setSize(120, 40)
 	m, _ = m.Update(sessionsLoadedMsg{sessions: sessions})
 	return sessionsModelAdapter{inner: m}
@@ -470,7 +470,7 @@ func TestRender_SessionsView_ShowsCreateHint(t *testing.T) {
 }
 
 func TestRender_SessionsView_LoadingState(t *testing.T) {
-	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, nil)
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, nil, false)
 	m.setSize(120, 40)
 	adapter := sessionsModelAdapter{inner: m}
 
@@ -490,7 +490,7 @@ func TestRender_SessionsView_EmptyState(t *testing.T) {
 }
 
 func TestRender_SessionsView_ErrorState(t *testing.T) {
-	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, nil)
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, nil, false)
 	m.setSize(120, 40)
 	m, _ = m.Update(sessionsLoadedMsg{err: errString("network timeout")})
 	adapter := sessionsModelAdapter{inner: m}

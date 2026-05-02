@@ -176,13 +176,22 @@ func presetForConnection(conn config.Connection) formPreset {
 	return presetOpenAI
 }
 
-func newConnectionsModel(store *config.Connections, hideHints bool) connectionsModel {
+func newConnectionsModel(store *config.Connections, hideHints, disableExitKeys bool) connectionsModel {
 	l := list.New(nil, connectionDelegate{}, 0, 0)
 	l.Title = "Connections"
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(!hideHints)
 	l.Styles.Title = headerStyle
 	l.SetFilteringEnabled(false)
+	if disableExitKeys {
+		// The bubbles list's default Quit binding catches q / esc and
+		// emits tea.Quit; ForceQuit catches ctrl+c. Embedders whose
+		// host can't be dismissed by terminating the process (iOS) get
+		// neither shortcut, and the rendered "q quit" footer hint
+		// disappears with the binding.
+		l.KeyMap.Quit.Unbind()
+		l.KeyMap.ForceQuit.Unbind()
+	}
 	return connectionsModel{
 		store:     store,
 		list:      l,
