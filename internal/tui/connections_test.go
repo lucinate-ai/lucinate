@@ -465,7 +465,7 @@ func TestConnectionsModel_DisableExitKeysUnbindsListQuit(t *testing.T) {
 	// With DisableExitKeys=false the bubbles list still binds q/esc to
 	// Quit and ctrl+c to ForceQuit, and the help footer renders
 	// "q quit". Embedded hosts that can't be dismissed by terminating
-	// the process (iOS) need both shortcuts and the hint gone.
+	// the process need both shortcuts and the hint gone.
 	on := newConnectionsModel(&config.Connections{}, false, true)
 	if on.list.KeyMap.Quit.Enabled() {
 		t.Error("DisableExitKeys=true should unbind list Quit (q/esc)")

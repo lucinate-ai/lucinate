@@ -135,12 +135,12 @@ type RunOptions struct {
 	// otherwise honour: ctrl+c at the app level, and the bubbles list's
 	// default `q` / `esc` / `ctrl+c` Quit bindings on each picker view.
 	// Embedders running inside a host that doesn't allow programmatic
-	// process termination — iOS, where Apple's HIG forbids quitting and
-	// `tea.Quit` would only stop the TUI loop while the host view stays
-	// mounted — set this true so the rendered "q quit" footer text and
-	// the bound shortcut both disappear together. The CLI, whose user
-	// reaches the program through a shell that can't otherwise dismiss
-	// it, leaves this false.
+	// process termination — a native-platform shell whose OS forbids
+	// quitting, where `tea.Quit` would only stop the TUI loop while
+	// the host view stays mounted — set this true so the rendered
+	// "q quit" footer text and the bound shortcut both disappear
+	// together. The CLI, whose user reaches the program through a
+	// terminal that can't otherwise dismiss it, leaves this false.
 	DisableExitKeys bool
 
 	// DisableMouse stops the program from emitting the

@@ -168,9 +168,9 @@ func TestNewApp_ManagedWithInitialStartsAtConnecting(t *testing.T) {
 }
 
 // TestAppModel_DisableExitKeysSwallowsCtrlC: when an embedded host can't
-// be dismissed by terminating the process (iOS), ctrl+c at the app level
-// must not return tea.Quit — it would only stop the TUI loop while the
-// host view stays mounted, leaving a dead Go session behind a frozen UI.
+// be dismissed by terminating the process, ctrl+c at the app level must
+// not return tea.Quit — it would only stop the TUI loop while the host
+// view stays mounted, leaving a dead Go session behind a frozen UI.
 func TestAppModel_DisableExitKeysSwallowsCtrlC(t *testing.T) {
 	store := &config.Connections{}
 

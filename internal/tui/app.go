@@ -562,10 +562,10 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			if m.disableExitKeys {
-				// Embedded host disallows process termination
-				// (e.g. iOS, where Apple's HIG forbids quitting and
+				// Embedded host disallows process termination — on a
+				// native-platform shell whose OS forbids quitting,
 				// tea.Quit would only stop the TUI loop while the
-				// host view stays mounted). Swallow the keypress so
+				// host view stays mounted. Swallow the keypress so
 				// it doesn't accidentally tear down half the program.
 				return m, nil
 			}

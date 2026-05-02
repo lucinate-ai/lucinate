@@ -186,7 +186,7 @@ func newConnectionsModel(store *config.Connections, hideHints, disableExitKeys b
 	if disableExitKeys {
 		// The bubbles list's default Quit binding catches q / esc and
 		// emits tea.Quit; ForceQuit catches ctrl+c. Embedders whose
-		// host can't be dismissed by terminating the process (iOS) get
+		// host can't be dismissed by terminating the process get
 		// neither shortcut, and the rendered "q quit" footer hint
 		// disappears with the binding.
 		l.KeyMap.Quit.Unbind()
