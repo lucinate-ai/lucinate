@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // DefaultHistoryLimit is the number of messages loaded when restoring a session.
@@ -17,18 +18,38 @@ const DefaultHistoryLimit = 50
 const DefaultConnectTimeoutSeconds = 15
 
 // Preferences holds user-configurable settings persisted to disk.
+//
+// CheckForUpdates is a *bool, not a bool, so an older config.json
+// that predates the field unmarshals to nil and is treated as
+// "enabled" — anything else would silently disable update checks
+// for every existing user. Read it through UpdateChecksEnabled.
 type Preferences struct {
-	CompletionBell        bool `json:"completionBell"`
-	HistoryLimit          int  `json:"historyLimit"`
-	ConnectTimeoutSeconds int  `json:"connectTimeoutSeconds"`
+	CompletionBell        bool   `json:"completionBell"`
+	HistoryLimit          int    `json:"historyLimit"`
+	ConnectTimeoutSeconds int    `json:"connectTimeoutSeconds"`
+	CheckForUpdates       *bool  `json:"checkForUpdates,omitempty"`
+	LastUpdateCheck       int64  `json:"lastUpdateCheck,omitempty"`
+	LatestSeenVersion     string `json:"latestSeenVersion,omitempty"`
+}
+
+// UpdateChecksEnabled reports whether the user has the startup
+// update check turned on. An unset field (older config files)
+// counts as enabled.
+func (p Preferences) UpdateChecksEnabled() bool {
+	if p.CheckForUpdates == nil {
+		return true
+	}
+	return *p.CheckForUpdates
 }
 
 // DefaultPreferences returns the default preference values.
 func DefaultPreferences() Preferences {
+	enabled := true
 	return Preferences{
 		CompletionBell:        true,
 		HistoryLimit:          DefaultHistoryLimit,
 		ConnectTimeoutSeconds: DefaultConnectTimeoutSeconds,
+		CheckForUpdates:       &enabled,
 	}
 }
 
@@ -65,6 +86,11 @@ func LoadPreferences() Preferences {
 	}
 	if p.ConnectTimeoutSeconds <= 0 {
 		p.ConnectTimeoutSeconds = DefaultConnectTimeoutSeconds
+	}
+	// Defensive against laptop clock changes — a future timestamp
+	// would otherwise wedge the daily rate-limit until time caught up.
+	if p.LastUpdateCheck > time.Now().Unix() {
+		p.LastUpdateCheck = 0
 	}
 	return p
 }

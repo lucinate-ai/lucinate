@@ -43,6 +43,7 @@ func newConfigModel(prefs config.Preferences, hideHints bool) configModel {
 		hideHints: hideHints,
 		items: []configItem{
 			{label: "Completion notification (terminal bell)", key: "completionBell", kind: configItemBool, checked: prefs.CompletionBell},
+			{label: "Check for updates on startup", key: "checkForUpdates", kind: configItemBool, checked: prefs.UpdateChecksEnabled()},
 			{label: "History limit (messages loaded per session)", key: "historyLimit", kind: configItemInt, value: prefs.HistoryLimit, min: 10, max: 500, step: 10},
 			{label: "Connect timeout (seconds, increase for slow backends)", key: "connectTimeoutSeconds", kind: configItemInt, value: prefs.ConnectTimeoutSeconds, min: 5, max: 300, step: 5},
 		},
@@ -142,6 +143,9 @@ func (m *configModel) applyToPrefs() {
 		switch item.key {
 		case "completionBell":
 			m.prefs.CompletionBell = item.checked
+		case "checkForUpdates":
+			v := item.checked
+			m.prefs.CheckForUpdates = &v
 		case "historyLimit":
 			m.prefs.HistoryLimit = item.value
 		case "connectTimeoutSeconds":

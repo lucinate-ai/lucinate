@@ -134,6 +134,7 @@ Use `/config` to open the preferences view. Settings are persisted to `~/.lucina
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Completion notification | On | Ring the terminal bell when a response completes (only if the terminal isn't focused) |
+| Check for updates on startup | On | Once a day, fetch a tiny manifest from `lucinate.ai` and show a subtle `↑` badge in the chat header when a newer release is out. No telemetry — just a single GET. |
 | History limit | 50 | Number of messages loaded when restoring a session (range 10–500) |
 | Connect timeout | 15s | Per-attempt deadline for the initial connect and each reconnect (range 5–300s — bump it for slow local LLMs) |
 
@@ -203,6 +204,12 @@ OPENCLAW_GATEWAY_URL=https://your-gateway-host
 LUCINATE_OPENAI_BASE_URL=http://localhost:11434/v1
 LUCINATE_OPENAI_API_KEY=sk-...           # optional
 LUCINATE_OPENAI_DEFAULT_MODEL=llama3.2   # optional
+```
+
+Other knobs:
+
+```sh
+LUCINATE_DISABLE_UPDATE_CHECK=1          # opt out of the daily update check, regardless of the toggle in /config
 ```
 
 ## Built on

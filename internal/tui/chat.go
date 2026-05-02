@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/client"
@@ -91,33 +91,34 @@ const spinnerInterval = 120 * time.Millisecond
 
 // chatModel is the chat view.
 type chatModel struct {
-	viewport         viewport.Model
-	textarea         textarea.Model
-	messages         []chatMessage
-	backend          backend.Backend
-	connName         string // active connection name, rendered in the header bar
-	sessionKey       string
-	agentID          string
-	agentName        string
-	sending          bool
-	runID            string // active run ID for cancellation
-	pendingMessages  []string
-	width            int
-	height           int
-	renderer         *glamour.TermRenderer
-	stats            *sessionStats
-	modelID          string
-	skills []agentSkill
-	spinnerFrame     int
-	spinnerTicking   bool
-	prefs            config.Preferences
-	pendingConfirm   *pendingConfirmation
-	historyLimit     int
-	historyLoading   bool   // true while the initial history fetch is in flight; gates the placeholder in updateViewport
-	thinkingLevel    string // current thinking level; "" means not set / using gateway default
-	connState        ConnStateMsg
-	hideInput        bool // when true, the textarea + help line are not rendered; the textarea model still receives input bytes
-	terminalFocused  bool // tracks tea.FocusMsg/BlurMsg so the completion bell only rings when the user is looking elsewhere
+	viewport        viewport.Model
+	textarea        textarea.Model
+	messages        []chatMessage
+	backend         backend.Backend
+	connName        string // active connection name, rendered in the header bar
+	sessionKey      string
+	agentID         string
+	agentName       string
+	sending         bool
+	runID           string // active run ID for cancellation
+	pendingMessages []string
+	width           int
+	height          int
+	renderer        *glamour.TermRenderer
+	stats           *sessionStats
+	modelID         string
+	skills          []agentSkill
+	spinnerFrame    int
+	spinnerTicking  bool
+	prefs           config.Preferences
+	pendingConfirm  *pendingConfirmation
+	historyLimit    int
+	historyLoading  bool   // true while the initial history fetch is in flight; gates the placeholder in updateViewport
+	thinkingLevel   string // current thinking level; "" means not set / using gateway default
+	connState       ConnStateMsg
+	hideInput       bool   // when true, the textarea + help line are not rendered; the textarea model still receives input bytes
+	terminalFocused bool   // tracks tea.FocusMsg/BlurMsg so the completion bell only rings when the user is looking elsewhere
+	updateLatest    string // populated by AppModel when the startup check finds a newer release; rendered as a header badge
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -181,15 +182,15 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 	)
 
 	return chatModel{
-		viewport:     vp,
-		textarea:     ta,
-		backend:      b,
-		connName:     connName,
-		sessionKey:   sessionKey,
-		agentID:      agentID,
-		agentName:    agentName,
-		renderer:     renderer,
-		modelID:      modelID,
+		viewport:        vp,
+		textarea:        ta,
+		backend:         b,
+		connName:        connName,
+		sessionKey:      sessionKey,
+		agentID:         agentID,
+		agentName:       agentName,
+		renderer:        renderer,
+		modelID:         modelID,
 		prefs:           prefs,
 		historyLimit:    prefs.HistoryLimit,
 		historyLoading:  true,
@@ -766,6 +767,9 @@ func (m chatModel) View() string {
 	}
 	if badge := connectionBadge(m.connState); badge != "" {
 		left += " · " + badge
+	}
+	if m.updateLatest != "" {
+		left += " · " + headerBadgeWarnStyle.Render("↑ "+m.updateLatest)
 	}
 	right := ""
 	if m.stats != nil {

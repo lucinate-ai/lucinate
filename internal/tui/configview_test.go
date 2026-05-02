@@ -16,6 +16,23 @@ func newTestConfigModel() configModel {
 	return m
 }
 
+// cursorToKey moves m.cursor to the item with the given key by sending
+// KeyDown presses. Tests should not depend on a specific item index —
+// the row order changes when new preferences are added.
+func cursorToKey(t *testing.T, m configModel, key string) (configModel, int) {
+	t.Helper()
+	for i, it := range m.items {
+		if it.key == key {
+			for j := 0; j < i; j++ {
+				m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			}
+			return m, i
+		}
+	}
+	t.Fatalf("config item with key %q not found", key)
+	return m, -1
+}
+
 func TestConfigModel_Init(t *testing.T) {
 	m := newTestConfigModel()
 	cmd := m.Init()
@@ -135,13 +152,12 @@ func TestConfigModel_View_ContainsHistoryLimit(t *testing.T) {
 
 func TestConfigModel_HistoryLimit_RightIncreases(t *testing.T) {
 	m := newTestConfigModel()
-	// Move cursor to history limit item (index 1).
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	initial := m.items[1].value
+	m, idx := cursorToKey(t, m, "historyLimit")
+	initial := m.items[idx].value
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	if m.items[1].value != initial+10 {
-		t.Errorf("expected %d after right, got %d", initial+10, m.items[1].value)
+	if m.items[idx].value != initial+10 {
+		t.Errorf("expected %d after right, got %d", initial+10, m.items[idx].value)
 	}
 	if cmd == nil {
 		t.Error("expected a cmd to save preferences")
@@ -156,12 +172,12 @@ func TestConfigModel_HistoryLimit_RightIncreases(t *testing.T) {
 
 func TestConfigModel_HistoryLimit_LeftDecreases(t *testing.T) {
 	m := newTestConfigModel()
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	initial := m.items[1].value
+	m, idx := cursorToKey(t, m, "historyLimit")
+	initial := m.items[idx].value
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	if m.items[1].value != initial-10 {
-		t.Errorf("expected %d after left, got %d", initial-10, m.items[1].value)
+	if m.items[idx].value != initial-10 {
+		t.Errorf("expected %d after left, got %d", initial-10, m.items[idx].value)
 	}
 	if cmd == nil {
 		t.Error("expected a cmd to save preferences")
@@ -171,11 +187,11 @@ func TestConfigModel_HistoryLimit_LeftDecreases(t *testing.T) {
 func TestConfigModel_HistoryLimit_RespectsMin(t *testing.T) {
 	prefs := config.Preferences{CompletionBell: true, HistoryLimit: 10}
 	m := newConfigModel(prefs, false)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, idx := cursorToKey(t, m, "historyLimit")
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	if m.items[1].value != 10 {
-		t.Errorf("expected value to stay at min 10, got %d", m.items[1].value)
+	if m.items[idx].value != 10 {
+		t.Errorf("expected value to stay at min 10, got %d", m.items[idx].value)
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd when at minimum")
@@ -185,11 +201,11 @@ func TestConfigModel_HistoryLimit_RespectsMin(t *testing.T) {
 func TestConfigModel_HistoryLimit_RespectsMax(t *testing.T) {
 	prefs := config.Preferences{CompletionBell: true, HistoryLimit: 500}
 	m := newConfigModel(prefs, false)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, idx := cursorToKey(t, m, "historyLimit")
 
 	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	if m.items[1].value != 500 {
-		t.Errorf("expected value to stay at max 500, got %d", m.items[1].value)
+	if m.items[idx].value != 500 {
+		t.Errorf("expected value to stay at max 500, got %d", m.items[idx].value)
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd when at maximum")
@@ -198,11 +214,11 @@ func TestConfigModel_HistoryLimit_RespectsMax(t *testing.T) {
 
 func TestConfigModel_SpaceNoOpOnIntItem(t *testing.T) {
 	m := newTestConfigModel()
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, idx := cursorToKey(t, m, "historyLimit")
 
-	before := m.items[1].value
+	before := m.items[idx].value
 	m, cmd := m.Update(tea.KeyPressMsg{Code: ' '})
-	if m.items[1].value != before {
+	if m.items[idx].value != before {
 		t.Error("space should not change int item value")
 	}
 	if cmd != nil {

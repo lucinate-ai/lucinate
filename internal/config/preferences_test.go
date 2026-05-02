@@ -95,4 +95,92 @@ func TestLoadPreferences_MissingFile(t *testing.T) {
 	if !p.CompletionBell {
 		t.Error("expected defaults when file is missing")
 	}
+	if !p.UpdateChecksEnabled() {
+		t.Error("expected update checks to default to enabled when file is missing")
+	}
+}
+
+func TestLoadPreferences_MissingCheckForUpdates(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	configDir := filepath.Join(dir, ".lucinate")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// Older config: lacks checkForUpdates entirely. A naive bool field
+	// would unmarshal to false and silently disable update checks for
+	// every existing user.
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"completionBell":true,"historyLimit":50}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := LoadPreferences()
+	if !loaded.UpdateChecksEnabled() {
+		t.Error("expected UpdateChecksEnabled to default to true for old config")
+	}
+	if loaded.CheckForUpdates != nil {
+		t.Errorf("expected CheckForUpdates to remain nil after loading legacy config, got %v", *loaded.CheckForUpdates)
+	}
+}
+
+func TestLoadPreferences_ExplicitlyDisabledUpdateChecks(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	configDir := filepath.Join(dir, ".lucinate")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"checkForUpdates":false}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := LoadPreferences()
+	if loaded.UpdateChecksEnabled() {
+		t.Error("expected UpdateChecksEnabled to be false when user has explicitly disabled it")
+	}
+}
+
+func TestSaveAndLoad_UpdateCheckFields(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	disabled := false
+	p := DefaultPreferences()
+	p.CheckForUpdates = &disabled
+	p.LastUpdateCheck = 1700000000
+	p.LatestSeenVersion = "v1.2.3"
+	if err := SavePreferences(p); err != nil {
+		t.Fatalf("SavePreferences: %v", err)
+	}
+
+	loaded := LoadPreferences()
+	if loaded.UpdateChecksEnabled() {
+		t.Error("expected UpdateChecksEnabled to round-trip as false")
+	}
+	if loaded.LastUpdateCheck != 1700000000 {
+		t.Errorf("LastUpdateCheck round-trip: got %d", loaded.LastUpdateCheck)
+	}
+	if loaded.LatestSeenVersion != "v1.2.3" {
+		t.Errorf("LatestSeenVersion round-trip: got %q", loaded.LatestSeenVersion)
+	}
+}
+
+func TestLoadPreferences_FutureTimestampReset(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	configDir := filepath.Join(dir, ".lucinate")
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"lastUpdateCheck":99999999999}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := LoadPreferences()
+	if loaded.LastUpdateCheck != 0 {
+		t.Errorf("expected future timestamp to be reset to 0, got %d", loaded.LastUpdateCheck)
+	}
 }
