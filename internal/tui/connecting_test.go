@@ -176,6 +176,25 @@ func TestConnectingModel_PairingRequiredShowsInstructions(t *testing.T) {
 	}
 }
 
+func TestConnectingModel_PairingRequiredWrapsLongError(t *testing.T) {
+	conn := &config.Connection{Name: "home", URL: "https://home.example.com"}
+	m := newConnectingModel(conn, false)
+	m.setSize(50, 24)
+	longErr := errors.New("connect: hello: connect rejected: NOT_PAIRED: pairing required: device is not approved by the gateway administrator yet")
+	m.enterAuthModal(conn, nil, authRecoveryNotPaired, longErr)
+
+	view := m.View()
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, longErr.Error()) {
+			t.Errorf("error rendered on a single line without wrapping at width=50:\n%s", view)
+		}
+	}
+	// Sanity-check that fragments of the error did still make it in.
+	if !strings.Contains(view, "NOT_PAIRED") || !strings.Contains(view, "administrator yet") {
+		t.Errorf("wrapped error lost content:\n%s", view)
+	}
+}
+
 func TestConnectingModel_PairingRequiredEnterRetries(t *testing.T) {
 	conn := &config.Connection{Name: "home", URL: "https://home.example.com"}
 	fake := newFakeBackend()

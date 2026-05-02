@@ -286,7 +286,9 @@ func (m connectingModel) viewPairingRequired() string {
 	b.WriteString(headerStyle.Render(" Pairing required "))
 	b.WriteString("\n\n")
 	if m.authErr != nil {
-		b.WriteString(errorStyle.Render(fmt.Sprintf("  %v", m.authErr)))
+		wrapped := wordWrap(m.authErr.Error(), max(m.width-2, 20))
+		b.WriteString("  ")
+		b.WriteString(errorStyle.Render(indentMultiline(wrapped, "  ")))
 		b.WriteString("\n\n")
 	}
 	b.WriteString("  This device hasn't been paired with the gateway yet.\n")
