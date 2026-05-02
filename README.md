@@ -40,10 +40,16 @@ With [Homebrew](https://brew.sh) (macOS / Linux):
 brew install lucinate-ai/tap/lucinate
 ```
 
-Or via the install script:
+Or via the install script (macOS / Linux):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lucinate-ai/lucinate/main/install/lucinate.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/lucinate-ai/lucinate/main/install/lucinate.ps1 | iex
 ```
 
 Or, if you have Go 1.24+:
