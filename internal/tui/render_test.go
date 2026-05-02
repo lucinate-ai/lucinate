@@ -247,6 +247,56 @@ func TestUpdateViewport_BottomAnchoring(t *testing.T) {
 	}
 }
 
+func TestUpdateViewport_HistoryLoadingPlaceholder(t *testing.T) {
+	vp := viewport.New()
+	vp.SetWidth(80)
+	vp.SetHeight(20)
+	m := &chatModel{
+		viewport:       vp,
+		width:          80,
+		agentName:      "test",
+		historyLoading: true,
+	}
+
+	m.updateViewport()
+
+	view := ansi.Strip(m.viewport.View())
+	if !strings.Contains(view, "Loading conversation history") {
+		t.Errorf("viewport should show loading placeholder while historyLoading is true; got %q", view)
+	}
+
+	m.historyLoading = false
+	m.updateViewport()
+
+	view = ansi.Strip(m.viewport.View())
+	if strings.Contains(view, "Loading conversation history") {
+		t.Errorf("placeholder should disappear once historyLoading is cleared; got %q", view)
+	}
+}
+
+func TestUpdateViewport_PlaceholderYieldsToPendingMessage(t *testing.T) {
+	vp := viewport.New()
+	vp.SetWidth(80)
+	vp.SetHeight(20)
+	m := &chatModel{
+		viewport:        vp,
+		width:           80,
+		agentName:       "test",
+		historyLoading:  true,
+		pendingMessages: []string{"queued before history loaded"},
+	}
+
+	m.updateViewport()
+
+	view := ansi.Strip(m.viewport.View())
+	if strings.Contains(view, "Loading conversation history") {
+		t.Errorf("placeholder should yield to a queued message; got %q", view)
+	}
+	if !strings.Contains(view, "queued before history loaded") {
+		t.Errorf("queued message should still render; got %q", view)
+	}
+}
+
 func TestUpdateViewport_PreservesScrollWhenUserScrolledUp(t *testing.T) {
 	vp := viewport.New()
 	vp.SetWidth(80)

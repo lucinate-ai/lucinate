@@ -13,6 +13,10 @@ func (m *chatModel) updateViewport() {
 	var b strings.Builder
 	contentWidth := m.width - 4
 
+	if m.historyLoading && len(m.messages) == 0 && len(m.pendingMessages) == 0 {
+		b.WriteString(statusStyle.Render(wordWrap("Loading conversation history…", contentWidth)))
+	}
+
 	for i, msg := range m.messages {
 		if i > 0 {
 			b.WriteString("\n")

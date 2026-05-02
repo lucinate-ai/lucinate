@@ -113,6 +113,7 @@ type chatModel struct {
 	prefs            config.Preferences
 	pendingConfirm   *pendingConfirmation
 	historyLimit     int
+	historyLoading   bool   // true while the initial history fetch is in flight; gates the placeholder in updateViewport
 	thinkingLevel    string // current thinking level; "" means not set / using gateway default
 	connState        ConnStateMsg
 	hideInput        bool // when true, the textarea + help line are not rendered; the textarea model still receives input bytes
@@ -191,6 +192,7 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 		modelID:      modelID,
 		prefs:           prefs,
 		historyLimit:    prefs.HistoryLimit,
+		historyLoading:  true,
 		hideInput:       hideInput,
 		terminalFocused: true,
 	}
@@ -262,12 +264,13 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case historyLoadedMsg:
+		m.historyLoading = false
 		if msg.err == nil && len(msg.messages) > 0 {
 			lastTs := lastTimestampMs(msg.messages)
 			hist := append(msg.messages, chatMessage{role: "separator", timestampMs: lastTs})
 			m.messages = append(hist, m.messages...)
-			m.updateViewport()
 		}
+		m.updateViewport()
 		return m, nil
 
 	case modelListMsg:
