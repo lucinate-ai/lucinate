@@ -24,6 +24,27 @@ archives:
 checksum:
   name_template: checksums.txt
 
+brews:
+  - name: lucinate
+    repository:
+      owner: lucinate-ai
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/lucinate-ai/lucinate"
+    description: "Terminal-native chat client for OpenClaw, Hermes, Ollama and OpenAI-compatible providers"
+    license: "Apache-2.0"
+    commit_author:
+      name: lucinate-bot
+      email: 1248633+outofcoffee@users.noreply.github.com
+    commit_msg_template: "build: brew formula update for {{ .ProjectName }} {{ .Tag }}"
+    test: |
+      system "#{bin}/lucinate", "--version"
+    install: |
+      bin.install "lucinate"
+    skip_upload: auto
+
 changelog:
   sort: asc
   filters:

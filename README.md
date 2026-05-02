@@ -34,6 +34,14 @@ No file browsers, no task boards, no dashboards. Just chat.
 
 ## Install
 
+With [Homebrew](https://brew.sh) (macOS / Linux):
+
+```sh
+brew install lucinate-ai/tap/lucinate
+```
+
+Or via the install script:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/lucinate-ai/lucinate/main/install/lucinate.sh | sh
 ```
