@@ -702,6 +702,8 @@ func runConnect(conn *config.Connection, b backend.Backend, timeout time.Duratio
 	defer cancel()
 	if err := b.Connect(ctx); err != nil {
 		switch {
+		case isNotPairedErr(err):
+			return connectResultMsg{connection: conn, backend: b, authNeed: authRecoveryNotPaired, err: err}
 		case isTokenMismatchErr(err):
 			return connectResultMsg{connection: conn, backend: b, authNeed: authRecoveryTokenMismatch, err: err}
 		case isTokenMissingErr(err):
@@ -722,6 +724,14 @@ func isTokenMismatchErr(err error) bool {
 
 func isTokenMissingErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "gateway token missing")
+}
+
+// isNotPairedErr matches the gateway's NOT_PAIRED rejection. The
+// openclaw-go SDK formats hello rejections as
+// "connect rejected: NOT_PAIRED: pairing required", so the code is
+// the most reliable substring to look for.
+func isNotPairedErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "NOT_PAIRED")
 }
 
 // isAPIKeyErr matches the error string the OpenAI-compat backend emits

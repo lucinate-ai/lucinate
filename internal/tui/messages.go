@@ -226,6 +226,7 @@ const (
 	authRecoveryTokenMismatch
 	authRecoveryTokenMissing
 	authRecoveryAPIKey
+	authRecoveryNotPaired
 )
 
 // authResolvedMsg is sent after the user has resolved an auth-recovery

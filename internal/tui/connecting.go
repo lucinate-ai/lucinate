@@ -22,6 +22,7 @@ const (
 	subStateDialing connectingSubState = iota
 	subStateAuthMismatchPrompt
 	subStateAuthTokenPrompt
+	subStatePairingRequired
 )
 
 // connectingModel handles the in-progress connect attempt and the
@@ -75,6 +76,8 @@ func (m *connectingModel) enterAuthModal(conn *config.Connection, b backend.Back
 		ti.CharLimit = 512
 		ti.Focus()
 		m.tokenInput = ti
+	case authRecoveryNotPaired:
+		m.subState = subStatePairingRequired
 	}
 }
 
@@ -96,6 +99,23 @@ func (m connectingModel) Update(msg tea.Msg) (connectingModel, tea.Cmd) {
 
 func (m connectingModel) handleKey(msg tea.KeyPressMsg) (connectingModel, tea.Cmd) {
 	switch m.subState {
+	case subStatePairingRequired:
+		switch msg.String() {
+		case "enter", "r":
+			b := m.backend
+			conn := m.connection
+			return m, func() tea.Msg {
+				return authResolvedMsg{connection: conn, backend: b}
+			}
+		case "esc", "q":
+			b := m.backend
+			conn := m.connection
+			return m, func() tea.Msg {
+				return authResolvedMsg{connection: conn, backend: b, cancelled: true}
+			}
+		}
+		return m, nil
+
 	case subStateAuthMismatchPrompt:
 		switch msg.String() {
 		case "1", "enter":
@@ -192,6 +212,11 @@ func (m connectingModel) Actions() []Action {
 		return []Action{
 			{ID: "auth-cancel", Label: "Cancel", Key: "esc"},
 		}
+	case subStatePairingRequired:
+		return []Action{
+			{ID: "pairing-retry", Label: "Retry", Key: "enter"},
+			{ID: "auth-cancel", Label: "Cancel", Key: "esc"},
+		}
 	}
 	return nil
 }
@@ -204,6 +229,8 @@ func (m connectingModel) TriggerAction(id string) (connectingModel, tea.Cmd) {
 		return m.handleKey(tea.KeyPressMsg{Code: '1', Text: "1"})
 	case "auth-reset-identity":
 		return m.handleKey(tea.KeyPressMsg{Code: '2', Text: "2"})
+	case "pairing-retry":
+		return m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	case "auth-cancel":
 		return m.handleKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	}
@@ -227,6 +254,8 @@ func (m connectingModel) View() string {
 		return m.viewAuthMismatch()
 	case subStateAuthTokenPrompt:
 		return m.viewAuthToken()
+	case subStatePairingRequired:
+		return m.viewPairingRequired()
 	}
 	name := "gateway"
 	if m.connection != nil {
@@ -248,6 +277,26 @@ func (m connectingModel) viewAuthMismatch() string {
 	b.WriteString("  1) Clear stored token and retry  (recommended)\n")
 	b.WriteString("  2) Reset full identity and retry\n")
 	b.WriteString("  Esc) Cancel\n")
+	return b.String()
+}
+
+func (m connectingModel) viewPairingRequired() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(headerStyle.Render(" Pairing required "))
+	b.WriteString("\n\n")
+	if m.authErr != nil {
+		b.WriteString(errorStyle.Render(fmt.Sprintf("  %v", m.authErr)))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("  This device hasn't been paired with the gateway yet.\n")
+	b.WriteString("  An administrator must approve it before you can connect.\n\n")
+	b.WriteString("  On the gateway host, run:\n\n")
+	b.WriteString("    openclaw devices approve --latest\n\n")
+	b.WriteString("  This previews the pending request and prints the exact\n")
+	b.WriteString("  approve command. Run that command, then press Enter to retry.\n\n")
+	b.WriteString(helpStyle.Render("  Enter: retry | Esc: cancel"))
+	b.WriteString("\n")
 	return b.String()
 }
 

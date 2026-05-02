@@ -1,14 +1,30 @@
 package tui
 
 import (
+	"errors"
 	"runtime"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
+
+func TestRunConnect_RoutesNotPairedToPairingModal(t *testing.T) {
+	conn := &config.Connection{Name: "home"}
+	fake := newFakeBackend()
+	fake.connectErr = errors.New("connect: hello: connect rejected: NOT_PAIRED: pairing required")
+
+	res := runConnect(conn, fake, time.Second)
+	if res.authNeed != authRecoveryNotPaired {
+		t.Fatalf("authNeed = %v, want authRecoveryNotPaired", res.authNeed)
+	}
+	if res.backend != fake {
+		t.Error("expected backend to be retained on NOT_PAIRED so retry can reuse it")
+	}
+}
 
 func TestComputeWantsInput(t *testing.T) {
 	cases := []struct {

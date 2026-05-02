@@ -152,6 +152,70 @@ func TestConnectingModel_TokenPromptIgnoresEmpty(t *testing.T) {
 	}
 }
 
+func TestConnectingModel_PairingRequiredShowsInstructions(t *testing.T) {
+	conn := &config.Connection{Name: "home", URL: "https://home.example.com"}
+	m := newConnectingModel(conn, false)
+	m.enterAuthModal(conn, nil, authRecoveryNotPaired, errors.New("connect: hello: connect rejected: NOT_PAIRED: pairing required"))
+
+	if m.subState != subStatePairingRequired {
+		t.Fatalf("subState = %v, want pairing-required", m.subState)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Pairing required") {
+		t.Errorf("view missing pairing-required header:\n%s", view)
+	}
+	if !strings.Contains(view, "openclaw devices approve --latest") {
+		t.Errorf("view missing approve command hint:\n%s", view)
+	}
+	if m.wantsInput() {
+		t.Error("pairing-required modal should not request a text input")
+	}
+	actions := m.Actions()
+	if len(actions) != 2 {
+		t.Errorf("expected 2 actions on pairing-required modal, got %d", len(actions))
+	}
+}
+
+func TestConnectingModel_PairingRequiredEnterRetries(t *testing.T) {
+	conn := &config.Connection{Name: "home", URL: "https://home.example.com"}
+	fake := newFakeBackend()
+	m := newConnectingModel(conn, false)
+	m.enterAuthModal(conn, fake, authRecoveryNotPaired, errors.New("NOT_PAIRED"))
+
+	_, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected cmd from Enter on pairing-required modal")
+	}
+	resolved, ok := cmd().(authResolvedMsg)
+	if !ok {
+		t.Fatalf("expected authResolvedMsg, got %T", cmd())
+	}
+	if resolved.cancelled {
+		t.Error("retry should not be a cancellation")
+	}
+	if resolved.backend != fake {
+		t.Error("retry should reuse the same backend")
+	}
+}
+
+func TestConnectingModel_PairingRequiredEscCancels(t *testing.T) {
+	conn := &config.Connection{Name: "home", URL: "https://home.example.com"}
+	m := newConnectingModel(conn, false)
+	m.enterAuthModal(conn, nil, authRecoveryNotPaired, errors.New("NOT_PAIRED"))
+
+	_, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("expected cmd from Esc on pairing-required modal")
+	}
+	resolved, ok := cmd().(authResolvedMsg)
+	if !ok {
+		t.Fatalf("expected authResolvedMsg, got %T", cmd())
+	}
+	if !resolved.cancelled {
+		t.Error("Esc should set Cancelled=true")
+	}
+}
+
 func TestConnectingModel_AuthCancelEmitsResolvedCancelled(t *testing.T) {
 	conn := &config.Connection{Name: "home", URL: "https://home.example.com"}
 	m := newConnectingModel(conn, false)
