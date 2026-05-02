@@ -374,6 +374,7 @@ func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
 // We never overwrite user-entered text — switching back to OpenClaw
 // after typing in Ollama mode keeps whatever's in the URL field.
 func (m *connectionsModel) applyPresetDefaults(prev formPreset) {
+	const openclawURL = "http://localhost:18789"
 	const ollamaURL = "http://localhost:11434/v1"
 	const hermesURL = "http://127.0.0.1:8642/v1"
 	// Step 1: clear any prefill from the previous preset *before*
@@ -381,6 +382,11 @@ func (m *connectionsModel) applyPresetDefaults(prev formPreset) {
 	// empty field and can populate it. Without this ordering,
 	// Ollama → Hermes would skip the Hermes prefill because the
 	// fields still hold the Ollama values.
+	if prev == presetOpenClaw && m.formPreset != presetOpenClaw {
+		if m.urlInput.Value() == openclawURL {
+			m.urlInput.SetValue("")
+		}
+	}
 	if prev == presetOllama && m.formPreset != presetOllama {
 		if m.urlInput.Value() == ollamaURL {
 			m.urlInput.SetValue("")
@@ -421,7 +427,10 @@ func (m *connectionsModel) applyPresetDefaults(prev formPreset) {
 	case presetOpenAI:
 		m.urlInput.Placeholder = "https://api.openai.com/v1"
 	default:
-		m.urlInput.Placeholder = "https://gateway.example.com"
+		m.urlInput.Placeholder = openclawURL
+		if m.urlInput.Value() == "" {
+			m.urlInput.SetValue(openclawURL)
+		}
 	}
 }
 

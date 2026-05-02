@@ -221,15 +221,16 @@ func TestConnectionsModel_TypeCycleUpdatesPreset(t *testing.T) {
 		t.Errorf("Hermes preset did not prefill name: %q", m.nameInput.Value())
 	}
 
-	// Down again wraps back to OpenClaw and clears the Hermes
-	// prefill so the user isn't stuck with localhost in a gateway
-	// URL field.
+	// Down again wraps back to OpenClaw: clears the Hermes prefill
+	// and installs the OpenClaw localhost gateway suggestion. The
+	// Hermes-derived name is also cleared since OpenClaw doesn't
+	// auto-suggest a name.
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.formPreset != presetOpenClaw {
 		t.Errorf("expected wrap to OpenClaw, got %v", m.formPreset)
 	}
-	if m.urlInput.Value() != "" {
-		t.Errorf("expected URL cleared on switch away from Hermes, got %q", m.urlInput.Value())
+	if m.urlInput.Value() != "http://localhost:18789" {
+		t.Errorf("OpenClaw preset did not prefill URL: %q", m.urlInput.Value())
 	}
 	if m.nameInput.Value() != "" {
 		t.Errorf("expected name cleared on switch away from Hermes, got %q", m.nameInput.Value())
