@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-05-03
+### Changed
+- docs: align pairing and auth-recovery docs with TUI modal flow
+- test: use a smaller model for integration testing
+
+### Fixed
+- fix(client): re-dial after first-time pairing and time-bound session creation
+
 ## [1.3.0] - 2026-05-03
 ### Added
 - feat: check for updates on startup (#98)
