@@ -18,6 +18,8 @@ Three backend types ship today; all implement `backend.Backend` (`internal/backe
 
 `AllConnectionTypes` (`internal/config/connections.go`) drives the picker form's type radio. Adding a fourth backend means: implementing `backend.Backend`, extending the enum, dispatching in `DefaultBackendFactory` (`app/factory.go`), adjusting the form's type-conditional rendering, and writing a `backend_<name>.md` doc for it.
 
+`DefaultBackendFactory` has a second consumer: `app.Send` (`lucinate send`) calls it directly to build a backend for one-shot dispatch, so a new connection type that lands in the factory's switch is automatically reachable from the scripted CLI mode without further wiring. See [one-shot.md](one-shot.md).
+
 ## Startup decision tree
 
 `config.ResolveEntryConnection()` (`internal/config/startup.go`) decides what the TUI's entry view is:

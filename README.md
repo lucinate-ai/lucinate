@@ -190,6 +190,36 @@ Prefix input with `!!` to run a command on the gateway host. The input border tu
 
 The gateway's exec security policy controls which remote commands are allowed. If a command is denied, you'll see an error message. Configure exec permissions on the gateway host using `openclaw config`.
 
+## One-shot mode
+
+Not every prompt needs a TUI. `lucinate send` dispatches a single message through one of your saved connections, waits for the assistant's first complete reply, and prints it to stdout — nothing else. No streaming, no spinner, no chrome. Safe to capture into a shell variable, pipe into `jq`, or schedule from cron.
+
+```sh
+lucinate send --connection my-con --agent main "summarise this PR description"
+```
+
+| Flag | Description |
+|------|-------------|
+| `--connection` | Saved connection name or ID (case-insensitive on name). Required. |
+| `--agent` | Agent name or ID within the connection (case-insensitive on name). Required. |
+| `--session` | Session key. Defaults to the agent's main session — same default the picker would pick. |
+| `--detach` | Dispatch the message and exit as soon as the gateway accepts the turn. No reply is awaited. |
+
+The reply is written to stdout with a single trailing newline. Errors go to stderr; the exit code is non-zero on failure. Messages that begin with a dash should be preceded by `--` (the standard Unix escape) so the flag parser leaves them alone.
+
+A couple of patterns this enables:
+
+```sh
+# capture a reply into a shell variable
+reply=$(lucinate send --connection my-con --agent main "what's the changelog entry for this commit?")
+echo "$reply" | tee notes.md
+
+# fire-and-forget from cron — the run continues server-side, the next TUI session sees the reply
+lucinate send --connection my-con --agent main --detach "kick off the morning digest"
+```
+
+For the lifecycle, the default-session rule, embedding `app.Send` from Go, and the detach contract, see [docs/one-shot.md](docs/one-shot.md).
+
 ### Command line flags
 
 | Flag | Description |

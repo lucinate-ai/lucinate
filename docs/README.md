@@ -15,6 +15,7 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 | [sessions.md](sessions.md) | Session lifecycle, session browser, compact/reset, message queueing |
 | [crons.md](crons.md) | Gateway cron browser: list/detail/form substates, capability gating, raw-patch edit semantics |
 | [commands.md](commands.md) | Slash command dispatch, all built-in commands, tab completion, confirmation pattern |
+| [one-shot.md](one-shot.md) | One-shot CLI mode: `lucinate send` lifecycle, default session rule, detach semantics, embedding |
 | [shell-execution.md](shell-execution.md) | `!` local exec and `!!` remote exec with two-phase approval |
 | [skills.md](skills.md) | Skill file format, discovery, catalog injection, activation |
 | [chat-ux.md](chat-ux.md) | Input key bindings, streaming animation, thinking levels, header bar, history depth |

@@ -49,6 +49,7 @@ The `docs/` directory contains maintainer-level documentation for the main subsy
 - [agents.md](docs/agents.md) — agent picker, auto-selection, agent creation
 - [sessions.md](docs/sessions.md) — session lifecycle, session browser, compact/reset, message queueing
 - [commands.md](docs/commands.md) — slash command dispatch, all built-in commands, tab completion, confirmation pattern
+- [one-shot.md](docs/one-shot.md) — `lucinate send` lifecycle, default session rule, detach semantics, embedding `app.Send`
 - [shell-execution.md](docs/shell-execution.md) — `!` local and `!!` remote exec, two-phase approval
 - [skills.md](docs/skills.md) — skill file format, discovery, catalog injection, activation
 - [chat-ux.md](docs/chat-ux.md) — input bindings, streaming animation, thinking levels, header bar, history depth

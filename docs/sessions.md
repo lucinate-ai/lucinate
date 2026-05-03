@@ -4,6 +4,8 @@
 
 A session is created when the user selects an agent in the agent picker (see [agents.md](agents.md)). `client.CreateSession(agentID, key)` is called and the returned `sessionKey` is passed to `newChatModel()`. The session key is deterministic for non-default agents (based on agent ID) so the same session is restored on restart.
 
+The same default-key rule is reused by the one-shot CLI mode: `app.Send` (`lucinate send`) calls `CreateSession` with `MainKey` for the default agent and the literal `"main"` for any other agent, so a scripted dispatch lands on the same conversation as "open the picker, pick the agent, hit enter". See [one-shot.md](one-shot.md) for the full lifecycle.
+
 On `chatModel.Init()`, two async commands run in parallel:
 
 - `loadHistory()` — fetches the last N messages from the gateway (`client.SessionHistory()`), strips `System:` lines (see [message-rendering.md](message-rendering.md#history-cleanup)), and populates the viewport.
