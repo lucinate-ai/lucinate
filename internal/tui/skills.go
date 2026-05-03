@@ -127,6 +127,120 @@ func prefixAllLines(text string) string {
 	return strings.Join(lines, "\n")
 }
 
+// expandSkillReferences scans text for /<skill-name> tokens (preceded by BOF
+// or whitespace) that match a known skill, and returns a rewritten payload
+// containing a <local-agent-skill> envelope followed by the prose with each
+// matched token replaced.
+//
+// If text is exactly "/<skill>" (after trimming), the prose collapses to
+// `use the "<name>" skill above immediately`. Otherwise each match is
+// replaced with `the "<name>" skill above`.
+//
+// Returns (text, false) if no skill ref was matched.
+func expandSkillReferences(text string, skills []agentSkill) (string, bool) {
+	if len(skills) == 0 || text == "" {
+		return text, false
+	}
+
+	byName := make(map[string]*agentSkill, len(skills))
+	for i := range skills {
+		byName[strings.ToLower(skills[i].Name)] = &skills[i]
+	}
+
+	var matched []*agentSkill
+	seen := make(map[string]bool)
+	register := func(s *agentSkill) {
+		if seen[s.Name] {
+			return
+		}
+		seen[s.Name] = true
+		matched = append(matched, s)
+	}
+
+	// Bare-command short-circuit: entire trimmed message is a single skill ref.
+	trimmed := strings.TrimSpace(text)
+	var rewritten string
+	if strings.HasPrefix(trimmed, "/") {
+		bareName := strings.ToLower(trimmed[1:])
+		if s, ok := byName[bareName]; ok && bareName != "" && isSlashTokenName(bareName) {
+			register(s)
+			rewritten = fmt.Sprintf("use the %q skill above immediately", s.Name)
+		}
+	}
+
+	if rewritten == "" {
+		var out strings.Builder
+		out.Grow(len(text))
+		i := 0
+		for i < len(text) {
+			c := text[i]
+			if c == '/' && (i == 0 || isSpaceByte(text[i-1])) {
+				j := i + 1
+				for j < len(text) && isSlashTokenByte(text[j]) {
+					j++
+				}
+				name := strings.ToLower(text[i+1 : j])
+				if s, ok := byName[name]; ok && name != "" {
+					register(s)
+					fmt.Fprintf(&out, "the %q skill above", s.Name)
+					i = j
+					continue
+				}
+			}
+			out.WriteByte(c)
+			i++
+		}
+		rewritten = out.String()
+	}
+
+	if len(matched) == 0 {
+		return text, false
+	}
+
+	var prefix strings.Builder
+	if len(matched) == 1 {
+		prefix.WriteString("Please use the following skill:\n\n")
+	} else {
+		prefix.WriteString("Please use the following skills:\n\n")
+	}
+	for idx, s := range matched {
+		fmt.Fprintf(&prefix, "<local-agent-skill name=%q>\n", s.Name)
+		if s.Body != "" {
+			prefix.WriteString(s.Body)
+			if !strings.HasSuffix(s.Body, "\n") {
+				prefix.WriteString("\n")
+			}
+		}
+		prefix.WriteString("</local-agent-skill>")
+		if idx < len(matched)-1 {
+			prefix.WriteString("\n\n")
+		}
+	}
+	prefix.WriteString("\n\n")
+	prefix.WriteString(rewritten)
+	return prefix.String(), true
+}
+
+func isSpaceByte(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '\v'
+}
+
+func isSlashTokenByte(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' || b == '-'
+}
+
+func isSlashTokenName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isSlashTokenByte(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // skillCatalogBlock returns a System: prefixed block listing available skills.
 // This is prepended to the first user message so the agent knows what's available.
 // Every line is prefixed with "System:" so that stripSystemLines removes the

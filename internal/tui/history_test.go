@@ -85,6 +85,54 @@ func TestStripSystemLines_MixedPrefixes(t *testing.T) {
 	}
 }
 
+func TestStripLocalAgentSkillBlocks(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "no envelope",
+			in:   "just plain text",
+			want: "just plain text",
+		},
+		{
+			name: "single block",
+			in: "Please use the following skill:\n\n" +
+				"<local-agent-skill name=\"foo\">\nbody\n</local-agent-skill>\n\n" +
+				"use the \"foo\" skill above on x",
+			want: "use the \"foo\" skill above on x",
+		},
+		{
+			name: "multi-line body",
+			in: "Please use the following skill:\n\n" +
+				"<local-agent-skill name=\"foo\">\nline1\nline2\nline3\n</local-agent-skill>\n\n" +
+				"trailing prose",
+			want: "trailing prose",
+		},
+		{
+			name: "two blocks",
+			in: "Please use the following skills:\n\n" +
+				"<local-agent-skill name=\"foo\">\nfoo body\n</local-agent-skill>\n\n" +
+				"<local-agent-skill name=\"bar\">\nbar body\n</local-agent-skill>\n\n" +
+				"both above",
+			want: "both above",
+		},
+		{
+			name: "empty input",
+			in:   "",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := stripLocalAgentSkillBlocks(tt.in); got != tt.want {
+				t.Errorf("stripLocalAgentSkillBlocks() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsSystemLine(t *testing.T) {
 	tests := []struct {
 		line string

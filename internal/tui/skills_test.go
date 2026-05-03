@@ -3,8 +3,186 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestExpandSkillReferences(t *testing.T) {
+	skills := []agentSkill{
+		{Name: "foo", Body: "foo instructions"},
+		{Name: "bar", Body: "bar instructions"},
+		{Name: "commit-message", Body: "use conventional commits"},
+		{Name: "Capital", Body: "capital body"},
+	}
+
+	t.Run("empty input", func(t *testing.T) {
+		got, ok := expandSkillReferences("", skills)
+		if got != "" || ok {
+			t.Errorf("got (%q, %v), want (\"\", false)", got, ok)
+		}
+	})
+
+	t.Run("no slash", func(t *testing.T) {
+		got, ok := expandSkillReferences("hello world", skills)
+		if got != "hello world" || ok {
+			t.Errorf("got (%q, %v), want unchanged false", got, ok)
+		}
+	})
+
+	t.Run("bare command", func(t *testing.T) {
+		got, ok := expandSkillReferences("/foo", skills)
+		if !ok {
+			t.Fatal("expected expansion")
+		}
+		if !strings.Contains(got, "Please use the following skill:") {
+			t.Errorf("missing singular preamble in: %s", got)
+		}
+		if !strings.Contains(got, "<local-agent-skill name=\"foo\">") {
+			t.Errorf("missing envelope tag in: %s", got)
+		}
+		if !strings.Contains(got, "foo instructions") {
+			t.Errorf("missing body in: %s", got)
+		}
+		if !strings.Contains(got, "use the \"foo\" skill above immediately") {
+			t.Errorf("missing bare-prose in: %s", got)
+		}
+	})
+
+	t.Run("bare command with surrounding whitespace", func(t *testing.T) {
+		got, ok := expandSkillReferences("  /foo  ", skills)
+		if !ok || !strings.Contains(got, "use the \"foo\" skill above immediately") {
+			t.Errorf("expected bare-form expansion, got ok=%v body=%s", ok, got)
+		}
+	})
+
+	t.Run("mid-message", func(t *testing.T) {
+		got, ok := expandSkillReferences("use /foo on x", skills)
+		if !ok {
+			t.Fatal("expected expansion")
+		}
+		if !strings.Contains(got, "Please use the following skill:") {
+			t.Errorf("missing singular preamble: %s", got)
+		}
+		if !strings.HasSuffix(got, "use the \"foo\" skill above on x") {
+			t.Errorf("expected trailing prose, got: %s", got)
+		}
+	})
+
+	t.Run("repeated reference", func(t *testing.T) {
+		got, ok := expandSkillReferences("/foo and /foo again", skills)
+		if !ok {
+			t.Fatal("expected expansion")
+		}
+		if c := strings.Count(got, "<local-agent-skill"); c != 1 {
+			t.Errorf("expected one envelope, got %d in: %s", c, got)
+		}
+		if c := strings.Count(got, "the \"foo\" skill above"); c != 2 {
+			t.Errorf("expected two substitutions, got %d in: %s", c, got)
+		}
+	})
+
+	t.Run("multiple skills", func(t *testing.T) {
+		got, ok := expandSkillReferences("use /foo and /bar on x", skills)
+		if !ok {
+			t.Fatal("expected expansion")
+		}
+		if !strings.Contains(got, "Please use the following skills:") {
+			t.Errorf("missing plural preamble: %s", got)
+		}
+		fooIdx := strings.Index(got, "name=\"foo\"")
+		barIdx := strings.Index(got, "name=\"bar\"")
+		if fooIdx < 0 || barIdx < 0 || fooIdx >= barIdx {
+			t.Errorf("expected foo before bar in envelope, got: %s", got)
+		}
+		if !strings.HasSuffix(got, "use the \"foo\" skill above and the \"bar\" skill above on x") {
+			t.Errorf("unexpected prose, got: %s", got)
+		}
+	})
+
+	t.Run("unknown ref unchanged", func(t *testing.T) {
+		got, ok := expandSkillReferences("/baz", skills)
+		if got != "/baz" || ok {
+			t.Errorf("got (%q, %v), want unchanged false", got, ok)
+		}
+	})
+
+	t.Run("punctuation after token", func(t *testing.T) {
+		got, ok := expandSkillReferences("use /foo.", skills)
+		if !ok {
+			t.Fatal("expected expansion")
+		}
+		if !strings.HasSuffix(got, "use the \"foo\" skill above.") {
+			t.Errorf("punctuation not preserved: %s", got)
+		}
+	})
+
+	t.Run("mid-word slash unchanged", func(t *testing.T) {
+		got, ok := expandSkillReferences("a/foo", skills)
+		if got != "a/foo" || ok {
+			t.Errorf("got (%q, %v), want unchanged false", got, ok)
+		}
+	})
+
+	t.Run("after newline", func(t *testing.T) {
+		got, ok := expandSkillReferences("a\n/foo b", skills)
+		if !ok {
+			t.Fatal("expected expansion")
+		}
+		if !strings.HasSuffix(got, "a\nthe \"foo\" skill above b") {
+			t.Errorf("unexpected output: %s", got)
+		}
+	})
+
+	t.Run("hyphenated name", func(t *testing.T) {
+		got, ok := expandSkillReferences("run /commit-message now", skills)
+		if !ok {
+			t.Fatal("expected expansion")
+		}
+		if !strings.HasSuffix(got, "run the \"commit-message\" skill above now") {
+			t.Errorf("unexpected: %s", got)
+		}
+	})
+
+	t.Run("canonical-name preserved", func(t *testing.T) {
+		got, ok := expandSkillReferences("hi /capital there", skills)
+		if !ok {
+			t.Fatal("expected expansion")
+		}
+		if !strings.Contains(got, "the \"Capital\" skill above") {
+			t.Errorf("expected canonical 'Capital', got: %s", got)
+		}
+	})
+}
+
+func TestFindSlashTokenAt(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		cursor     int
+		wantStart  int
+		wantPrefix string
+		wantOK     bool
+	}{
+		{"slash only", "/", 1, 0, "/", true},
+		{"slash at start, end of token", "/foo", 4, 0, "/foo", true},
+		{"after space", "use /foo", 8, 4, "/foo", true},
+		{"end-of-token before space", "use /foo bar", 8, 4, "/foo", true},
+		{"cursor mid-token", "use /foo bar", 6, 0, "", false},
+		{"no whitespace before /", "a/foo", 5, 0, "", false},
+		{"empty input", "", 0, 0, "", false},
+		{"multi-line", "hello\n/foo", 10, 6, "/foo", true},
+		{"emoji before slash", "👋 /foo", len("👋 /foo"), len("👋 "), "/foo", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start, prefix, ok := findSlashTokenAt(tt.value, tt.cursor)
+			if ok != tt.wantOK || prefix != tt.wantPrefix || (ok && start != tt.wantStart) {
+				t.Errorf("findSlashTokenAt(%q, %d) = (%d, %q, %v), want (%d, %q, %v)",
+					tt.value, tt.cursor, start, prefix, ok, tt.wantStart, tt.wantPrefix, tt.wantOK)
+			}
+		})
+	}
+}
 
 func TestParseSkillFile(t *testing.T) {
 	content := `---
@@ -139,32 +317,49 @@ func TestSkillSlashCommand(t *testing.T) {
 	}
 
 	// Hint for skill.
-	hint := m.slashCommandHint("/rev")
-	if hint != "iew" {
-		t.Errorf("slashCommandHint(/rev) = %q, want %q", hint, "iew")
+	token, suffix := m.slashCommandHint("/rev", 4)
+	if token != "/rev" || suffix != "iew" {
+		t.Errorf("slashCommandHint(/rev, 4) = (%q, %q), want (%q, %q)", token, suffix, "/rev", "iew")
 	}
 }
 
-func TestSkillActivation(t *testing.T) {
+func TestSkillActivation_DelegatesToSendPath(t *testing.T) {
 	m := newSlashTestModel()
 	m.skills = []agentSkill{
 		{Name: "review", Description: "Code review", Body: "Review the code carefully."},
 	}
 
+	// /skill alone: handleSlashCommand returns (false, nil) so the regular
+	// send path runs expandSkillReferences and produces the envelope, with
+	// a streaming-assistant placeholder appended.
 	handled, cmd := m.handleSlashCommand("/review")
-	if !handled {
-		t.Fatal("expected /review to be handled")
+	if handled || cmd != nil {
+		t.Fatalf("expected /review to be delegated (false, nil), got handled=%v cmd=%v", handled, cmd)
 	}
-	if cmd == nil {
-		t.Fatal("expected a send cmd")
+
+	// /skill with prose: same delegation.
+	handled, cmd = m.handleSlashCommand("/review the diff")
+	if handled || cmd != nil {
+		t.Fatalf("expected /review-with-prose to be delegated, got handled=%v cmd=%v", handled, cmd)
 	}
-	// Verify the user message was added to display.
+}
+
+func TestSkillActivation_UnknownCommandStillErrors(t *testing.T) {
+	m := newSlashTestModel()
+	m.skills = []agentSkill{
+		{Name: "review", Description: "Code review", Body: "Review the code carefully."},
+	}
+
+	handled, cmd := m.handleSlashCommand("/notaskill")
+	if !handled || cmd != nil {
+		t.Fatalf("expected unknown slash to be handled with no cmd, got handled=%v cmd=%v", handled, cmd)
+	}
+	if len(m.messages) == 0 {
+		t.Fatal("expected an error system message")
+	}
 	last := m.messages[len(m.messages)-1]
-	if last.role != "user" || last.content != "/review" {
-		t.Errorf("expected user message '/review', got role=%q content=%q", last.role, last.content)
-	}
-	if !m.sending {
-		t.Error("expected sending to be true after skill activation")
+	if last.role != "system" || last.errMsg == "" {
+		t.Errorf("expected system error message, got role=%q errMsg=%q", last.role, last.errMsg)
 	}
 }
 
@@ -277,11 +472,8 @@ func TestSkillActivation_CaseInsensitive(t *testing.T) {
 	}
 
 	handled, cmd := m.handleSlashCommand("/review")
-	if !handled {
-		t.Fatal("expected /review to match skill 'Review'")
-	}
-	if cmd == nil {
-		t.Fatal("expected a send cmd")
+	if handled || cmd != nil {
+		t.Fatalf("expected /review (case-insensitive match for 'Review') to be delegated, got handled=%v cmd=%v", handled, cmd)
 	}
 }
 

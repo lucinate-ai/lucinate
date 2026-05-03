@@ -26,6 +26,35 @@ var slashCommands = []string{"/agents", "/cancel", "/clear", "/commands", "/comp
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
 
+// findSlashTokenAt locates the slash-prefixed token whose end coincides with
+// the cursor at byteOffset in value. Returns ok=false when the cursor is not
+// at the end of a slash token (e.g. mid-token, or no slash preceding the
+// cursor without an intervening word boundary).
+func findSlashTokenAt(value string, byteOffset int) (start int, prefix string, ok bool) {
+	if byteOffset < 0 || byteOffset > len(value) {
+		return 0, "", false
+	}
+	// Cursor must be at a token boundary: next byte must be EOF or whitespace.
+	if byteOffset < len(value) && !isSpaceByte(value[byteOffset]) {
+		return 0, "", false
+	}
+	// Walk backward over slash-token chars.
+	i := byteOffset
+	for i > 0 && isSlashTokenByte(value[i-1]) {
+		i--
+	}
+	// We need a '/' immediately before the run of token chars.
+	if i == 0 || value[i-1] != '/' {
+		return 0, "", false
+	}
+	slashIdx := i - 1
+	// The slash itself must be at BOF or preceded by whitespace.
+	if slashIdx > 0 && !isSpaceByte(value[slashIdx-1]) {
+		return 0, "", false
+	}
+	return slashIdx, value[slashIdx:byteOffset], true
+}
+
 // completeSlashCommand returns the first matching slash command for the given
 // prefix, or "" if no match. Includes skill names as slash commands.
 func (m *chatModel) completeSlashCommand(prefix string) string {
@@ -47,17 +76,20 @@ func (m *chatModel) completeSlashCommand(prefix string) string {
 	return ""
 }
 
-// slashCommandHint returns the completion hint to display after the current
-// input, or "" if no hint applies.
-func (m *chatModel) slashCommandHint(input string) string {
-	if !strings.HasPrefix(input, "/") || strings.Contains(input, " ") || input == "" {
-		return ""
+// slashCommandHint returns the completion hint for the slash token at the
+// given cursor byte offset. token is what the user has typed so far
+// (including the leading '/'), suffix is the remainder that Tab would insert.
+// Both are empty when no hint applies.
+func (m *chatModel) slashCommandHint(value string, cursorByte int) (token, suffix string) {
+	_, prefix, ok := findSlashTokenAt(value, cursorByte)
+	if !ok {
+		return "", ""
 	}
-	match := m.completeSlashCommand(input)
-	if match == "" || match == strings.ToLower(input) {
-		return ""
+	match := m.completeSlashCommand(prefix)
+	if match == "" || match == strings.ToLower(prefix) {
+		return "", ""
 	}
-	return match[len(input):]
+	return prefix, match[len(prefix):]
 }
 
 // handleSlashCommand processes local slash commands. Returns (true, cmd) if
@@ -226,23 +258,25 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return m.handleThinkCommand(text)
 	}
 
-	// Skill activation: /skill-name sends the skill body as a System:-prefixed message.
+	// Slash-prefixed input that isn't a built-in: if the first token names a
+	// known skill, delegate to the regular send path so expandSkillReferences
+	// wraps it in a <local-agent-skill> envelope. Otherwise emit an
+	// unknown-command error.
 	if strings.HasPrefix(command, "/") {
-		skillName := strings.TrimPrefix(command, "/")
+		firstToken := command
+		if idx := strings.IndexByte(command, ' '); idx >= 0 {
+			firstToken = command[:idx]
+		}
+		name := strings.TrimPrefix(firstToken, "/")
 		for _, s := range m.skills {
-			if strings.ToLower(s.Name) == skillName {
-				msg := prefixAllLines(fmt.Sprintf("[Skill: %s]\n%s", s.Name, s.Body))
-				m.messages = append(m.messages, chatMessage{role: "user", content: fmt.Sprintf("/%s", s.Name)})
-				m.sending = true
-				m.updateViewport()
-				return true, m.sendMessage(msg)
+			if strings.EqualFold(s.Name, name) {
+				return false, nil
 			}
 		}
 
-		// Unknown slash command.
 		m.messages = append(m.messages, chatMessage{
 			role:   "system",
-			errMsg: fmt.Sprintf("unknown command: %s (try /help)", command),
+			errMsg: fmt.Sprintf("unknown command: %s (try /help)", firstToken),
 		})
 		m.updateViewport()
 		return true, nil

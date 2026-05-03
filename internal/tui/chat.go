@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
@@ -18,6 +19,61 @@ import (
 	"github.com/lucinate-ai/lucinate/internal/client"
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
+
+// textareaCursorByteOffset converts the textarea's (Line, Column) cursor
+// position — which is rune-indexed within a row — to a byte offset against
+// Value(). Returns 0 when the textarea is empty.
+func textareaCursorByteOffset(ta *textarea.Model) int {
+	value := ta.Value()
+	if value == "" {
+		return 0
+	}
+	row := ta.Line()
+	col := ta.Column()
+	// Walk to the start of the target row.
+	offset := 0
+	for r := 0; r < row; r++ {
+		nl := strings.IndexByte(value[offset:], '\n')
+		if nl < 0 {
+			return len(value)
+		}
+		offset += nl + 1
+	}
+	// Advance col runes into the row.
+	rest := value[offset:]
+	if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+		rest = rest[:nl]
+	}
+	for i := 0; i < col; i++ {
+		_, size := utf8.DecodeRuneInString(rest)
+		if size == 0 {
+			break
+		}
+		rest = rest[size:]
+		offset += size
+	}
+	return offset
+}
+
+// setTextareaToValueWithCursor replaces the textarea contents with newValue
+// and positions the cursor at byte offset cursorByte.
+func setTextareaToValueWithCursor(ta *textarea.Model, newValue string, cursorByte int) {
+	ta.Reset()
+	ta.SetValue(newValue)
+	if cursorByte > len(newValue) {
+		cursorByte = len(newValue)
+	}
+	targetRow := strings.Count(newValue[:cursorByte], "\n")
+	lineStart := 0
+	if idx := strings.LastIndexByte(newValue[:cursorByte], '\n'); idx >= 0 {
+		lineStart = idx + 1
+	}
+	targetCol := utf8.RuneCountInString(newValue[lineStart:cursorByte])
+	for ta.Line() > targetRow {
+		ta.CursorUp()
+	}
+	ta.SetCursorColumn(targetCol)
+}
 
 // connectionBadge returns a short status string for the chat header when the
 // gateway connection is not in the steady-state Connected condition. Returns
@@ -369,12 +425,13 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			}
 			return m, nil
 		case "tab":
-			text := m.textarea.Value()
-			if strings.HasPrefix(text, "/") && !strings.Contains(text, " ") {
-				if match := m.completeSlashCommand(text); match != "" {
-					m.textarea.Reset()
-					m.textarea.SetValue(match)
-					m.textarea.CursorEnd()
+			value := m.textarea.Value()
+			cursorByte := textareaCursorByteOffset(&m.textarea)
+			start, prefix, ok := findSlashTokenAt(value, cursorByte)
+			if ok {
+				if match := m.completeSlashCommand(prefix); match != "" && match != strings.ToLower(prefix) {
+					newValue := value[:start] + match + value[cursorByte:]
+					setTextareaToValueWithCursor(&m.textarea, newValue, start+len(match))
 				}
 			}
 			return m, nil
@@ -456,11 +513,17 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 
+			sent := text
+			if len(m.skills) > 0 {
+				if expanded, ok := expandSkillReferences(text, m.skills); ok {
+					sent = expanded
+				}
+			}
 			m.messages = append(m.messages, chatMessage{role: "user", content: text})
 			m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
 			m.sending = true
 			m.updateViewport()
-			cmds = append(cmds, m.sendMessage(text), m.ensureSpinnerTicking())
+			cmds = append(cmds, m.sendMessage(sent), m.ensureSpinnerTicking())
 			return m, tea.Batch(cmds...)
 		}
 
@@ -681,10 +744,16 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 		return localExecCommand(command)
 	}
 
+	sent := text
+	if len(m.skills) > 0 {
+		if expanded, ok := expandSkillReferences(text, m.skills); ok {
+			sent = expanded
+		}
+	}
 	m.messages = append(m.messages, chatMessage{role: "user", content: text})
 	m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
 	m.updateViewport()
-	return tea.Batch(m.sendMessage(text), m.ensureSpinnerTicking())
+	return tea.Batch(m.sendMessage(sent), m.ensureSpinnerTicking())
 }
 
 func (m *chatModel) setSize(w, h int) {
@@ -787,9 +856,9 @@ func (m chatModel) View() string {
 	} else if isLocalExec {
 		help = helpStyle.Render(localExecPrefixStyle.Render(" local command") + " — runs on this machine")
 	} else {
-		hint := m.slashCommandHint(m.textarea.Value())
-		if hint != "" {
-			help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", m.textarea.Value(), hint))
+		token, suffix := m.slashCommandHint(m.textarea.Value(), textareaCursorByteOffset(&m.textarea))
+		if suffix != "" {
+			help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", token, suffix))
 		} else if m.hideInput {
 			help = helpStyle.Render(" /help: commands")
 		} else {

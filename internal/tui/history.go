@@ -75,6 +75,7 @@ func fetchHistory(b backend.Backend, sessionKey string, renderer *glamour.TermRe
 			continue
 		}
 		if role == "user" {
+			text = stripLocalAgentSkillBlocks(text)
 			text = stripSystemLines(text)
 			if text == "" {
 				continue
@@ -108,6 +109,50 @@ func stripSystemLines(s string) string {
 		kept = append(kept, line)
 	}
 	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// stripLocalAgentSkillBlocks removes the <local-agent-skill> envelope so it
+// is hidden from the rendered transcript. Strips the "Please use the following
+// skill(s):" preamble line and every <local-agent-skill ...>...</local-agent-skill>
+// block (inclusive). Collapses runs of blank lines left behind.
+func stripLocalAgentSkillBlocks(s string) string {
+	if s == "" || !strings.Contains(s, "<local-agent-skill") {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	var kept []string
+	inBlock := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if inBlock {
+			if strings.Contains(trimmed, "</local-agent-skill>") {
+				inBlock = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "<local-agent-skill") {
+			if !strings.Contains(trimmed, "</local-agent-skill>") {
+				inBlock = true
+			}
+			continue
+		}
+		if trimmed == "Please use the following skill:" || trimmed == "Please use the following skills:" {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	// Collapse runs of blank lines.
+	var out []string
+	prevBlank := false
+	for _, line := range kept {
+		blank := strings.TrimSpace(line) == ""
+		if blank && prevBlank {
+			continue
+		}
+		out = append(out, line)
+		prevBlank = blank
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
 }
 
 // isSystemLine returns true if the line starts with a System prefix,

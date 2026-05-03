@@ -214,27 +214,17 @@ func TestSlashCommand_Model_SwitchReturnsCmd(t *testing.T) {
 	}
 }
 
-func TestSlashCommand_SkillActivation(t *testing.T) {
+func TestSlashCommand_SkillActivation_DelegatesToSendPath(t *testing.T) {
 	m := newSlashTestModel()
 	m.skills = []agentSkill{{Name: "greet", Description: "say hi", Body: "Greet the user warmly."}}
 	initialCount := len(m.messages)
 
 	handled, cmd := m.handleSlashCommand("/greet")
-	if !handled {
-		t.Fatal("expected /greet to be handled as skill activation")
+	if handled || cmd != nil {
+		t.Fatalf("expected /greet to be delegated (false, nil), got handled=%v cmd=%v", handled, cmd)
 	}
-	if cmd == nil {
-		t.Error("expected sendMessage cmd from skill activation")
-	}
-	if !m.sending {
-		t.Error("expected m.sending to be true after skill activation")
-	}
-	if len(m.messages) != initialCount+1 {
-		t.Fatalf("expected %d messages, got %d", initialCount+1, len(m.messages))
-	}
-	last := m.messages[len(m.messages)-1]
-	if last.role != "user" || last.content != "/greet" {
-		t.Errorf("expected user message %q, got role=%q content=%q", "/greet", last.role, last.content)
+	if len(m.messages) != initialCount {
+		t.Errorf("expected no message changes from delegation, got %d new", len(m.messages)-initialCount)
 	}
 }
 
@@ -243,11 +233,18 @@ func TestSlashCommand_SkillActivation_CaseInsensitive(t *testing.T) {
 	m.skills = []agentSkill{{Name: "Greet", Description: "say hi", Body: "hi"}}
 
 	handled, cmd := m.handleSlashCommand("/GREET")
-	if !handled {
-		t.Fatal("expected skill activation to be case-insensitive")
+	if handled || cmd != nil {
+		t.Fatalf("expected /GREET to be delegated (case-insensitive), got handled=%v cmd=%v", handled, cmd)
 	}
-	if cmd == nil {
-		t.Error("expected a sendMessage cmd")
+}
+
+func TestSlashCommand_SkillWithProse_Delegates(t *testing.T) {
+	m := newSlashTestModel()
+	m.skills = []agentSkill{{Name: "greet", Description: "say hi", Body: "hi"}}
+
+	handled, cmd := m.handleSlashCommand("/greet user warmly")
+	if handled || cmd != nil {
+		t.Fatalf("expected /greet-with-prose to be delegated, got handled=%v cmd=%v", handled, cmd)
 	}
 }
 
@@ -325,25 +322,31 @@ func TestCompleteSlashCommand(t *testing.T) {
 func TestSlashCommandHint(t *testing.T) {
 	m := newSlashTestModel()
 	tests := []struct {
-		input string
-		want  string
+		name       string
+		input      string
+		cursorByte int
+		wantToken  string
+		wantSuffix string
 	}{
-		{"/h", "elp"},
-		{"/he", "lp"},
-		{"/help", ""},
-		{"/q", "uit"},
-		{"/a", "gents"},
-		{"/agents", ""},
-		{"/z", ""},
-		{"hello", ""},
-		{"/help foo", ""},
-		{"", ""},
+		{"prefix /h", "/h", 2, "/h", "elp"},
+		{"prefix /he", "/he", 3, "/he", "lp"},
+		{"exact /help", "/help", 5, "", ""},
+		{"prefix /q", "/q", 2, "/q", "uit"},
+		{"prefix /a", "/a", 2, "/a", "gents"},
+		{"exact /agents", "/agents", 7, "", ""},
+		{"unknown /z", "/z", 2, "", ""},
+		{"plain text", "hello", 5, "", ""},
+		{"after slash command + space", "/help foo", 9, "", ""},
+		{"empty input", "", 0, "", ""},
+		{"mid-message /h after space", "use /h", 6, "/h", "elp"},
+		{"mid-message cursor in middle of token", "/he abc", 2, "", ""},
 	}
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := m.slashCommandHint(tt.input)
-			if got != tt.want {
-				t.Errorf("slashCommandHint(%q) = %q, want %q", tt.input, got, tt.want)
+		t.Run(tt.name, func(t *testing.T) {
+			gotToken, gotSuffix := m.slashCommandHint(tt.input, tt.cursorByte)
+			if gotToken != tt.wantToken || gotSuffix != tt.wantSuffix {
+				t.Errorf("slashCommandHint(%q, %d) = (%q, %q), want (%q, %q)",
+					tt.input, tt.cursorByte, gotToken, gotSuffix, tt.wantToken, tt.wantSuffix)
 			}
 		})
 	}
