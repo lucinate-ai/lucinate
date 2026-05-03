@@ -80,6 +80,62 @@ func (m *chatModel) completeSlashCommand(prefix string) string {
 	return ""
 }
 
+// findAgentArgAt detects whether the cursor sits at the end of the argument
+// of `/agent <name>` on the current line. Returns the byte offset where the
+// argument starts and what the user has typed so far. Empty prefix is valid
+// (cursor immediately after `/agent ` triggers a completion to the first
+// known agent).
+func findAgentArgAt(value string, byteOffset int) (start int, prefix string, ok bool) {
+	if byteOffset < 0 || byteOffset > len(value) {
+		return 0, "", false
+	}
+	// Cursor must be at end-of-line or end-of-value. Agent names may
+	// contain spaces, so the whole tail of the line is the arg token.
+	if byteOffset < len(value) && value[byteOffset] != '\n' {
+		return 0, "", false
+	}
+	lineStart := byteOffset
+	for lineStart > 0 && value[lineStart-1] != '\n' {
+		lineStart--
+	}
+	const cmd = "/agent "
+	if byteOffset-lineStart < len(cmd) {
+		return 0, "", false
+	}
+	if !strings.EqualFold(value[lineStart:lineStart+len(cmd)], cmd) {
+		return 0, "", false
+	}
+	argStart := lineStart + len(cmd)
+	return argStart, value[argStart:byteOffset], true
+}
+
+// completeAgentName returns the first known agent name whose lowercased
+// form starts with prefix, preserving the original casing.
+func (m *chatModel) completeAgentName(prefix string) string {
+	lower := strings.ToLower(prefix)
+	for _, n := range m.agentNames {
+		if strings.HasPrefix(strings.ToLower(n), lower) {
+			return n
+		}
+	}
+	return ""
+}
+
+// agentNameHint returns the completion hint for the argument of
+// `/agent <name>` at the given cursor offset. Empty token/suffix when no
+// hint applies (wrong context, agents not yet loaded, or no match).
+func (m *chatModel) agentNameHint(value string, cursorByte int) (token, suffix string) {
+	_, prefix, ok := findAgentArgAt(value, cursorByte)
+	if !ok {
+		return "", ""
+	}
+	match := m.completeAgentName(prefix)
+	if match == "" || strings.EqualFold(match, prefix) {
+		return "", ""
+	}
+	return prefix, match[len(prefix):]
+}
+
 // slashCommandHint returns the completion hint for the slash token at the
 // given cursor byte offset. token is what the user has typed so far
 // (including the leading '/'), suffix is the remainder that Tab would insert.

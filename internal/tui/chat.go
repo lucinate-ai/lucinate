@@ -164,6 +164,7 @@ type chatModel struct {
 	stats           *sessionStats
 	modelID         string
 	skills          []agentSkill
+	agentNames      []string // populated asynchronously by loadAgentNames; powers /agent <TAB> completion
 	spinnerFrame    int
 	spinnerTicking  bool
 	prefs           config.Preferences
@@ -261,7 +262,29 @@ func (m chatModel) Init() tea.Cmd {
 		m.loadHistory(),
 		m.loadStats(),
 		func() tea.Msg { return skillsDiscoveredMsg{skills: discoverSkills()} },
+		m.loadAgentNames(),
 	)
+}
+
+func (m chatModel) loadAgentNames() tea.Cmd {
+	b := m.backend
+	return func() tea.Msg {
+		result, err := b.ListAgents(context.Background())
+		if err != nil || result == nil {
+			return chatAgentNamesLoadedMsg{}
+		}
+		names := make([]string, 0, len(result.Agents))
+		for _, a := range result.Agents {
+			n := a.Name
+			if n == "" {
+				n = a.ID
+			}
+			if n != "" {
+				names = append(names, n)
+			}
+		}
+		return chatAgentNamesLoadedMsg{names: names}
+	}
 }
 
 func (m chatModel) loadStats() tea.Cmd {
@@ -403,6 +426,10 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case chatAgentNamesLoadedMsg:
+		m.agentNames = msg.names
+		return m, nil
+
 	case skillsDiscoveredMsg:
 		m.skills = msg.skills
 		if len(m.skills) > 0 {
@@ -432,9 +459,13 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		case "tab":
 			value := m.textarea.Value()
 			cursorByte := textareaCursorByteOffset(&m.textarea)
-			start, prefix, ok := findSlashTokenAt(value, cursorByte)
-			if ok {
+			if start, prefix, ok := findSlashTokenAt(value, cursorByte); ok {
 				if match := m.completeSlashCommand(prefix); match != "" && match != strings.ToLower(prefix) {
+					newValue := value[:start] + match + value[cursorByte:]
+					setTextareaToValueWithCursor(&m.textarea, newValue, start+len(match))
+				}
+			} else if start, prefix, ok := findAgentArgAt(value, cursorByte); ok {
+				if match := m.completeAgentName(prefix); match != "" && !strings.EqualFold(match, prefix) {
 					newValue := value[:start] + match + value[cursorByte:]
 					setTextareaToValueWithCursor(&m.textarea, newValue, start+len(match))
 				}
@@ -861,7 +892,12 @@ func (m chatModel) View() string {
 	} else if isLocalExec {
 		help = helpStyle.Render(localExecPrefixStyle.Render(" local command") + " — runs on this machine")
 	} else {
-		token, suffix := m.slashCommandHint(m.textarea.Value(), textareaCursorByteOffset(&m.textarea))
+		value := m.textarea.Value()
+		cursorByte := textareaCursorByteOffset(&m.textarea)
+		token, suffix := m.slashCommandHint(value, cursorByte)
+		if suffix == "" {
+			token, suffix = m.agentNameHint(value, cursorByte)
+		}
 		if suffix != "" {
 			help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", token, suffix))
 		} else if m.hideInput {

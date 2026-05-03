@@ -402,6 +402,45 @@ func TestSlashCommandHint(t *testing.T) {
 	}
 }
 
+func TestAgentNameHint(t *testing.T) {
+	m := newSlashTestModel()
+	m.agentNames = []string{"alpha", "Beta", "Gamma Two"}
+	tests := []struct {
+		name       string
+		input      string
+		cursorByte int
+		wantToken  string
+		wantSuffix string
+	}{
+		{"empty arg completes first", "/agent ", 7, "", "alpha"},
+		{"prefix matches", "/agent al", 9, "al", "pha"},
+		{"case-insensitive prefix", "/agent BE", 9, "BE", "ta"},
+		{"matches name with space", "/agent Gam", 10, "Gam", "ma Two"},
+		{"exact match no hint", "/agent alpha", 12, "", ""},
+		{"no match", "/agent zzz", 10, "", ""},
+		{"command without space", "/agent", 6, "", ""},
+		{"unrelated command", "/agents", 7, "", ""},
+		{"cursor mid-line", "/agent al ", 9, "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotToken, gotSuffix := m.agentNameHint(tt.input, tt.cursorByte)
+			if gotToken != tt.wantToken || gotSuffix != tt.wantSuffix {
+				t.Errorf("agentNameHint(%q, %d) = (%q, %q), want (%q, %q)",
+					tt.input, tt.cursorByte, gotToken, gotSuffix, tt.wantToken, tt.wantSuffix)
+			}
+		})
+	}
+}
+
+func TestAgentNameHint_NoAgentsLoaded(t *testing.T) {
+	m := newSlashTestModel()
+	token, suffix := m.agentNameHint("/agent al", 9)
+	if token != "" || suffix != "" {
+		t.Errorf("expected no hint when agents are unloaded, got (%q, %q)", token, suffix)
+	}
+}
+
 func TestSlashCommand_Config(t *testing.T) {
 	m := newSlashTestModel()
 	handled, cmd := m.handleSlashCommand("/config")

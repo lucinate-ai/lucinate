@@ -135,6 +135,13 @@ type agentSwitchFailedMsg struct {
 	err error
 }
 
+// chatAgentNamesLoadedMsg delivers agent display names to the chat model
+// for `/agent <TAB>` completion. Empty names slice on backend error is
+// acceptable — completion silently degrades.
+type chatAgentNamesLoadedMsg struct {
+	names []string
+}
+
 // skillsDiscoveredMsg is returned when skill discovery completes.
 type skillsDiscoveredMsg struct {
 	skills []agentSkill
