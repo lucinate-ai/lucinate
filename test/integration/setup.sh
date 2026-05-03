@@ -28,7 +28,7 @@ IDENTITY_DIR="$HOME/.lucinate/identity/localhost_18789"
 BACKUP_FILE="$IDENTITY_DIR/device-token.backup"
 
 PROVIDER="${PROVIDER:-ollama}"
-MODEL="${MODEL:-qwen3.5:4b}"
+MODEL="${MODEL:-qwen2.5:1.5b}"
 GATEWAY_URL="http://localhost:18789"
 GATEWAY_WS_URL="ws://127.0.0.1:18789/ws"
 HEALTH_TIMEOUT=60

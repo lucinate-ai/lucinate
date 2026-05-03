@@ -20,7 +20,7 @@ The LLM runs on the host (Metal-accelerated), while the gateway runs in Docker.
 │             │ http://host.docker.internal  │
 │             ▼                              │
 │  Ollama (Metal-accelerated on host)        │
-│  Model: qwen3.5:4b                         │
+│  Model: qwen2.5:1.5b                         │
 └────────────────────────────────────────────┘
 ```
 
@@ -54,7 +54,7 @@ MODEL=qwen3.5:35b make test-integration-setup
 
 | Model | Size | Notes |
 |-------|------|-------|
-| `qwen3.5:4b` | 3.4 GB | **Default** — fast local inference |
+| `qwen2.5:1.5b` | 3.4 GB | **Default** — fast local inference |
 | `qwen3.5:9b` | 6.6 GB | Good balance on Apple Silicon |
 | `qwen3.5:27b` | 17 GB | Higher quality |
 | `qwen3.5:35b` | 24 GB | Best quality on 32 GB machines — fits with ~8 GB to spare |
