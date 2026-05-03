@@ -128,6 +128,13 @@ type sessionCreatedMsg struct {
 	err        error
 }
 
+// agentSwitchFailedMsg signals that `/agent <name>` could not resolve or
+// switch to an agent. Rendered inline in the chat view rather than bouncing
+// the user back to the picker, so a typo doesn't lose chat context.
+type agentSwitchFailedMsg struct {
+	err error
+}
+
 // skillsDiscoveredMsg is returned when skill discovery completes.
 type skillsDiscoveredMsg struct {
 	skills []agentSkill

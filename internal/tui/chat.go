@@ -330,6 +330,11 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case agentSwitchFailedMsg:
+		m.messages = append(m.messages, chatMessage{role: "system", errMsg: msg.err.Error()})
+		m.updateViewport()
+		return m, nil
+
 	case modelSwitchedMsg:
 		if msg.err != nil {
 			m.messages = append(m.messages, chatMessage{role: "system", errMsg: msg.err.Error()})
