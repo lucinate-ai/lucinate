@@ -42,6 +42,11 @@ type fakeBackend struct {
 	deletedAgents []backend.DeleteAgentParams
 	deleteAgentErr error
 
+	// createSessionHook, when non-nil, replaces the default
+	// CreateSession behaviour so tests can drive timeout / error
+	// paths without inventing a separate fake.
+	createSessionHook func(ctx context.Context, agentID, key string) (string, error)
+
 	// Cron RPC seams — tests pre-seed jobs / runs / errors and read
 	// back the recorded calls through these fields.
 	cronJobs        []protocol.CronJob
@@ -95,6 +100,9 @@ func (f *fakeBackend) SessionsList(ctx context.Context, agentID string) (json.Ra
 	return json.RawMessage(`{"sessions":[]}`), nil
 }
 func (f *fakeBackend) CreateSession(ctx context.Context, agentID, key string) (string, error) {
+	if f.createSessionHook != nil {
+		return f.createSessionHook(ctx, agentID, key)
+	}
 	return key, nil
 }
 func (f *fakeBackend) SessionDelete(ctx context.Context, sessionKey string) error { return nil }

@@ -645,8 +645,11 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 				if item.sessionKey == m.selectModel.mainKey {
 					createKey = item.sessionKey
 				}
+				timeout := m.requestTimeoutFromPrefs()
 				return m, func() tea.Msg {
-					key, err := b.CreateSession(context.Background(), agentID, createKey)
+					ctx, cancel := context.WithTimeout(context.Background(), timeout)
+					defer cancel()
+					key, err := b.CreateSession(ctx, agentID, createKey)
 					return sessionCreatedMsg{
 						sessionKey: key,
 						agentID:    agentID,
@@ -692,6 +695,17 @@ func (m AppModel) connectTimeoutFromPrefs() time.Duration {
 		secs = config.DefaultConnectTimeoutSeconds
 	}
 	return time.Duration(secs) * time.Second
+}
+
+// requestTimeoutFromPrefs returns the per-RPC deadline used to cap
+// in-TUI gateway calls so a silently-stuck request surfaces as an
+// error instead of freezing the picker. Derived as 2× the socket
+// connect deadline so it stays above the WebSocket handshake floor —
+// a request can never legitimately complete faster than its
+// connection, so a deadline tighter than the connect timeout would
+// race the dial it depends on.
+func (m AppModel) requestTimeoutFromPrefs() time.Duration {
+	return 2 * m.connectTimeoutFromPrefs()
 }
 
 // startConnect kicks off a Connect attempt for the given connection

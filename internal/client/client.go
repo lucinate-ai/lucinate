@@ -146,29 +146,62 @@ func (c *Client) Reconnect(ctx context.Context) error {
 }
 
 // dial loads identity, builds options, and performs the SDK handshake.
+//
+// First-time pairing is handled inline: if the bootstrap connect
+// presented no device token (the device key signature alone got us
+// past the gateway's NOT_PAIRED gate after an admin approval) and the
+// gateway issued a fresh token in hello-ok, the bootstrap client is
+// closed and a second dial is performed with the new token. The
+// OpenClaw protocol expects scoped operations to run on a connection
+// that authenticated with the token at connect time; staying on the
+// bootstrap connection causes subsequent RPCs (sessions.create in
+// particular) to silently stall.
 func (c *Client) dial(ctx context.Context) error {
-	opts, err := c.buildOptions()
+	requestedToken := c.store.LoadDeviceToken()
+
+	gw, err := c.dialOnce(ctx)
 	if err != nil {
 		return err
 	}
 
-	gw := gateway.NewClient(opts...)
-	if err := gw.Connect(ctx, c.cfg.WSURL); err != nil {
-		return fmt.Errorf("connect: %w", err)
+	issued := ""
+	if hello := gw.Hello(); hello != nil && hello.Auth != nil {
+		issued = hello.Auth.DeviceToken
+	}
+	if issued != "" {
+		if err := c.store.SaveDeviceToken(issued); err != nil {
+			log.Printf("warning: failed to save device token: %v", err)
+		}
+	}
+
+	if requestedToken == "" && issued != "" {
+		_ = gw.Close()
+		gw2, err := c.dialOnce(ctx)
+		if err != nil {
+			return fmt.Errorf("post-pair re-dial: %w", err)
+		}
+		gw = gw2
 	}
 
 	c.mu.Lock()
 	c.gw = gw
 	c.mu.Unlock()
-
-	// Save device token if issued.
-	if hello := gw.Hello(); hello != nil && hello.Auth != nil && hello.Auth.DeviceToken != "" {
-		if err := c.store.SaveDeviceToken(hello.Auth.DeviceToken); err != nil {
-			log.Printf("warning: failed to save device token: %v", err)
-		}
-	}
-
 	return nil
+}
+
+// dialOnce performs a single SDK handshake, picking up the latest
+// device token from the store on each call so a re-dial after a
+// first-time pairing presents the freshly-issued token.
+func (c *Client) dialOnce(ctx context.Context) (*gateway.Client, error) {
+	opts, err := c.buildOptions()
+	if err != nil {
+		return nil, err
+	}
+	gw := gateway.NewClient(opts...)
+	if err := gw.Connect(ctx, c.cfg.WSURL); err != nil {
+		return nil, fmt.Errorf("connect: %w", err)
+	}
+	return gw, nil
 }
 
 // buildOptions assembles the gateway SDK options for a connection attempt.

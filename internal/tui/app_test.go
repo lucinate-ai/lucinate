@@ -1,12 +1,15 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"runtime"
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
@@ -299,5 +302,54 @@ func runCmd(t *testing.T, cmd tea.Cmd) {
 		for _, c := range batch {
 			runCmd(t, c)
 		}
+	}
+}
+
+// TestAppModel_CreateSessionHonoursRequestTimeout: a stuck CreateSession
+// (the symptom seen after first-time pairing, where the freshly
+// authenticated connection silently drops the RPC) must surface as a
+// timeout error rather than freezing the agent picker. The deadline is
+// derived from the user-tunable connect timeout in preferences, so a
+// floor on that value also floors the request deadline.
+func TestAppModel_CreateSessionHonoursRequestTimeout(t *testing.T) {
+	fake := newFakeBackend()
+	fake.createSessionHook = func(ctx context.Context, agentID, key string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+
+	m := AppModel{
+		state:   viewSelect,
+		backend: fake,
+		prefs:   config.Preferences{ConnectTimeoutSeconds: 1},
+	}
+	m.selectModel = newSelectModel(fake, true, false, nil, false)
+	m.selectModel.list.SetItems([]list.Item{
+		agentItem{agent: protocol.AgentSummary{ID: "demo", Name: "demo"}, sessionKey: "demo"},
+	})
+	m.selectModel.loading = false
+	m.selectModel.selected = true
+
+	_, cmd := m.update(agentsLoadedMsg{result: &protocol.AgentsListResult{
+		Agents: []protocol.AgentSummary{{ID: "demo", Name: "demo"}},
+	}})
+	if cmd == nil {
+		t.Fatal("expected a session-create command after agent selection")
+	}
+
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+
+	select {
+	case msg := <-done:
+		created, ok := msg.(sessionCreatedMsg)
+		if !ok {
+			t.Fatalf("expected sessionCreatedMsg, got %T", msg)
+		}
+		if !errors.Is(created.err, context.DeadlineExceeded) {
+			t.Fatalf("expected DeadlineExceeded, got %v", created.err)
+		}
+	case <-time.After(2 * time.Second + 500*time.Millisecond):
+		t.Fatal("CreateSession command never returned — request deadline is not wired")
 	}
 }
