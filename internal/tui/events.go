@@ -6,16 +6,17 @@ import (
 	"os"
 	"strings"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	tea "charm.land/bubbletea/v2"
+	"github.com/a3tai/openclaw-go/protocol"
+
+	"github.com/lucinate-ai/lucinate/internal/backend"
 )
 
-// chatFinalMessage is the structure of the "message" field in a "final" chat event.
-type chatFinalMessage struct {
-	Role    string             `json:"role"`
-	Content []chatContentBlock `json:"content"`
-}
-
+// chatContentBlock is the {type, text} shape of one entry in the
+// Content array of a chat history message. Defined here (rather than
+// in history.go) because the history fetch code is the single
+// remaining caller — chat-event message parsing now goes through
+// backend.ExtractChatText so the wire format lives in one place.
 type chatContentBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
@@ -47,49 +48,13 @@ type toolResultPayload struct {
 // extractThinkingFromMessage parses the Message field and extracts thinking blocks.
 // Only final events carry structured content blocks; delta events are plain strings.
 func extractThinkingFromMessage(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var msg chatFinalMessage
-	if json.Unmarshal(raw, &msg) != nil {
-		return ""
-	}
-	var parts []string
-	for _, block := range msg.Content {
-		if block.Type == "thinking" && block.Text != "" {
-			parts = append(parts, block.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
+	return backend.ExtractChatThinking(raw)
 }
 
 // extractTextFromMessage parses the Message field and extracts readable text.
 // Delta events send a plain JSON string; final events send a structured object.
 func extractTextFromMessage(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-
-	// Try as a plain JSON string first (delta events).
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-
-	// Try as a structured chat message (final events).
-	var msg chatFinalMessage
-	if json.Unmarshal(raw, &msg) == nil {
-		var parts []string
-		for _, block := range msg.Content {
-			if block.Type == "text" && block.Text != "" {
-				parts = append(parts, block.Text)
-			}
-		}
-		return strings.Join(parts, "\n")
-	}
-
-	// Fallback: return raw string.
-	return string(raw)
+	return backend.ExtractChatText(raw)
 }
 
 // extractEventSessionKey pulls a top-level "sessionKey" string out of any
