@@ -12,6 +12,8 @@ Agents come from the active backend (`backend.Backend.ListAgents`). For OpenClaw
 
 If exactly one agent is returned, it is selected automatically without user interaction and a session is created immediately. The same auto-select fires after creating a new agent — the picker bypasses the list and proceeds straight to chat.
 
+`lucinate chat --agent <name>` is a third auto-pick driver: `selectModel.autoPickName` runs an ID-then-case-insensitive-name match on the first `agentsLoadedMsg` and selects the matching agent. It runs **before** the single-agent and post-create branches, so a `--agent` mismatch in a single-agent connection surfaces as an error banner on the picker rather than silently picking the only available agent. The override is one-shot: cleared on consume so a later `agentsLoadedMsg` (e.g. after a user-driven create) doesn't re-fire it. See [chat-launch.md](chat-launch.md) for the full override-consumption story.
+
 ## Selecting an agent
 
 Pressing Enter on a highlighted agent calls `client.CreateSession(agentID, key)`. On success, `sessionCreatedMsg` carries the new session key and the app transitions to the chat view (`newChatModel(...)`). See [sessions.md](sessions.md) for the session lifecycle from this point.

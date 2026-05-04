@@ -72,6 +72,33 @@ type RunOptions struct {
 	// connections picker as the entry view.
 	Initial *config.Connection
 
+	// InitialAgent, when non-empty, instructs the TUI to auto-select
+	// the named agent (matched ID-first, then case-insensitive Name)
+	// the first time the agent picker loads its list. A miss surfaces
+	// as an error banner on the picker rather than silently falling
+	// through. Used by `lucinate chat --agent <name>` to drive past
+	// the picker without user interaction. The override is one-shot:
+	// it is consumed on the first transition that would otherwise
+	// have prompted, and cleared on auth-cancel / connect-failure /
+	// `/connections` so a subsequent connection's picker is not
+	// spuriously filtered against a name from a different scope.
+	InitialAgent string
+
+	// InitialSession, when non-empty, overrides the session key the
+	// TUI passes to CreateSession on the first agent selection — the
+	// `--session <key>` knob from `lucinate chat`. An empty value
+	// preserves the existing default ("main", or the connection's
+	// MainKey for its default agent). One-shot, cleared in the same
+	// places as InitialAgent.
+	InitialSession string
+
+	// InitialMessage, when non-empty, is queued as the first user
+	// turn in the chat view and submitted automatically once the
+	// session's history has loaded. The `lucinate chat <text>`
+	// auto-submit. Empty leaves the textarea idle. One-shot, cleared
+	// in the same places as InitialAgent.
+	InitialMessage string
+
 	// BackendFactory builds a fresh, unconnected backend.Backend for
 	// a connection. Required when Store is set.
 	BackendFactory BackendFactory
@@ -290,6 +317,9 @@ func New(opts RunOptions) (*Program, error) {
 		OnFocusedFieldChanged: opts.OnFocusedFieldChanged,
 		Store:                 opts.Store,
 		Initial:               opts.Initial,
+		InitialAgent:          opts.InitialAgent,
+		InitialSession:        opts.InitialSession,
+		InitialMessage:        opts.InitialMessage,
 		BackendFactory:        opts.BackendFactory,
 		OnConnectionsChanged:  opts.OnConnectionsChanged,
 	}

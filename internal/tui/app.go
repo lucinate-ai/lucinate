@@ -52,6 +52,17 @@ type AppOptions struct {
 	// managed mode. A nil Initial drops the user into the picker.
 	Initial *config.Connection
 
+	// InitialAgent / InitialSession / InitialMessage are the
+	// pre-resolution overrides used by `lucinate chat`. See
+	// app.RunOptions for the full rationale; this is the unexported
+	// plumbing. Each is consumed once at the transition that would
+	// otherwise have prompted the user, and the AppModel clears them
+	// on auth-cancel / connect-failure / `/connections` so a different
+	// connection's picker doesn't inherit the original intent.
+	InitialAgent   string
+	InitialSession string
+	InitialMessage string
+
 	// BackendFactory is required in managed mode; it constructs an
 	// unconnected backend for a chosen connection.
 	BackendFactory BackendFactory
@@ -129,6 +140,15 @@ type AppModel struct {
 	updateAvailable bool
 	updateLatest    string
 	updateURL       string
+
+	// One-shot overrides supplied by `lucinate chat`. Consumed at
+	// the first transition that would otherwise have prompted the
+	// user, and cleared on auth-cancel / unrecoverable connect
+	// failure / `/connections` so they don't follow the user across
+	// connection scopes.
+	initialAgent   string
+	initialSession string
+	initialMessage string
 }
 
 // NewApp creates the root application model.
@@ -155,6 +175,9 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 		onInputFocusChanged:   opts.OnInputFocusChanged,
 		onActionsChanged:      opts.OnActionsChanged,
 		onFocusedFieldChanged: opts.OnFocusedFieldChanged,
+		initialAgent:          opts.InitialAgent,
+		initialSession:        opts.InitialSession,
+		initialMessage:        opts.InitialMessage,
 	}
 
 	switch {
@@ -162,7 +185,7 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 		// Legacy: jump straight into the agent picker. No active
 		// connection — embedders manage that elsewhere.
 		m.state = viewSelect
-		m.selectModel = newSelectModel(b, opts.HideActionHints, managed, nil, opts.DisableExitKeys)
+		m.selectModel = newSelectModel(b, opts.HideActionHints, managed, nil, opts.DisableExitKeys, "")
 	case opts.Initial != nil:
 		// Managed with an initial pick: try to connect first, surface
 		// errors / auth modals from there.
@@ -494,6 +517,13 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		}
 		m.backend = nil
 		m.activeConn = nil
+		// Clear any one-shot `lucinate chat` overrides — agent IDs
+		// are not portable across connections, and a reconnect via
+		// /connections is exactly the cue that the user has changed
+		// their mind about scope.
+		m.initialAgent = ""
+		m.initialSession = ""
+		m.initialMessage = ""
 		m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints, m.disableExitKeys)
 		m.connectionsModel.setSize(m.width, m.height)
 		m.state = viewConnections
@@ -511,6 +541,12 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case authResolvedMsg:
 		if msg.cancelled {
 			// User backed out of the auth modal — return to the picker.
+			// Clear `lucinate chat` overrides: the user just signalled
+			// they don't want this connection, and a different one
+			// won't share the same agent / session keys.
+			m.initialAgent = ""
+			m.initialSession = ""
+			m.initialMessage = ""
 			m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints, m.disableExitKeys)
 			m.connectionsModel.setSize(m.width, m.height)
 			m.state = viewConnections
@@ -520,7 +556,9 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			return m, m.connectionsModel.Init()
 		}
 		// Retry connect with the same backend (token has been
-		// stored/cleared as appropriate by the modal).
+		// stored/cleared as appropriate by the modal). Overrides
+		// stay set: a successful retry should still drive the
+		// auto-pick the original invocation requested.
 		return m, m.retryConnect(msg.connection, msg.backend)
 
 	case connectionsChangedMsg:
@@ -574,7 +612,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		if agentID == "" {
 			agentID = m.sessionsModel.agentID
 		}
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn))
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), "")
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -585,7 +623,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.sessionsModel.loading = false
 			return m, nil
 		}
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn))
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), "")
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -600,7 +638,14 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.state = viewSelect
 			return m, nil
 		}
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn))
+		// This is the path the `lucinate chat` auto-pick lands on
+		// (selectModel sets selected=true → viewSelect block fires
+		// CreateSession → sessionCreatedMsg). Consume the one-shot
+		// initial message here so the chat view drains it after
+		// loading history.
+		initialMsg := m.initialMessage
+		m.initialMessage = ""
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), initialMsg)
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -664,6 +709,15 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 				createKey := "main"
 				if item.sessionKey == m.selectModel.mainKey {
 					createKey = item.sessionKey
+				}
+				// Honour an explicit `lucinate chat --session <key>`
+				// override; this beats both the literal "main" and
+				// the connection's default-agent MainKey. One-shot:
+				// cleared so a later selection on the same picker
+				// doesn't keep landing on the original key.
+				if m.initialSession != "" {
+					createKey = m.initialSession
+					m.initialSession = ""
 				}
 				timeout := m.requestTimeoutFromPrefs()
 				return m, func() tea.Msg {
@@ -839,7 +893,13 @@ func (m AppModel) handleConnectResult(msg connectResultMsg) (AppModel, tea.Cmd) 
 			b := msg.backend
 			go cb(b) // blocking send; do off the event loop
 		}
-		m.selectModel = newSelectModel(msg.backend, m.hideActionHints, m.managed, m.activeConn, m.disableExitKeys)
+		// Consume the one-shot --agent override here: the picker will
+		// resolve it on its first agentsLoadedMsg. Cleared so a later
+		// reconnect (auth retry, /connections, etc.) doesn't re-apply
+		// it against an unrelated connection's agent list.
+		autoPick := m.initialAgent
+		m.initialAgent = ""
+		m.selectModel = newSelectModel(msg.backend, m.hideActionHints, m.managed, m.activeConn, m.disableExitKeys, autoPick)
 		m.selectModel.setSize(m.width, m.height)
 		m.state = viewSelect
 		var cmd tea.Cmd = m.selectModel.Init()
@@ -861,6 +921,11 @@ func (m AppModel) handleConnectResult(msg connectResultMsg) (AppModel, tea.Cmd) 
 	}
 
 	// Unrecoverable: bounce back to the picker with the error.
+	// Clear `lucinate chat` overrides — a different connection
+	// from the picker won't share agent / session scope.
+	m.initialAgent = ""
+	m.initialSession = ""
+	m.initialMessage = ""
 	m.connectionsModel = newConnectionsModel(m.store, m.hideActionHints, m.disableExitKeys)
 	m.connectionsModel.setSize(m.width, m.height)
 	if msg.err != nil {

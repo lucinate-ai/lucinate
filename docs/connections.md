@@ -18,7 +18,7 @@ Three backend types ship today; all implement `backend.Backend` (`internal/backe
 
 `AllConnectionTypes` (`internal/config/connections.go`) drives the picker form's type radio. Adding a fourth backend means: implementing `backend.Backend`, extending the enum, dispatching in `DefaultBackendFactory` (`app/factory.go`), adjusting the form's type-conditional rendering, and writing a `backend_<name>.md` doc for it.
 
-`DefaultBackendFactory` has a second consumer: `app.Send` (`lucinate send`) calls it directly to build a backend for one-shot dispatch, so a new connection type that lands in the factory's switch is automatically reachable from the scripted CLI mode without further wiring. See [one-shot.md](one-shot.md).
+`DefaultBackendFactory` has two non-TUI consumers. `app.Send` (`lucinate send`) calls it directly to build a backend for one-shot dispatch — a new connection type that lands in the factory's switch is automatically reachable from the scripted CLI mode without further wiring (see [one-shot.md](one-shot.md)). `app.Chat` (`lucinate chat`) defers all connect / list / create work to the TUI and just packs `Connection` / `Agent` / `Session` / `Message` overrides into `RunOptions`, so a new connection type is reachable there as soon as it works in the regular TUI (see [chat-launch.md](chat-launch.md)).
 
 ## Startup decision tree
 
@@ -31,6 +31,8 @@ Three backend types ship today; all implement `backend.Backend` (`internal/backe
 5. Else → open the connections picker.
 
 Auto-add (steps 1–2) mutates the in-memory store but does **not** persist it until a successful connect, so a typo in the env URL doesn't accumulate ghost entries.
+
+`lucinate chat --connection <name>` short-circuits this tree: the named connection is resolved against the store directly (ID-then-case-insensitive-name) and a miss is a hard error rather than falling through to the env-var / default-id path. With `--connection` unset, `chat` runs the same `ResolveEntryConnection` the bare invocation does. See [chat-launch.md](chat-launch.md) for the override plumbing.
 
 ## Connection lifecycle
 

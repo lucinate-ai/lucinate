@@ -221,7 +221,7 @@ func (m *chatModel) ensureSpinnerTicking() tea.Cmd {
 	return spinnerTickCmd()
 }
 
-func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID string, prefs config.Preferences, hideInput bool, connName string) chatModel {
+func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID string, prefs config.Preferences, hideInput bool, connName, initialMessage string) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Focus()
@@ -240,6 +240,14 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 		glamour.WithWordWrap(80), // updated by setSize() when terminal dimensions are known
 	)
 
+	// initialMessage seeds pendingMessages so the first historyLoadedMsg
+	// drains it through the same queue the textarea uses, matching what
+	// a human typing would see (history scrollback, then their message).
+	var pending []string
+	if initialMessage != "" {
+		pending = []string{initialMessage}
+	}
+
 	return chatModel{
 		viewport:        vp,
 		textarea:        ta,
@@ -255,6 +263,7 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 		historyLoading:  true,
 		hideInput:       hideInput,
 		terminalFocused: true,
+		pendingMessages: pending,
 	}
 }
 
@@ -413,6 +422,14 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			m.messages = append(hist, m.messages...)
 		}
 		m.updateViewport()
+		// If a caller pre-seeded pendingMessages (e.g. `lucinate chat`
+		// passing an auto-submit message), drain it now so the user
+		// turn is appended *after* the history scrollback — matching
+		// what they'd see typing it themselves.
+		if len(m.pendingMessages) > 0 && !m.sending {
+			m.sending = true
+			return m, m.drainQueue()
+		}
 		return m, nil
 
 	case agentSwitchFailedMsg:

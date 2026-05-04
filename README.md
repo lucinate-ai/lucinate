@@ -220,6 +220,24 @@ lucinate send --connection my-con --agent main --detach "kick off the morning di
 
 For the lifecycle, the default-session rule, embedding `app.Send` from Go, and the detach contract, see [docs/one-shot.md](docs/one-shot.md).
 
+## Skip the pickers
+
+Already know which connection, agent, and session you want? `lucinate chat` drops you straight in — same TUI as the bare invocation, just pre-navigated past the pickers. Hand it a message and it's your first turn, auto-submitted once history loads.
+
+```sh
+lucinate chat --connection my-con --agent main "kick things off"
+```
+
+| Flag | Description |
+|------|-------------|
+| `--connection` | Saved connection name or ID (case-insensitive on name). Optional — defaults to the same auto-pick the bare `lucinate` uses. |
+| `--agent` | Agent name or ID to auto-select. A miss surfaces as an error on the picker rather than silently picking the wrong one. |
+| `--session` | Session key to open. Defaults to the agent's main session — same default the picker would pick. |
+
+Every flag is optional. `lucinate chat` with no flags and no message is functionally identical to bare `lucinate`. Messages that begin with a dash should be preceded by `--`, same Unix escape as `send`.
+
+Unlike `send`, this stays in the TUI — the auto-submitted message is just your opening turn, not a one-shot exit. For the override-plumbing internals, see [docs/chat-launch.md](docs/chat-launch.md).
+
 ### Command line flags
 
 | Flag | Description |

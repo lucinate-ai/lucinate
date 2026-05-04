@@ -105,6 +105,15 @@ type selectModel struct {
 	// nil for legacy embedders without a connections store.
 	activeConn *config.Connection
 
+	// autoPickName, when non-empty on the first agentsLoadedMsg,
+	// resolves to an agent (ID first, then case-insensitive Name)
+	// and selects it without user interaction — the mechanism the
+	// `lucinate chat --agent <name>` subcommand uses to drive the
+	// picker past itself. A miss surfaces as a normal err banner so
+	// the user lands on the picker with the reason. Cleared after
+	// the first attempt regardless of outcome.
+	autoPickName string
+
 	// Create-agent form state.
 	subState        selectSubState
 	nameInput       textinput.Model
@@ -152,7 +161,7 @@ type agentDeletedMsg struct {
 // here so the picker doesn't have to keep asking. activeConn (when
 // non-nil) is rendered as a thin status row at the top of the view
 // so the user can see which connection is in scope.
-func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeConn *config.Connection, disableExitKeys bool) selectModel {
+func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeConn *config.Connection, disableExitKeys bool, autoPickName string) selectModel {
 	useWorkspace := false
 	allowAgentMgmt := false
 	if b != nil {
@@ -185,6 +194,7 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 		useWorkspace:         useWorkspace,
 		allowAgentManagement: allowAgentMgmt,
 		activeConn:           activeConn,
+		autoPickName:         autoPickName,
 	}
 }
 
@@ -346,6 +356,41 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 			items[i] = agentItem{agent: a, sessionKey: sessionKey}
 		}
 		m.list.SetItems(items)
+
+		// Honour an external auto-pick request (e.g. `lucinate chat
+		// --agent foo`) before the convenience auto-pick of a
+		// single-agent list and before the post-create branch — a
+		// caller-supplied name must beat both, so a `--agent`
+		// mismatch surfaces as an error rather than silently
+		// picking the only available agent.
+		if m.autoPickName != "" {
+			query := m.autoPickName
+			m.autoPickName = ""
+			matched := false
+			for i, a := range msg.result.Agents {
+				if a.ID == query {
+					m.list.Select(i)
+					m.selected = true
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				lc := strings.ToLower(query)
+				for i, a := range msg.result.Agents {
+					if strings.ToLower(a.Name) == lc {
+						m.list.Select(i)
+						m.selected = true
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				m.err = fmt.Errorf("agent %q not found", query)
+			}
+			return m, nil
+		}
 
 		// If we just created an agent, auto-select it.
 		if m.newAgentID != "" {

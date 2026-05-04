@@ -323,7 +323,7 @@ func TestAppModel_CreateSessionHonoursRequestTimeout(t *testing.T) {
 		backend: fake,
 		prefs:   config.Preferences{ConnectTimeoutSeconds: 1},
 	}
-	m.selectModel = newSelectModel(fake, true, false, nil, false)
+	m.selectModel = newSelectModel(fake, true, false, nil, false, "")
 	m.selectModel.list.SetItems([]list.Item{
 		agentItem{agent: protocol.AgentSummary{ID: "demo", Name: "demo"}, sessionKey: "demo"},
 	})

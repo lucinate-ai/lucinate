@@ -35,7 +35,7 @@ func TestRenderConnectionBanner(t *testing.T) {
 
 func TestSelectModel_RendersConnectionBanner(t *testing.T) {
 	conn := &config.Connection{Name: "home", Type: config.ConnTypeOpenClaw}
-	m := newSelectModel(newFakeBackend(), false, false, conn, false)
+	m := newSelectModel(newFakeBackend(), false, false, conn, false, "")
 	m.setSize(120, 40)
 	// Move out of the loading state so View() renders the list +
 	// banner rather than the loading placeholder.

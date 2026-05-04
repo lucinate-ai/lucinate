@@ -8,6 +8,8 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // newContextUsageTestModel builds a chatModel wired to fakeBackend with
@@ -218,3 +220,76 @@ func drainBatch(t *testing.T, cmd tea.Cmd) {
 	}
 }
 
+
+// TestChatModel_PreloadedPendingMessage_DrainsOnHistoryLoaded verifies
+// the `lucinate chat <message>` auto-submit path: a chatModel
+// constructed with an initialMessage queues it so the first
+// historyLoadedMsg drains it through drainQueue, surfacing the user
+// turn and a streaming assistant placeholder in the visible message
+// list. The pre-history-load delay matches what a human typing would
+// see (history scrollback first, then their message).
+func TestChatModel_PreloadedPendingMessage_DrainsOnHistoryLoaded(t *testing.T) {
+	fb := newFakeBackend()
+	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "hello")
+
+	if len(m.pendingMessages) != 1 || m.pendingMessages[0] != "hello" {
+		t.Fatalf("constructor should have queued initialMessage; pendingMessages=%v", m.pendingMessages)
+	}
+	if m.sending {
+		t.Fatal("should not be sending until history loads")
+	}
+	if len(m.messages) != 0 {
+		t.Fatalf("messages should be empty pre-history-load; got %d", len(m.messages))
+	}
+
+	var cmd tea.Cmd
+	m, cmd = m.Update(historyLoadedMsg{messages: nil, err: nil})
+
+	if cmd == nil {
+		t.Fatal("expected drainQueue cmd after history load with a queued message")
+	}
+	if !m.sending {
+		t.Error("sending must be true after drain so subsequent enters queue rather than fire")
+	}
+	if len(m.pendingMessages) != 0 {
+		t.Errorf("pendingMessages should be drained; got %v", m.pendingMessages)
+	}
+	// drainQueue appends the user turn and a streaming assistant
+	// placeholder. The exact role sequence is what the visible chat
+	// will render.
+	if len(m.messages) != 2 {
+		t.Fatalf("expected 2 messages (user + streaming assistant), got %d: %+v", len(m.messages), m.messages)
+	}
+	if m.messages[0].role != "user" || m.messages[0].content != "hello" {
+		t.Errorf("messages[0] = %+v, want user/hello", m.messages[0])
+	}
+	if m.messages[1].role != "assistant" || !m.messages[1].streaming {
+		t.Errorf("messages[1] = %+v, want streaming assistant placeholder", m.messages[1])
+	}
+}
+
+// TestChatModel_NoInitialMessage_NoDrain verifies the regression
+// case: without a preloaded message, a historyLoadedMsg must not
+// kick a stray drain (which would surface as a confused user turn
+// with no actual content to send).
+func TestChatModel_NoInitialMessage_NoDrain(t *testing.T) {
+	fb := newFakeBackend()
+	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "")
+
+	if len(m.pendingMessages) != 0 {
+		t.Fatalf("no initialMessage must mean empty pendingMessages; got %v", m.pendingMessages)
+	}
+
+	var cmd tea.Cmd
+	m, cmd = m.Update(historyLoadedMsg{messages: nil, err: nil})
+
+	if cmd != nil {
+		t.Errorf("no drain expected when pendingMessages empty; got cmd=%v", cmd)
+	}
+	if m.sending {
+		t.Error("sending must remain false")
+	}
+	if len(m.messages) != 0 {
+		t.Errorf("messages should remain empty; got %+v", m.messages)
+	}
+}

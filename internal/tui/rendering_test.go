@@ -74,7 +74,7 @@ func (a selectModelAdapter) View() tea.View {
 // rendering tests, wrapped in an adapter.
 func newRenderingChatModel(t *testing.T, agentName string) chatModelAdapter {
 	t.Helper()
-	m := newChatModel(nil, "session-key", "", agentName, "", config.DefaultPreferences(), false, "")
+	m := newChatModel(nil, "session-key", "", agentName, "", config.DefaultPreferences(), false, "", "")
 	m.setSize(120, 40)
 	return chatModelAdapter{inner: m}
 }
@@ -135,7 +135,7 @@ func TestRender_ChatView_HeaderShowsAgentName(t *testing.T) {
 // "lucinate · <conn> — <agent>" shape that lets users tell which
 // connection they're chatting against.
 func TestRender_ChatView_HeaderShowsConnectionName(t *testing.T) {
-	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "ollama-local")
+	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "ollama-local", "")
 	m.setSize(120, 40)
 	adapter := chatModelAdapter{inner: m}
 
@@ -149,7 +149,7 @@ func TestRender_ChatView_HeaderShowsConnectionName(t *testing.T) {
 // embedders without a connection store still render a clean header
 // — no leading separator, no empty " · " fragment.
 func TestChatModel_HeaderOmitsConnectionWhenBlank(t *testing.T) {
-	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "")
+	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "", "")
 	m.setSize(120, 40)
 	out := ansi.Strip(m.View())
 	if strings.Contains(out, " · ") && !strings.Contains(out, "scout · ") {
@@ -339,7 +339,7 @@ func TestRender_ChatView_RemoteExecModeHelpText(t *testing.T) {
 // tests assert against).
 func newLoadedSelectAdapter(t *testing.T, agents ...protocol.AgentSummary) selectModelAdapter {
 	t.Helper()
-	m := newSelectModel(newFakeBackend(), false, false, nil, false)
+	m := newSelectModel(newFakeBackend(), false, false, nil, false, "")
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -376,7 +376,7 @@ func TestRender_SelectView_ShowsCreateHint(t *testing.T) {
 }
 
 func TestRender_SelectView_LoadingState(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil, false)
+	m := newSelectModel(nil, false, false, nil, false, "")
 	m.setSize(120, 40)
 	adapter := selectModelAdapter{inner: m}
 
@@ -406,7 +406,7 @@ func TestRender_SelectView_CreateFormLabels(t *testing.T) {
 func TestRender_SelectView_CreateFormHidesWorkspaceForLocalBackend(t *testing.T) {
 	fb := newFakeBackend()
 	fb.caps.AgentWorkspace = false
-	m := newSelectModel(fb, false, false, nil, false)
+	m := newSelectModel(fb, false, false, nil, false, "")
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{
 		result: &protocol.AgentsListResult{
@@ -435,7 +435,7 @@ func TestRender_SelectView_CreateFormHidesWorkspaceForLocalBackend(t *testing.T)
 func TestSelectModel_LocalBackendCreateFormShape(t *testing.T) {
 	fb := newFakeBackend()
 	fb.caps.AgentWorkspace = false
-	m := newSelectModel(fb, true, false, nil, false)
+	m := newSelectModel(fb, true, false, nil, false, "")
 	m.initCreateForm()
 	out := m.viewCreateForm()
 	if strings.Contains(out, "Workspace:") {
@@ -453,7 +453,7 @@ func TestSelectModel_LocalBackendCreateFormShape(t *testing.T) {
 }
 
 func TestRender_SelectView_ErrorStateShowsRetryHint(t *testing.T) {
-	m := newSelectModel(nil, false, false, nil, false)
+	m := newSelectModel(nil, false, false, nil, false, "")
 	m.setSize(120, 40)
 	m, _ = m.Update(agentsLoadedMsg{err: errString("gateway unreachable")})
 	adapter := selectModelAdapter{inner: m}
