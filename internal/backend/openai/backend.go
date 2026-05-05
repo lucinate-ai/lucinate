@@ -327,8 +327,10 @@ func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string
 	}
 	history, _ := b.store.LoadHistory(sessionKey, 0)
 	for _, msg := range history {
-		if msg.Role == "system" {
-			continue // system prompt is reconstructed from Identity/Soul each turn
+		if msg.Role == "system" && !msg.Summary {
+			// system prompt is reconstructed from Identity/Soul each
+			// turn; summaries written by /compact are forwarded.
+			continue
 		}
 		body.Messages = append(body.Messages, chatRequestMessage{Role: msg.Role, Content: msg.Content})
 	}
@@ -423,7 +425,7 @@ func (b *Backend) ChatHistory(ctx context.Context, sessionKey string, limit int)
 		Messages []historyMsg `json:"messages"`
 	}{}
 	for _, msg := range msgs {
-		if msg.Role == "system" {
+		if msg.Role == "system" && !msg.Summary {
 			continue
 		}
 		var ts int64
@@ -476,13 +478,143 @@ func (b *Backend) SessionPatchModel(ctx context.Context, sessionKey, modelID str
 }
 
 // Capabilities reports the trimmed feature set: no gateway status,
-// no remote exec, no server-side compact (issue #76 covers the
-// future local summarisation pass), no thinking, no usage.
+// no remote exec, no thinking, no usage. SessionCompact is supported
+// via a local summarisation pass (see SessionCompact below).
 func (b *Backend) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
+		SessionCompact:  true,
 		AuthRecovery:    backend.AuthRecoveryAPIKey,
 		AgentManagement: true,
 	}
+}
+
+// --- CompactBackend ---
+
+// compactKeepTail is the number of most-recent messages /compact
+// preserves verbatim. Anything older is summarised into a single
+// system-role digest. Two full turns (user/assistant pairs) keep the
+// model anchored on the immediate context while still giving the
+// summary something meaningful to absorb.
+const compactKeepTail = 4
+
+// compactMinHistory is the minimum number of stored messages required
+// before /compact will run a summarisation pass. Below this the saving
+// is too small to be worth a model round-trip.
+const compactMinHistory = compactKeepTail + 2
+
+// compactSystemPrompt is the instruction sent to the model when
+// summarising older turns. The output replaces those messages on disk
+// as a single system-role entry, so the prompt asks for a dense,
+// self-contained recap rather than chat-style prose.
+const compactSystemPrompt = `You are compacting an ongoing chat transcript so the conversation can continue with a smaller context window. Produce a dense factual summary of the messages provided, preserving:
+- the user's goals and any open questions
+- decisions, conclusions, and code or data the assistant produced
+- any constraints, preferences, or facts the user established
+
+Write the summary as a single passage in the third person ("the user asked …", "the assistant explained …"). Do not address the user directly, do not include greetings, and do not invent information. Output only the summary text.`
+
+// SessionCompact runs a local summarisation pass: load the agent's
+// transcript, ask the configured model to summarise everything except
+// the last few turns, and rewrite history.jsonl with the summary as a
+// single system-role message followed by the preserved tail. The
+// summary is forwarded on every subsequent turn (see runStream's
+// Summary check) so the model retains the context at a fraction of the
+// original token cost.
+//
+// Implements the local-summarisation pass described in issue #76 — the
+// OpenAI-compatible backend has no gateway-side compact, so the
+// equivalent behaviour is built here.
+func (b *Backend) SessionCompact(ctx context.Context, sessionKey string) error {
+	meta, err := b.store.LoadMeta(sessionKey)
+	if err != nil {
+		return fmt.Errorf("agent not found: %s", sessionKey)
+	}
+	model := meta.Model
+	if model == "" {
+		model = b.opts.DefaultModel
+	}
+	if model == "" {
+		return fmt.Errorf("no model configured for agent %q (run /model to pick one)", sessionKey)
+	}
+
+	history, err := b.store.LoadHistory(sessionKey, 0)
+	if err != nil {
+		return fmt.Errorf("load history: %w", err)
+	}
+	if len(history) < compactMinHistory {
+		// Nothing meaningful to compact yet — leave the transcript
+		// untouched. Returning nil keeps /compact a no-op-success in
+		// the chat view rather than a confusing error.
+		return nil
+	}
+	cutoff := len(history) - compactKeepTail
+	older := history[:cutoff]
+	tail := history[cutoff:]
+
+	summary, err := b.summarise(ctx, model, older)
+	if err != nil {
+		return err
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return fmt.Errorf("compact: model returned an empty summary")
+	}
+
+	rewritten := make([]Message, 0, 1+len(tail))
+	rewritten = append(rewritten, Message{
+		Role:    "system",
+		Content: "Summary of earlier conversation:\n" + summary,
+		Time:    time.Now().UTC(),
+		Summary: true,
+	})
+	rewritten = append(rewritten, tail...)
+	return b.store.RewriteHistory(sessionKey, rewritten)
+}
+
+// summarise issues a non-streaming /v1/chat/completions request with
+// the compaction prompt and returns the assistant's reply text. The
+// older transcript is forwarded verbatim — including any prior summary
+// produced by an earlier /compact, so the new digest folds the old one
+// in rather than dropping it.
+func (b *Backend) summarise(ctx context.Context, model string, older []Message) (string, error) {
+	body := chatRequest{Model: model, Stream: false}
+	body.Messages = append(body.Messages, chatRequestMessage{Role: "system", Content: compactSystemPrompt})
+	for _, msg := range older {
+		// Forward earlier summaries (Role=="system" && Summary) so the
+		// recursion folds prior digests into the new one. Skip any
+		// other system messages defensively — they shouldn't appear in
+		// history.jsonl, but if they did they'd confuse the model.
+		if msg.Role == "system" && !msg.Summary {
+			continue
+		}
+		body.Messages = append(body.Messages, chatRequestMessage{Role: msg.Role, Content: msg.Content})
+	}
+
+	req, err := b.http.NewRequest(ctx, http.MethodPost, "/chat/completions", body)
+	if err != nil {
+		return "", err
+	}
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("compact: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return "", fmt.Errorf("api key required (HTTP %d)", resp.StatusCode)
+	}
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("compact: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var decoded chatCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+		return "", fmt.Errorf("compact: decode response: %w", err)
+	}
+	if len(decoded.Choices) == 0 {
+		return "", fmt.Errorf("compact: model returned no choices")
+	}
+	return decoded.Choices[0].Message.Content, nil
 }
 
 // --- APIKeyAuth ---
@@ -531,6 +663,27 @@ type streamChunk struct {
 		} `json:"delta"`
 	} `json:"choices"`
 }
+
+// chatCompletionResponse mirrors the non-streaming /v1/chat/completions
+// reply (subset). Used by SessionCompact's summarisation pass.
+type chatCompletionResponse struct {
+	Choices []struct {
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+// Compile-time assertions that Backend implements every interface it
+// claims to. Sub-interfaces beyond the core Backend live behind the
+// type assertions in the TUI's slash-command handlers — keeping these
+// here means a refactor that drops a method gets caught at build time.
+var (
+	_ backend.Backend        = (*Backend)(nil)
+	_ backend.CompactBackend = (*Backend)(nil)
+	_ backend.APIKeyAuth     = (*Backend)(nil)
+)
 
 // removeFile deletes a single file inside a directory, ignoring
 // "does not exist" errors so /reset works even on a fresh agent.

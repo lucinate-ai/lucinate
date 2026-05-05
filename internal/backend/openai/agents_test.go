@@ -90,6 +90,53 @@ func TestAgentStore_AppendAndLoadHistory(t *testing.T) {
 	}
 }
 
+func TestAgentStore_RewriteHistoryReplacesContents(t *testing.T) {
+	store := newTestStore(t)
+	meta, _ := store.Create("agent", "", "", "")
+	_ = store.AppendMessage(meta.ID, Message{Role: "user", Content: "original-1"})
+	_ = store.AppendMessage(meta.ID, Message{Role: "assistant", Content: "original-2"})
+	_ = store.AppendMessage(meta.ID, Message{Role: "user", Content: "original-3"})
+
+	// Rewrite to a single summary plus the last message — the shape
+	// SessionCompact will produce.
+	rewritten := []Message{
+		{Role: "system", Content: "summary-of-earlier", Summary: true},
+		{Role: "user", Content: "original-3"},
+	}
+	if err := store.RewriteHistory(meta.ID, rewritten); err != nil {
+		t.Fatalf("RewriteHistory: %v", err)
+	}
+
+	got, err := store.LoadHistory(meta.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 messages after rewrite, got %d", len(got))
+	}
+	if got[0].Role != "system" || !got[0].Summary || got[0].Content != "summary-of-earlier" {
+		t.Errorf("summary message not round-tripped: %+v", got[0])
+	}
+	if got[1].Content != "original-3" {
+		t.Errorf("preserved tail not round-tripped: %+v", got[1])
+	}
+}
+
+func TestAgentStore_RewriteHistoryFilePrivacy(t *testing.T) {
+	store := newTestStore(t)
+	meta, _ := store.Create("agent", "", "", "")
+	if err := store.RewriteHistory(meta.ID, []Message{{Role: "user", Content: "hi"}}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(store.AgentDir(meta.ID), "history.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0600 {
+		t.Errorf("history.jsonl mode after rewrite = %v want 0600", mode)
+	}
+}
+
 func TestAgentStore_LoadHistoryLimit(t *testing.T) {
 	store := newTestStore(t)
 	meta, _ := store.Create("agent", "", "", "")

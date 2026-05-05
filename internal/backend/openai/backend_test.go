@@ -511,8 +511,14 @@ func TestBackend_SessionPatchModelPersists(t *testing.T) {
 func TestBackend_Capabilities(t *testing.T) {
 	b := &Backend{}
 	caps := b.Capabilities()
-	if caps.GatewayStatus || caps.RemoteExec || caps.SessionCompact || caps.Thinking || caps.SessionUsage {
-		t.Errorf("expected no optional caps, got %+v", caps)
+	if caps.GatewayStatus || caps.RemoteExec || caps.Thinking || caps.SessionUsage {
+		t.Errorf("expected no gateway-only caps, got %+v", caps)
+	}
+	if !caps.SessionCompact {
+		t.Errorf("expected SessionCompact=true (local summarisation pass), got %+v", caps)
+	}
+	if !caps.AgentManagement {
+		t.Errorf("expected AgentManagement=true, got %+v", caps)
 	}
 	if caps.AuthRecovery != backend.AuthRecoveryAPIKey {
 		t.Errorf("expected APIKey auth recovery, got %v", caps.AuthRecovery)
@@ -626,5 +632,275 @@ func TestBackend_ChatSend_PassesSkillsAsRealSystemMessage(t *testing.T) {
 	}
 	if !foundCatalog {
 		t.Errorf("expected a role:system message containing the skill catalog, got system bodies: %+v", systemBodies)
+	}
+}
+
+// TestBackend_SessionCompact_NoOpWhenHistoryShort verifies the local
+// summarisation pass leaves the transcript untouched when there's
+// nothing meaningful to compact (fewer than compactMinHistory messages).
+// The HTTP server fails the test if it gets called, so we also assert
+// no request was issued.
+func TestBackend_SessionCompact_NoOpWhenHistoryShort(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to %s — short history should be a no-op", r.URL.Path)
+		http.Error(w, "should not call", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	_ = b.store.AppendMessage("a", Message{Role: "user", Content: "hi"})
+	_ = b.store.AppendMessage("a", Message{Role: "assistant", Content: "hello"})
+
+	if err := b.SessionCompact(context.Background(), "a"); err != nil {
+		t.Fatalf("SessionCompact: %v", err)
+	}
+	msgs, _ := b.store.LoadHistory("a", 0)
+	if len(msgs) != 2 {
+		t.Errorf("expected 2 messages preserved, got %d", len(msgs))
+	}
+}
+
+// TestBackend_SessionCompact_SummarisesAndPreservesTail covers the
+// happy path: with enough history the backend issues a non-streaming
+// completion, swaps the older messages for a single Summary system
+// entry, and keeps the most recent compactKeepTail messages verbatim.
+// The test also asserts the persisted summary has Summary=true so
+// runStream forwards it on the next turn.
+func TestBackend_SessionCompact_SummarisesAndPreservesTail(t *testing.T) {
+	var captured chatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.Error(w, "wrong path", http.StatusNotFound)
+			return
+		}
+		_ = json.NewDecoder(r.Body).Decode(&captured)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"User asked about colours; assistant explained the rainbow."}}]}`)
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	// Six messages: oldest pair gets summarised, last four (compactKeepTail) preserved.
+	_ = b.store.AppendMessage("a", Message{Role: "user", Content: "what colours are in a rainbow?"})
+	_ = b.store.AppendMessage("a", Message{Role: "assistant", Content: "ROYGBIV: red, orange, yellow, green, blue, indigo, violet"})
+	_ = b.store.AppendMessage("a", Message{Role: "user", Content: "is indigo really distinct?"})
+	_ = b.store.AppendMessage("a", Message{Role: "assistant", Content: "Newton included it; modern usage often skips it."})
+	_ = b.store.AppendMessage("a", Message{Role: "user", Content: "thanks"})
+	_ = b.store.AppendMessage("a", Message{Role: "assistant", Content: "you're welcome"})
+
+	if err := b.SessionCompact(context.Background(), "a"); err != nil {
+		t.Fatalf("SessionCompact: %v", err)
+	}
+
+	if captured.Stream {
+		t.Errorf("compact request should be non-streaming")
+	}
+	if captured.Model != "m" {
+		t.Errorf("compact used wrong model: %q", captured.Model)
+	}
+	// The compaction prompt is the first system message; older user/assistant
+	// pair follows. Last four messages must NOT be in the request — they're
+	// preserved verbatim in the rewritten history.
+	if len(captured.Messages) < 3 {
+		t.Fatalf("expected compaction system prompt + older messages, got %d", len(captured.Messages))
+	}
+	if captured.Messages[0].Role != "system" || !strings.Contains(captured.Messages[0].Content, "compacting") {
+		t.Errorf("first message should be the compaction system prompt, got %+v", captured.Messages[0])
+	}
+	for _, m := range captured.Messages {
+		if strings.Contains(m.Content, "thanks") || strings.Contains(m.Content, "you're welcome") {
+			t.Errorf("tail message leaked into compaction request: %+v", m)
+		}
+	}
+
+	rewritten, err := b.store.LoadHistory("a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1 summary + compactKeepTail preserved messages.
+	wantLen := 1 + 4
+	if len(rewritten) != wantLen {
+		t.Fatalf("expected %d messages after compact, got %d: %+v", wantLen, len(rewritten), rewritten)
+	}
+	head := rewritten[0]
+	if head.Role != "system" {
+		t.Errorf("summary role should be system, got %q", head.Role)
+	}
+	if !head.Summary {
+		t.Errorf("summary message must have Summary=true so runStream forwards it next turn")
+	}
+	if !strings.Contains(head.Content, "rainbow") {
+		t.Errorf("summary content missing model output: %q", head.Content)
+	}
+	// Tail preserved verbatim.
+	if rewritten[len(rewritten)-1].Content != "you're welcome" {
+		t.Errorf("last message not preserved verbatim: %+v", rewritten[len(rewritten)-1])
+	}
+	if rewritten[len(rewritten)-2].Content != "thanks" {
+		t.Errorf("penultimate not preserved verbatim: %+v", rewritten[len(rewritten)-2])
+	}
+}
+
+// TestBackend_SessionCompact_ForwardsSummaryOnNextTurn proves the
+// rewritten transcript actually shrinks subsequent requests: after
+// /compact, a follow-up ChatSend should forward the summary system
+// message and the preserved tail, but none of the older raw turns.
+func TestBackend_SessionCompact_ForwardsSummaryOnNextTurn(t *testing.T) {
+	var lastBody chatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			_ = json.NewDecoder(r.Body).Decode(&lastBody)
+			if !lastBody.Stream {
+				// Compaction call — non-streaming JSON.
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"earlier-summary-text"}}]}`)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			flusher, _ := w.(http.Flusher)
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			return
+		}
+		http.Error(w, "wrong path", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	_ = b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"})
+	_ = b.store.AppendMessage("a", Message{Role: "user", Content: "an-old-question"})
+	_ = b.store.AppendMessage("a", Message{Role: "assistant", Content: "an-old-answer"})
+	for i := 0; i < 4; i++ {
+		_ = b.store.AppendMessage("a", Message{Role: "user", Content: fmt.Sprintf("tail-u-%d", i)})
+	}
+
+	if err := b.SessionCompact(context.Background(), "a"); err != nil {
+		t.Fatalf("SessionCompact: %v", err)
+	}
+
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "next"}); err != nil {
+		t.Fatalf("ChatSend: %v", err)
+	}
+	// Drain the synthetic [DONE] so the goroutine finishes.
+	select {
+	case <-b.Events():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream completion")
+	}
+
+	var sawSummary, leakedOld bool
+	for _, m := range lastBody.Messages {
+		if m.Role == "system" && strings.Contains(m.Content, "earlier-summary-text") {
+			sawSummary = true
+		}
+		if strings.Contains(m.Content, "an-old-question") || strings.Contains(m.Content, "an-old-answer") {
+			leakedOld = true
+		}
+	}
+	if !sawSummary {
+		t.Errorf("expected the summary system message to be forwarded on the next turn, got: %+v", lastBody.Messages)
+	}
+	if leakedOld {
+		t.Errorf("older raw turns leaked into the next request — compact did not actually shrink history: %+v", lastBody.Messages)
+	}
+}
+
+// TestBackend_SessionCompact_MissingAgent surfaces a clear error rather
+// than a silent success when the session key doesn't resolve to an agent.
+func TestBackend_SessionCompact_MissingAgent(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	err := b.SessionCompact(context.Background(), "ghost")
+	if err == nil || !strings.Contains(err.Error(), "agent not found") {
+		t.Errorf("expected agent-not-found error, got %v", err)
+	}
+}
+
+// TestBackend_SessionCompact_RequiresModel mirrors ChatSend's behaviour:
+// without a configured model there's nothing to summarise with, so
+// /compact returns a clear error instead of crashing on the wire.
+func TestBackend_SessionCompact_RequiresModel(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	_ = b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a"})
+	for i := 0; i < compactMinHistory; i++ {
+		_ = b.store.AppendMessage("a", Message{Role: "user", Content: "x"})
+	}
+	err := b.SessionCompact(context.Background(), "a")
+	if err == nil || !strings.Contains(err.Error(), "no model configured") {
+		t.Errorf("expected no-model error, got %v", err)
+	}
+}
+
+// TestBackend_SessionCompact_EmptySummaryRejected ensures a model that
+// returns whitespace doesn't silently wipe history. The original
+// transcript is left untouched and the error surfaces back to the TUI.
+func TestBackend_SessionCompact_EmptySummaryRejected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"   "}}]}`)
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	_ = b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"})
+	for i := 0; i < compactMinHistory; i++ {
+		_ = b.store.AppendMessage("a", Message{Role: "user", Content: fmt.Sprintf("msg-%d", i)})
+	}
+	err := b.SessionCompact(context.Background(), "a")
+	if err == nil || !strings.Contains(err.Error(), "empty summary") {
+		t.Errorf("expected empty-summary error, got %v", err)
+	}
+	// History must remain intact — a failed compact should be safe to retry.
+	msgs, _ := b.store.LoadHistory("a", 0)
+	if len(msgs) != compactMinHistory {
+		t.Errorf("expected history untouched after failed compact, got %d messages", len(msgs))
+	}
+}
+
+// TestBackend_ChatHistory_RendersSummary asserts that summary messages
+// produced by /compact appear in the protocol.ChatHistoryResult shape
+// — without this the chat view would silently drop the digest on
+// history refresh and the user would see a gap.
+func TestBackend_ChatHistory_RendersSummary(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	_ = b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"})
+	_ = b.store.AppendMessage("a", Message{Role: "system", Content: "Summary of earlier conversation:\nfoo", Summary: true})
+	_ = b.store.AppendMessage("a", Message{Role: "user", Content: "next"})
+
+	raw, err := b.ChatHistory(context.Background(), "a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("expected summary + user message, got %d: %+v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[0].Role != "system" || got.Messages[0].Content[0].Text != "Summary of earlier conversation:\nfoo" {
+		t.Errorf("summary not rendered in history: %+v", got.Messages[0])
 	}
 }

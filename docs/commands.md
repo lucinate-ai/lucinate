@@ -17,7 +17,7 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/agents` | Return to the agent picker by emitting `goBackMsg{}` |
 | `/cancel` | Cancel the in-progress response (also triggered by Escape) — see [chat-ux.md](chat-ux.md) |
 | `/clear` | Wipe `m.messages` from the local display (does not affect gateway history) |
-| `/compact` | Compact the session context — see [sessions.md](sessions.md#compact-and-reset) — **OpenClaw only** |
+| `/compact` | Compact the session context — see [sessions.md](sessions.md#compact-and-reset) |
 | `/config` | Open the preferences view by emitting `showConfigMsg{}` |
 | `/connections` | Open the connections picker mid-session, tearing down the active backend — see [connections.md](connections.md) |
 | `/crons` | Open the cron browser filtered to the current agent — see [crons.md](crons.md) — **OpenClaw only** |

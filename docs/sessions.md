@@ -28,7 +28,7 @@ Both lists are sorted by `updatedAt` descending. Selecting a session returns `se
 
 Both commands use the [confirmation pattern](commands.md#confirmation-pattern) before taking action.
 
-**`/compact`** calls `client.SessionCompact()`, which asks the gateway to summarise older messages in the session context to reduce token usage. The local message list is not modified; a full history refresh runs after the RPC completes.
+**`/compact`** calls `backend.SessionCompact()`, which summarises older messages in the session context to reduce token usage. On OpenClaw the gateway runs the pass server-side; on the OpenAI-compatible backend the pass runs locally (a non-streaming `POST /v1/chat/completions` against the agent's configured model — see [backend_openai.md](backend_openai.md#compaction)). The chat view shows a `Session compacted.` system line on success; the smaller context is picked up on the next chat send (the in-memory message list is not redrawn, so the user's transcript stays where it was).
 
 **`/reset`** calls `client.SessionDelete()` to permanently remove the session, then immediately creates a replacement via `client.CreateSession()`. The new session key is returned as `sessionClearedMsg{newSessionKey}` and the chat model reinitialises with an empty history.
 
