@@ -178,6 +178,16 @@ type sessionSelectedMsg struct {
 	modelID    string
 }
 
+// cronTranscriptMsg opens a read-only transcript view for a cron job
+// reconstructed from the run log. Distinct from sessionSelectedMsg
+// because cron-isolated runs don't persist a queryable chat session —
+// the run-log payload + summary/error is the source of truth.
+type cronTranscriptMsg struct {
+	job       protocol.CronJob
+	runs      []protocol.CronRunLogEntry
+	agentName string
+}
+
 // goBackFromSessionsMsg signals the AppModel to return to the chat view.
 type goBackFromSessionsMsg struct{}
 

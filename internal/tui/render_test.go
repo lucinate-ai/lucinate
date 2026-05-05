@@ -274,6 +274,25 @@ func TestUpdateViewport_HistoryLoadingPlaceholder(t *testing.T) {
 	}
 }
 
+func TestUpdateViewport_EmptyHistoryShowsHint(t *testing.T) {
+	vp := viewport.New()
+	vp.SetWidth(80)
+	vp.SetHeight(20)
+	m := &chatModel{
+		viewport:       vp,
+		width:          80,
+		agentName:      "test",
+		historyLoading: false,
+	}
+
+	m.updateViewport()
+
+	view := ansi.Strip(m.viewport.View())
+	if !strings.Contains(view, "No conversation history for this session.") {
+		t.Errorf("viewport should show empty-state hint when history finished loading with no messages; got %q", view)
+	}
+}
+
 func TestUpdateViewport_PlaceholderYieldsToPendingMessage(t *testing.T) {
 	vp := viewport.New()
 	vp.SetWidth(80)

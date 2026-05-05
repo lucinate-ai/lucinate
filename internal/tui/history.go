@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 )
@@ -93,6 +94,54 @@ func fetchHistory(b backend.Backend, sessionKey string, renderer *glamour.TermRe
 		msgs = append(msgs, chatMessage{role: role, content: text, raw: raw, thinking: thinking, rendered: rendered, timestampMs: hm.Timestamp})
 	}
 	return msgs, nil
+}
+
+// buildCronTranscriptMessages reconstructs a transcript-style message
+// list from a cron job and its run log. Cron-isolated runs don't keep
+// a queryable chat session, but the payload (the user's prompt) and
+// each run's summary/error are persisted in the run log — which is
+// what the cron-detail run-history previews already display. This
+// surfaces the same content as a normal-looking conversation: each run
+// becomes a separator, a user turn (the payload), and an assistant turn
+// (the summary, or the error if the run failed).
+func buildCronTranscriptMessages(payload string, runs []protocol.CronRunLogEntry, renderer *glamour.TermRenderer) []chatMessage {
+	if len(runs) == 0 {
+		return nil
+	}
+	// Run logs arrive newest-first; render oldest-first so the
+	// transcript reads top-down chronologically like a real chat.
+	ordered := make([]protocol.CronRunLogEntry, len(runs))
+	for i, r := range runs {
+		ordered[len(runs)-1-i] = r
+	}
+	var msgs []chatMessage
+	for _, r := range ordered {
+		var ts int64
+		if r.RunAtMs != nil {
+			ts = *r.RunAtMs
+		}
+		msgs = append(msgs, chatMessage{role: "separator", timestampMs: ts})
+		if payload != "" {
+			msgs = append(msgs, chatMessage{role: "user", content: payload, timestampMs: ts})
+		}
+		switch {
+		case r.Summary != "":
+			content := r.Summary
+			raw := ""
+			rendered := false
+			if renderer != nil && looksLikeMarkdown(content) {
+				if out, err := renderer.Render(content); err == nil {
+					raw = content
+					content = strings.TrimSpace(out)
+					rendered = true
+				}
+			}
+			msgs = append(msgs, chatMessage{role: "assistant", content: content, raw: raw, rendered: rendered, timestampMs: ts})
+		case r.Error != "":
+			msgs = append(msgs, chatMessage{role: "assistant", errMsg: r.Error, timestampMs: ts})
+		}
+	}
+	return msgs
 }
 
 // stripSystemLines removes "System:" prefixed lines and leading whitespace

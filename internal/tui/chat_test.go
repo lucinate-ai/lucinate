@@ -268,6 +268,29 @@ func TestChatModel_PreloadedPendingMessage_DrainsOnHistoryLoaded(t *testing.T) {
 	}
 }
 
+// TestChatModel_HistoryLoadError_ShowsSystemMessage verifies that
+// a failed chat.history fetch (e.g. when the gateway can't resolve a
+// cron-isolated session key) surfaces the error to the user instead
+// of leaving the view silently blank — the original symptom that
+// pressing 'T' on a cron details page produced.
+func TestChatModel_HistoryLoadError_ShowsSystemMessage(t *testing.T) {
+	fb := newFakeBackend()
+	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "")
+
+	loadErr := errors.New("gateway returned ENOENT")
+	m, _ = m.Update(historyLoadedMsg{messages: nil, err: loadErr})
+
+	if m.historyLoading {
+		t.Error("historyLoading should be cleared after the load attempt")
+	}
+	if len(m.messages) != 1 {
+		t.Fatalf("expected a system error message; got %d messages", len(m.messages))
+	}
+	if m.messages[0].role != "system" || m.messages[0].errMsg == "" {
+		t.Errorf("expected system message with errMsg set; got %+v", m.messages[0])
+	}
+}
+
 // TestChatModel_NoInitialMessage_NoDrain verifies the regression
 // case: without a preloaded message, a historyLoadedMsg must not
 // kick a stray drain (which would surface as a confused user turn

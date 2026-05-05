@@ -15,6 +15,8 @@ func (m *chatModel) updateViewport() {
 
 	if m.historyLoading && len(m.messages) == 0 && len(m.pendingMessages) == 0 {
 		b.WriteString(statusStyle.Render(wordWrap("Loading conversation history…", contentWidth)))
+	} else if !m.historyLoading && len(m.messages) == 0 && len(m.pendingMessages) == 0 {
+		b.WriteString(emptyHistoryStyle.Render(wordWrap("No conversation history for this session.", contentWidth)))
 	}
 
 	for i, msg := range m.messages {

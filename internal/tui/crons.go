@@ -603,7 +603,7 @@ func (m cronsModel) detailActions() []Action {
 		actions = append(actions, Action{ID: "toggle", Label: toggleLabel, Key: "t"})
 		actions = append(actions, Action{ID: "edit", Label: "Edit", Key: "e"})
 		actions = append(actions, Action{ID: "delete", Label: "Delete", Key: "x"})
-		if transcriptKey := bestTranscriptSessionKey(job, m.runs); transcriptKey != "" {
+		if hasTranscriptContent(job, m.runs) {
 			actions = append(actions, Action{ID: "transcript", Label: "Transcript", Key: "T"})
 		}
 	}
@@ -764,29 +764,41 @@ func (m cronsModel) actionTranscript() (cronsModel, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	sessionKey := bestTranscriptSessionKey(job, m.runs)
-	if sessionKey == "" {
+	if !hasTranscriptContent(job, m.runs) {
 		return m, nil
 	}
+	runs := append([]protocol.CronRunLogEntry(nil), m.runs...)
 	return m, func() tea.Msg {
-		return sessionSelectedMsg{
-			sessionKey: sessionKey,
-			agentID:    job.AgentID,
-			agentName:  job.AgentID, // best-effort label; the chat header re-resolves on first event
+		return cronTranscriptMsg{
+			job:       job,
+			runs:      runs,
+			agentName: job.AgentID,
 		}
 	}
 }
 
-// bestTranscriptSessionKey returns the most useful session key for the
-// "view transcript" action — the most recent run with one wins;
-// otherwise the job's stored sessionKey if any.
-func bestTranscriptSessionKey(job protocol.CronJob, runs []protocol.CronRunLogEntry) string {
+// hasTranscriptContent reports whether the cron has any run-log content
+// worth rendering — a payload alone isn't enough; we want at least one
+// run with a summary or error message to show alongside it.
+func hasTranscriptContent(job protocol.CronJob, runs []protocol.CronRunLogEntry) bool {
+	if cronPayloadText(job) == "" && len(runs) == 0 {
+		return false
+	}
 	for _, r := range runs {
-		if r.SessionKey != "" {
-			return r.SessionKey
+		if r.Summary != "" || r.Error != "" {
+			return true
 		}
 	}
-	return job.SessionKey
+	return false
+}
+
+// cronPayloadText returns the human-authored prompt for an agentTurn
+// cron job, falling back across the union fields the gateway uses.
+func cronPayloadText(job protocol.CronJob) string {
+	if t := strings.TrimSpace(job.Payload.Text); t != "" {
+		return t
+	}
+	return strings.TrimSpace(job.Payload.Message)
 }
 
 // -----------------------------------------------------------------------------

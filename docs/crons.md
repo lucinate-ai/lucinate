@@ -57,7 +57,15 @@ The list view loads on `Init()` via `loadJobs()`, which calls `CronsList(Enabled
 - Next run, Last run (with status), Payload body
 - Run history table
 
-Actions: `R` run-now, `t` toggle enable, `e` edit, `x` delete (→ confirm substate), `T` open the most recent run's session in chat (emits `sessionSelectedMsg{sessionKey, agentID}`), `r` refresh, `esc` back to list.
+Actions: `R` run-now, `t` toggle enable, `e` edit, `x` delete (→ confirm substate), `T` open a read-only transcript reconstructed from the run log (see [Transcript view](#transcript-view)), `r` refresh, `esc` back to list.
+
+### Transcript view
+
+`T` emits `cronTranscriptMsg{job, runs, agentName}`; the AppModel hands it to the chat view with `hideInput=true` and pre-seeds `chatModel.messages` from `buildCronTranscriptMessages` (`internal/tui/history.go`). No `chat.history` round-trip is made — cron runs with `sessionTarget=isolated` don't persist a queryable session entry on the gateway (especially when the run errors before `persistSessionEntry` fires), so the run log itself is the source of truth. The run log is also the same data the detail page's run-history previews already render, so transcript content matches what the previews promise.
+
+The builder walks `m.runs` (newest-first as returned by `cron.runs sortDir=desc`) in reverse and emits, per run: a separator with `RunAtMs`, a user turn with the cron's `payload.Text` / `payload.Message`, and either an assistant turn with `Summary` (Glamour-rendered when it looks like markdown) or an `errMsg` assistant turn with `Error`. Repeating the payload per run is intentional — each run is an independent invocation of the same prompt, and the structure makes per-run timing and outcome obvious.
+
+The action itself is gated by `hasTranscriptContent`: if no run carries a `Summary` or `Error`, the `T` entry is suppressed from `Actions()` so it doesn't dangle on jobs with nothing to show.
 
 ## Form substate
 
@@ -83,3 +91,4 @@ The toggle action (`t` on detail) and the create-form submit use the typed `prot
 - Edit support for `at`/`every` schedules and `systemEvent` payloads.
 - Pagination of run history beyond the most recent 10 entries.
 - Live updates via cron-related gateway events — there is no streaming for cron state changes today, so the user must press `r` to refresh.
+- Replaying a cron run as a live chat session — the transcript is rebuilt from the run log, not from a queryable gateway session, so it's read-only by design.

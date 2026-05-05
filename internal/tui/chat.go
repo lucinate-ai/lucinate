@@ -416,7 +416,13 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case historyLoadedMsg:
 		m.historyLoading = false
-		if msg.err == nil && len(msg.messages) > 0 {
+		switch {
+		case msg.err != nil:
+			m.messages = append(m.messages, chatMessage{
+				role:   "system",
+				errMsg: fmt.Sprintf("Could not load conversation history: %v", msg.err),
+			})
+		case len(msg.messages) > 0:
 			lastTs := lastTimestampMs(msg.messages)
 			hist := append(msg.messages, chatMessage{role: "separator", timestampMs: lastTs})
 			m.messages = append(hist, m.messages...)

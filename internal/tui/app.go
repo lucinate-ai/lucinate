@@ -617,6 +617,19 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		m.state = viewChat
 		return m, m.chatModel.Init()
 
+	case cronTranscriptMsg:
+		// Cron-isolated runs don't keep a queryable chat session, so
+		// rebuild the transcript from the run log instead — that's the
+		// same data the run-history previews on the cron-detail page
+		// already use.
+		m.chatModel = newChatModel(m.backend, "", msg.job.AgentID, msg.agentName, "", m.prefs, true, connectionLabel(m.activeConn), "")
+		m.chatModel.setSize(m.width, m.height)
+		m.chatModel.messages = buildCronTranscriptMessages(cronPayloadText(msg.job), msg.runs, m.chatModel.renderer)
+		m.chatModel.historyLoading = false
+		m.chatModel.updateViewport()
+		m.state = viewChat
+		return m, nil
+
 	case newSessionCreatedMsg:
 		if msg.err != nil {
 			m.sessionsModel.err = msg.err

@@ -1,6 +1,49 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/a3tai/openclaw-go/protocol"
+)
+
+func TestBuildCronTranscriptMessages_ChronologicalAndCoversBothOutcomes(t *testing.T) {
+	older := int64(1_000)
+	newer := int64(2_000)
+	// Run logs arrive newest-first.
+	runs := []protocol.CronRunLogEntry{
+		{RunAtMs: &newer, Status: "ok", Summary: "Newer run output."},
+		{RunAtMs: &older, Status: "error", Error: "older run blew up"},
+	}
+
+	msgs := buildCronTranscriptMessages("Check the balance.", runs, nil)
+
+	// Expect oldest first: separator, user payload, assistant error,
+	// separator, user payload, assistant summary.
+	if len(msgs) != 6 {
+		t.Fatalf("expected 6 messages (2 runs × 3), got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].role != "separator" || msgs[0].timestampMs != older {
+		t.Errorf("msgs[0] should be older separator; got %+v", msgs[0])
+	}
+	if msgs[1].role != "user" || msgs[1].content != "Check the balance." {
+		t.Errorf("msgs[1] should be user payload for older run; got %+v", msgs[1])
+	}
+	if msgs[2].role != "assistant" || msgs[2].errMsg != "older run blew up" {
+		t.Errorf("msgs[2] should be assistant error for older run; got %+v", msgs[2])
+	}
+	if msgs[3].role != "separator" || msgs[3].timestampMs != newer {
+		t.Errorf("msgs[3] should be newer separator; got %+v", msgs[3])
+	}
+	if msgs[5].role != "assistant" || msgs[5].content != "Newer run output." {
+		t.Errorf("msgs[5] should be assistant summary for newer run; got %+v", msgs[5])
+	}
+}
+
+func TestBuildCronTranscriptMessages_EmptyRunsReturnsNil(t *testing.T) {
+	if msgs := buildCronTranscriptMessages("payload", nil, nil); msgs != nil {
+		t.Errorf("expected nil for empty run log; got %+v", msgs)
+	}
+}
 
 func TestLooksLikeMarkdown(t *testing.T) {
 	tests := []struct {

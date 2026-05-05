@@ -47,6 +47,12 @@ var (
 	statusStyle = lipgloss.NewStyle().
 			Foreground(subtle)
 
+	// Empty-history placeholder — brighter than statusStyle so it stands
+	// out against the empty conversation pane.
+	emptyHistoryStyle = lipgloss.NewStyle().
+				Foreground(accent).
+				Italic(true)
+
 	// Error text.
 	errorStyle = lipgloss.NewStyle().
 			Foreground(errClr).

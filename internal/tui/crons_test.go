@@ -388,29 +388,54 @@ func TestCronsConfirmDelete_NoCancels(t *testing.T) {
 	}
 }
 
-func TestCronsTranscript_PicksMostRecentRunSession(t *testing.T) {
+func TestCronsTranscript_DispatchesRunLogContent(t *testing.T) {
 	m, _ := newTestCronsModel(t)
 	jobs := sampleJobs()
 	m, _ = m.Update(cronsLoadedMsg{jobs: jobs})
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	// Seed runs as if loadRuns completed.
+	// Seed runs (newest first, matching cron.runs sortDir=desc) as if
+	// loadRuns completed — including a summary so the transcript action
+	// is offered and dispatched with the run-log payload.
 	m, _ = m.Update(cronRunsLoadedMsg{
-		jobID:   "job-1",
-		entries: []protocol.CronRunLogEntry{{SessionKey: "agent-1:cron:job-1:run-42"}},
+		jobID: "job-1",
+		entries: []protocol.CronRunLogEntry{
+			{Status: "ok", Summary: "Newest run output."},
+			{Status: "error", Error: "boom"},
+		},
 	})
 	_, cmd := m.handleKey(tea.KeyPressMsg{Code: 'T', Text: "T"})
 	if cmd == nil {
 		t.Fatal("expected a cmd from T")
 	}
 	msg := cmd()
-	sel, ok := msg.(sessionSelectedMsg)
+	sel, ok := msg.(cronTranscriptMsg)
 	if !ok {
-		t.Fatalf("expected sessionSelectedMsg, got %T", msg)
+		t.Fatalf("expected cronTranscriptMsg, got %T", msg)
 	}
-	if sel.sessionKey != "agent-1:cron:job-1:run-42" {
-		t.Errorf("sessionKey: %q", sel.sessionKey)
+	if sel.job.ID != "job-1" {
+		t.Errorf("job.ID: %q", sel.job.ID)
 	}
-	if sel.agentID != "agent-1" {
-		t.Errorf("agentID: %q", sel.agentID)
+	if sel.agentName != "agent-1" {
+		t.Errorf("agentName: %q", sel.agentName)
+	}
+	if len(sel.runs) != 2 {
+		t.Errorf("expected 2 runs forwarded, got %d", len(sel.runs))
+	}
+}
+
+func TestCronsTranscript_HiddenWhenNoRunOutput(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	jobs := sampleJobs()
+	m, _ = m.Update(cronsLoadedMsg{jobs: jobs})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Runs exist but none carry summary or error — no useful content.
+	m, _ = m.Update(cronRunsLoadedMsg{
+		jobID:   "job-1",
+		entries: []protocol.CronRunLogEntry{{Status: "skipped"}},
+	})
+	for _, a := range m.Actions() {
+		if a.ID == "transcript" {
+			t.Fatalf("transcript action should be hidden when no run carries summary/error; got %+v", a)
+		}
 	}
 }
