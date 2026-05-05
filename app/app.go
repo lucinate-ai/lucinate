@@ -180,6 +180,19 @@ type RunOptions struct {
 	// selection and should leave it false.
 	DisableMouse bool
 
+	// BrightCursor pins the chat composer's textarea cursor on-frame to
+	// ANSI 15 (bright white) instead of Bubbles' default ANSI 7 (light
+	// grey). Bubbles renders the on-frame as `Style.Reverse(true)` over
+	// the cursor cell, so the resulting block's visibility depends
+	// entirely on how the terminal maps ANSI index 7. Most desktop
+	// terminals render it bright enough to produce a visible block, so
+	// the CLI leaves this false and keeps the library default. Embedders
+	// driving the program through a virtual terminal whose palette
+	// renders ANSI 7 too dimly (the reverse-swapped block then collapses
+	// to near-invisible against the dim placeholder character) should
+	// set this true; ANSI 15 is bright white on every reasonable palette.
+	BrightCursor bool
+
 	// OnInputFocusChanged, if non-nil, is invoked whenever the active
 	// view's preferred input mode changes. wantsInput is true when the
 	// active view has a focused free-form text input (the chat
@@ -312,6 +325,7 @@ func New(opts RunOptions) (*Program, error) {
 		HideActionHints:       opts.HideActionHints,
 		DisableExitKeys:       opts.DisableExitKeys,
 		DisableMouse:          opts.DisableMouse,
+		BrightCursor:          opts.BrightCursor,
 		OnInputFocusChanged:   opts.OnInputFocusChanged,
 		OnActionsChanged:      opts.OnActionsChanged,
 		OnFocusedFieldChanged: opts.OnFocusedFieldChanged,

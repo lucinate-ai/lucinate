@@ -8,6 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
@@ -230,7 +231,7 @@ func drainBatch(t *testing.T, cmd tea.Cmd) {
 // see (history scrollback first, then their message).
 func TestChatModel_PreloadedPendingMessage_DrainsOnHistoryLoaded(t *testing.T) {
 	fb := newFakeBackend()
-	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "hello")
+	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "hello", false)
 
 	if len(m.pendingMessages) != 1 || m.pendingMessages[0] != "hello" {
 		t.Fatalf("constructor should have queued initialMessage; pendingMessages=%v", m.pendingMessages)
@@ -275,7 +276,7 @@ func TestChatModel_PreloadedPendingMessage_DrainsOnHistoryLoaded(t *testing.T) {
 // pressing 'T' on a cron details page produced.
 func TestChatModel_HistoryLoadError_ShowsSystemMessage(t *testing.T) {
 	fb := newFakeBackend()
-	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "")
+	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "", false)
 
 	loadErr := errors.New("gateway returned ENOENT")
 	m, _ = m.Update(historyLoadedMsg{messages: nil, err: loadErr})
@@ -297,7 +298,7 @@ func TestChatModel_HistoryLoadError_ShowsSystemMessage(t *testing.T) {
 // with no actual content to send).
 func TestChatModel_NoInitialMessage_NoDrain(t *testing.T) {
 	fb := newFakeBackend()
-	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "")
+	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "", false)
 
 	if len(m.pendingMessages) != 0 {
 		t.Fatalf("no initialMessage must mean empty pendingMessages; got %v", m.pendingMessages)
@@ -314,5 +315,36 @@ func TestChatModel_NoInitialMessage_NoDrain(t *testing.T) {
 	}
 	if len(m.messages) != 0 {
 		t.Errorf("messages should remain empty; got %+v", m.messages)
+	}
+}
+
+// TestNewChatModel_DefaultCursorMatchesBubblesPalette guards the
+// default branch of the gate: when the embedder hasn't asked for a
+// bright cursor (the desktop CLI case), the textarea is left on
+// Bubbles' library default — `lipgloss.Color("7")`, ANSI 8-colour
+// light grey — so terminals that render that index brightly enough
+// keep their familiar appearance.
+func TestNewChatModel_DefaultCursorMatchesBubblesPalette(t *testing.T) {
+	m := newChatModel(newFakeBackend(), "agent:scout:main", "scout", "scout", "", config.DefaultPreferences(), false, "home", "", false)
+	got := m.textarea.Styles().Cursor.Color
+	want := lipgloss.Color("7")
+	if got != want {
+		t.Errorf("default cursor color = %v, want %v (bubbles default ANSI 7) — desktop CLI must keep the library palette",
+			got, want)
+	}
+}
+
+// TestNewChatModel_BrightCursor_PinsToAnsi15 guards the override
+// branch: embedders that pass brightCursor=true (typically because
+// their host's ANSI 7 mapping is too dim) get the cursor pinned to
+// ANSI 15 (bright white) so the reverse-swapped block is visible
+// regardless of palette luminance choices.
+func TestNewChatModel_BrightCursor_PinsToAnsi15(t *testing.T) {
+	m := newChatModel(newFakeBackend(), "agent:scout:main", "scout", "scout", "", config.DefaultPreferences(), false, "home", "", true)
+	got := m.textarea.Styles().Cursor.Color
+	want := lipgloss.Color("15")
+	if got != want {
+		t.Errorf("textarea cursor color = %v, want %v (ANSI bright white). brightCursor=true must pin to a guaranteed-visible block.",
+			got, want)
 	}
 }

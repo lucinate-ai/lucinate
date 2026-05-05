@@ -74,7 +74,7 @@ func (a selectModelAdapter) View() tea.View {
 // rendering tests, wrapped in an adapter.
 func newRenderingChatModel(t *testing.T, agentName string) chatModelAdapter {
 	t.Helper()
-	m := newChatModel(nil, "session-key", "", agentName, "", config.DefaultPreferences(), false, "", "")
+	m := newChatModel(nil, "session-key", "", agentName, "", config.DefaultPreferences(), false, "", "", false)
 	m.setSize(120, 40)
 	return chatModelAdapter{inner: m}
 }
@@ -135,7 +135,7 @@ func TestRender_ChatView_HeaderShowsAgentName(t *testing.T) {
 // "lucinate · <conn> — <agent>" shape that lets users tell which
 // connection they're chatting against.
 func TestRender_ChatView_HeaderShowsConnectionName(t *testing.T) {
-	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "ollama-local", "")
+	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "ollama-local", "", false)
 	m.setSize(120, 40)
 	adapter := chatModelAdapter{inner: m}
 
@@ -149,7 +149,7 @@ func TestRender_ChatView_HeaderShowsConnectionName(t *testing.T) {
 // embedders without a connection store still render a clean header
 // — no leading separator, no empty " · " fragment.
 func TestChatModel_HeaderOmitsConnectionWhenBlank(t *testing.T) {
-	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "", "")
+	m := newChatModel(nil, "session-key", "", "scout", "", config.DefaultPreferences(), false, "", "", false)
 	m.setSize(120, 40)
 	out := ansi.Strip(m.View())
 	if strings.Contains(out, " · ") && !strings.Contains(out, "scout · ") {

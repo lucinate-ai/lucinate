@@ -41,6 +41,12 @@ type AppOptions struct {
 	DisableExitKeys bool
 	DisableMouse    bool
 
+	// BrightCursor pins the chat textarea cursor's on-frame to ANSI 15
+	// (bright white) instead of Bubbles' default ANSI 7. See
+	// app.RunOptions for the full rationale; this is the unexported
+	// plumbing.
+	BrightCursor bool
+
 	// Store, when non-nil, enables managed mode: the TUI owns the
 	// connection lifecycle, runs the connections picker as the entry
 	// view (or auto-picks via the same decision tree the resolver
@@ -121,6 +127,7 @@ type AppModel struct {
 	hideActionHints  bool
 	disableExitKeys  bool
 	disableMouse     bool
+	brightCursor     bool
 	managed          bool
 
 	onInputFocusChanged func(bool)
@@ -167,6 +174,7 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 		hideActionHints:       opts.HideActionHints,
 		disableExitKeys:       opts.DisableExitKeys,
 		disableMouse:          opts.DisableMouse,
+		brightCursor:          opts.BrightCursor,
 		store:                 opts.Store,
 		backendFactory:        opts.BackendFactory,
 		onBackendChanged:      opts.OnBackendChanged,
@@ -612,7 +620,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		if agentID == "" {
 			agentID = m.sessionsModel.agentID
 		}
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), "")
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), "", m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -622,7 +630,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		// rebuild the transcript from the run log instead — that's the
 		// same data the run-history previews on the cron-detail page
 		// already use.
-		m.chatModel = newChatModel(m.backend, "", msg.job.AgentID, msg.agentName, "", m.prefs, true, connectionLabel(m.activeConn), "")
+		m.chatModel = newChatModel(m.backend, "", msg.job.AgentID, msg.agentName, "", m.prefs, true, connectionLabel(m.activeConn), "", m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.chatModel.messages = buildCronTranscriptMessages(cronPayloadText(msg.job), msg.runs, m.chatModel.renderer)
 		m.chatModel.historyLoading = false
@@ -636,7 +644,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.sessionsModel.loading = false
 			return m, nil
 		}
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), "")
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), "", m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()
@@ -658,7 +666,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		// loading history.
 		initialMsg := m.initialMessage
 		m.initialMessage = ""
-		m.chatModel = newChatModel(m.backend, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), initialMsg)
+		m.chatModel = newChatModel(m.backend, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), initialMsg, m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
 		return m, m.chatModel.Init()

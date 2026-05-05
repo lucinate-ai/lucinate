@@ -348,7 +348,7 @@ func TestUpdateViewport_PreservesScrollWhenUserScrolledUp(t *testing.T) {
 }
 
 func TestUpdate_MouseWheelScrollSurvivesStreamingDeltas(t *testing.T) {
-	m := newChatModel(nil, "main", "", "test", "", config.DefaultPreferences(), false, "", "")
+	m := newChatModel(nil, "main", "", "test", "", config.DefaultPreferences(), false, "", "", false)
 	m.viewport = viewport.New()
 	m.width = 80
 	m.height = 30

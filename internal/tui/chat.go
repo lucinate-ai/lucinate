@@ -221,7 +221,7 @@ func (m *chatModel) ensureSpinnerTicking() tea.Cmd {
 	return spinnerTickCmd()
 }
 
-func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID string, prefs config.Preferences, hideInput bool, connName, initialMessage string) chatModel {
+func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID string, prefs config.Preferences, hideInput bool, connName, initialMessage string, brightCursor bool) chatModel {
 	ta := textarea.New()
 	ta.Placeholder = "Type a message..."
 	ta.Focus()
@@ -229,6 +229,31 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 	ta.SetHeight(inputHeight)
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
+
+	// Bubbles' default cursor renders its on-frame as
+	// `Style.Reverse(true).Render(char)`. With the library default of
+	// `Color("7")` (ANSI 8-colour light grey, no background), the
+	// reverse-swap depends entirely on how the terminal maps ANSI
+	// index 7: most desktop terminals render it bright enough to
+	// produce a visible block, so the desktop CLI leaves brightCursor
+	// false and keeps the library palette. Embedders driving the
+	// program through a virtual terminal whose palette renders index
+	// 7 too dimly (the reverse-swapped block then collapses to
+	// near-invisible against the dim placeholder character — the
+	// leading "T" of "Type a message..." disappears under the cursor)
+	// pass brightCursor true. Pinning to ANSI 15 (bright white)
+	// removes the dependency on palette luminance choices: every
+	// reasonable terminal renders index 15 as bright white, so the
+	// swap puts white in the cell's bg and the terminal's default-bg
+	// colour in the fg — a guaranteed-visible block. SetStyles
+	// propagates through the textarea's `updateVirtualCursorStyle`
+	// so `virtualCursor.Style` picks up the new Foreground.
+	if brightCursor {
+		taStyles := ta.Styles()
+		taStyles.Cursor.Color = lipgloss.Color("15")
+		ta.SetStyles(taStyles)
+	}
+
 	ta.KeyMap.InsertNewline.SetKeys("alt+enter")
 	ta.KeyMap.DeleteWordBackward.SetKeys("alt+backspace", "ctrl+w")
 	ta.KeyMap.DeleteWordForward.SetKeys("alt+delete", "alt+d")
