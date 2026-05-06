@@ -10,7 +10,7 @@ services:
       - ./state:/home/node/.openclaw
     environment:
       HOME: /home/node
-      OPENCLAW_GATEWAY_TOKEN: "lucinate-integration-test"
+      OPENCLAW_GATEWAY_TOKEN: "lucinate"
       OLLAMA_API_KEY: "ollama-local"
       # Redirect npm cache to /tmp so plugin dep installs work when running
       # as a non-root user (the image's /home/node/.npm is root-owned).

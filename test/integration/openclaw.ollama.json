@@ -2,7 +2,7 @@
   "gateway": {
     "auth": {
       "mode": "token",
-      "token": "lucinate-integration-test"
+      "token": "lucinate"
     }
   },
   "models": {

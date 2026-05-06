@@ -118,7 +118,7 @@ After setup, list the models the gateway found in your region:
 ```bash
 docker compose -f test/integration/docker-compose.yml exec -T gateway \
   openclaw models list --json \
-  --token lucinate-integration-test \
+  --token lucinate \
   --url ws://127.0.0.1:18789/ws
 ```
 
@@ -187,7 +187,7 @@ you can step through it manually:
 
 ```bash
 GW_URL="ws://127.0.0.1:18789/ws"
-GW_TOKEN="lucinate-integration-test"
+GW_TOKEN="lucinate"
 COMPOSE="test/integration/docker-compose.yml"
 
 # 1. List pending devices (JSON structure: {"pending":[...], "paired":[...]})
@@ -413,7 +413,7 @@ Host Ollama is left running.
 docker compose -f test/integration/hermes/docker-compose.yml logs hermes
 
 # Probe the API server manually
-curl -fsS -H 'Authorization: Bearer lucinate-integration-test' \
+curl -fsS -H 'Authorization: Bearer lucinate' \
     http://localhost:8642/v1/health
 
 # Force a fresh image pull (e.g. after bumping HERMES_TAG)
