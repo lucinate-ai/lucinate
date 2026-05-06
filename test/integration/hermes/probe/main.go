@@ -8,7 +8,7 @@
 // Usage:
 //
 //	LUCINATE_HERMES_BASE_URL=http://localhost:8642/v1 \
-//	  LUCINATE_HERMES_API_KEY=lucinate-integration-test \
+//	  LUCINATE_HERMES_API_KEY=lucinate \
 //	  go run ./test/integration/hermes/probe
 
 //go:build ignore

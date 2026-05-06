@@ -30,7 +30,7 @@ services:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: "0.0.0.0"
       API_SERVER_PORT: "8642"
-      API_SERVER_KEY: "lucinate-integration-test"
+      API_SERVER_KEY: "lucinate"
       # Hermes' gateway warns and denies traffic when no platform
       # allowlist is configured. The container is loopback-only with
       # API_SERVER_KEY bearer auth, so open access at the gateway

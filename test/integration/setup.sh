@@ -33,7 +33,7 @@ GATEWAY_URL="http://localhost:18789"
 GATEWAY_WS_URL="ws://127.0.0.1:18789/ws"
 HEALTH_TIMEOUT=60
 
-GATEWAY_TOKEN="lucinate-integration-test"
+GATEWAY_TOKEN="lucinate"
 
 # --- Parse args -----------------------------------------------------------
 
