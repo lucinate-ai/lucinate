@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -23,6 +24,21 @@ var errChatUsage = errors.New("usage")
 
 func main() {
 	args := os.Args[1:]
+
+	// Top-level help: `lucinate help [<cmd>]`, `lucinate -h`,
+	// `lucinate --help`. Routed before subcommand dispatch so `help`
+	// doesn't fall through to flag parsing and silently launch the TUI.
+	if len(args) > 0 {
+		switch args[0] {
+		case "help", "-h", "-help", "--help":
+			if err := runHelp(args[1:], os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "lucinate: %v\n\n", err)
+				printTopUsage(os.Stderr)
+				os.Exit(1)
+			}
+			return
+		}
+	}
 
 	// Subcommand dispatch. The "send" subcommand is the one-shot CLI
 	// entry that bypasses the TUI and routes a single message into a
@@ -59,6 +75,7 @@ func main() {
 	}
 
 	fs := flag.NewFlagSet("lucinate", flag.ExitOnError)
+	fs.Usage = func() { printTopUsage(fs.Output()) }
 	showVersion := fs.Bool("version", false, "print version and exit")
 	fs.BoolVar(showVersion, "v", false, "print version and exit")
 	_ = fs.Parse(args)
@@ -85,38 +102,117 @@ func main() {
 	}
 }
 
+// runHelp dispatches `lucinate help [<command>]` by writing the relevant
+// usage block to out. An unknown command name surfaces as an error so
+// main can render it alongside the top-level usage block on stderr.
+func runHelp(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		printTopUsage(out)
+		return nil
+	}
+	switch args[0] {
+	case "send":
+		printSendUsage(out)
+	case "chat":
+		printChatUsage(out)
+	case "help":
+		printTopUsage(out)
+	default:
+		return fmt.Errorf("unknown command %q", args[0])
+	}
+	return nil
+}
+
+// printTopUsage writes the top-level lucinate usage block.
+func printTopUsage(out io.Writer) {
+	fmt.Fprintln(out, "Usage: lucinate [--version|-v] [<command> [args...]]")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "lucinate is a terminal-native AI chat client. Without a command, it")
+	fmt.Fprintln(out, "launches the interactive TUI; with one, it runs that command's flow.")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Commands:")
+	fmt.Fprintln(out, "  send    Dispatch a single message and print the reply (one-shot, no TUI)")
+	fmt.Fprintln(out, "  chat    Launch the TUI pre-navigated to a connection / agent / session")
+	fmt.Fprintln(out, "  help    Show help for lucinate or a specific command")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Flags:")
+	fmt.Fprintln(out, "  -h, --help       Show this help and exit")
+	fmt.Fprintln(out, "  -v, --version    Print version and exit")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Run 'lucinate help <command>' for command-specific usage.")
+}
+
+// printSendUsage writes the `lucinate send` usage block.
+func printSendUsage(out io.Writer) {
+	var (
+		connection, agent, session string
+		detach                     bool
+	)
+	fs := newSendFlagSet(&connection, &agent, &session, &detach)
+	fs.SetOutput(out)
+	fmt.Fprintln(out, "Usage: lucinate send (--connection|-c) <name> (--agent|-a) <name> [(--session|-s) <key>] [--detach|-d] <message...>")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Sends a single chat message through a stored connection and prints the")
+	fmt.Fprintln(out, "assistant's first complete reply on stdout. With --detach the call returns")
+	fmt.Fprintln(out, "as soon as the gateway has accepted the turn.")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Flags:")
+	fs.PrintDefaults()
+}
+
+// printChatUsage writes the `lucinate chat` usage block.
+func printChatUsage(out io.Writer) {
+	var connection, agent, session string
+	fs := newChatFlagSet(&connection, &agent, &session)
+	fs.SetOutput(out)
+	fmt.Fprintln(out, "Usage: lucinate chat [(--connection|-c) <name>] [(--agent|-a) <name>] [(--session|-s) <key>] [<message...>]")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Launches the TUI pre-navigated to the named connection / agent / session,")
+	fmt.Fprintln(out, "optionally auto-submitting the supplied message as the first turn. Any")
+	fmt.Fprintln(out, "unset flag falls back to the same default the bare `lucinate` invocation")
+	fmt.Fprintln(out, "uses (single-connection auto-pick, single-agent auto-pick, agent's main")
+	fmt.Fprintln(out, "session). Unlike `send`, this stays in the TUI for follow-up interaction.")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Flags:")
+	fs.PrintDefaults()
+}
+
+func newSendFlagSet(connection, agent, session *string, detach *bool) *flag.FlagSet {
+	fs := flag.NewFlagSet("send", flag.ContinueOnError)
+	fs.StringVar(connection, "connection", "", "saved connection name or ID (required)")
+	fs.StringVar(connection, "c", "", "short for --connection")
+	fs.StringVar(agent, "agent", "", "agent name or ID within the connection (required)")
+	fs.StringVar(agent, "a", "", "short for --agent")
+	fs.StringVar(session, "session", "", "session key (defaults to the agent's main session)")
+	fs.StringVar(session, "s", "", "short for --session")
+	fs.BoolVar(detach, "detach", false, "dispatch the message and exit without waiting for a reply")
+	fs.BoolVar(detach, "d", false, "short for --detach")
+	return fs
+}
+
+func newChatFlagSet(connection, agent, session *string) *flag.FlagSet {
+	fs := flag.NewFlagSet("chat", flag.ContinueOnError)
+	fs.StringVar(connection, "connection", "", "saved connection name or ID (defaults to the auto-pick)")
+	fs.StringVar(connection, "c", "", "short for --connection")
+	fs.StringVar(agent, "agent", "", "agent name or ID to auto-select after connecting")
+	fs.StringVar(agent, "a", "", "short for --agent")
+	fs.StringVar(session, "session", "", "session key to open (defaults to the agent's main session)")
+	fs.StringVar(session, "s", "", "short for --session")
+	return fs
+}
+
 // runSend parses the `lucinate send` flag set and dispatches into
 // app.Send. The flag set deliberately stops at the first positional
 // argument so the message body — which may contain text that looks
 // like flags — is taken verbatim from the remaining args. Use `--`
 // before a message that starts with a dash, the standard Unix escape.
 func runSend(args []string) error {
-	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	var (
-		connection string
-		agent      string
-		session    string
-		detach     bool
+		connection, agent, session string
+		detach                     bool
 	)
-	fs.StringVar(&connection, "connection", "", "saved connection name or ID (required)")
-	fs.StringVar(&connection, "c", "", "short for --connection")
-	fs.StringVar(&agent, "agent", "", "agent name or ID within the connection (required)")
-	fs.StringVar(&agent, "a", "", "short for --agent")
-	fs.StringVar(&session, "session", "", "session key (defaults to the agent's main session)")
-	fs.StringVar(&session, "s", "", "short for --session")
-	fs.BoolVar(&detach, "detach", false, "dispatch the message and exit without waiting for a reply")
-	fs.BoolVar(&detach, "d", false, "short for --detach")
-	fs.Usage = func() {
-		out := fs.Output()
-		fmt.Fprintln(out, "Usage: lucinate send (--connection|-c) <name> (--agent|-a) <name> [(--session|-s) <key>] [--detach|-d] <message...>")
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "Sends a single chat message through a stored connection and prints the")
-		fmt.Fprintln(out, "assistant's first complete reply on stdout. With --detach the call returns")
-		fmt.Fprintln(out, "as soon as the gateway has accepted the turn.")
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "Flags:")
-		fs.PrintDefaults()
-	}
+	fs := newSendFlagSet(&connection, &agent, &session, &detach)
+	fs.Usage = func() { printSendUsage(fs.Output()) }
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return errSendUsage
@@ -147,31 +243,9 @@ func runSend(args []string) error {
 // first positional argument so message text containing dashes is
 // taken verbatim; use `--` to disambiguate a leading dash.
 func runChat(args []string) error {
-	fs := flag.NewFlagSet("chat", flag.ContinueOnError)
-	var (
-		connection string
-		agent      string
-		session    string
-	)
-	fs.StringVar(&connection, "connection", "", "saved connection name or ID (defaults to the auto-pick)")
-	fs.StringVar(&connection, "c", "", "short for --connection")
-	fs.StringVar(&agent, "agent", "", "agent name or ID to auto-select after connecting")
-	fs.StringVar(&agent, "a", "", "short for --agent")
-	fs.StringVar(&session, "session", "", "session key to open (defaults to the agent's main session)")
-	fs.StringVar(&session, "s", "", "short for --session")
-	fs.Usage = func() {
-		out := fs.Output()
-		fmt.Fprintln(out, "Usage: lucinate chat [(--connection|-c) <name>] [(--agent|-a) <name>] [(--session|-s) <key>] [<message...>]")
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "Launches the TUI pre-navigated to the named connection / agent / session,")
-		fmt.Fprintln(out, "optionally auto-submitting the supplied message as the first turn. Any")
-		fmt.Fprintln(out, "unset flag falls back to the same default the bare `lucinate` invocation")
-		fmt.Fprintln(out, "uses (single-connection auto-pick, single-agent auto-pick, agent's main")
-		fmt.Fprintln(out, "session). Unlike `send`, this stays in the TUI for follow-up interaction.")
-		fmt.Fprintln(out, "")
-		fmt.Fprintln(out, "Flags:")
-		fs.PrintDefaults()
-	}
+	var connection, agent, session string
+	fs := newChatFlagSet(&connection, &agent, &session)
+	fs.Usage = func() { printChatUsage(fs.Output()) }
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return errChatUsage

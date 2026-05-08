@@ -242,6 +242,7 @@ Unlike `send`, this stays in the TUI — the auto-submitted message is just your
 
 | Flag | Description |
 |------|-------------|
+| `--help`, `-h` | Show top-level usage and exit. `lucinate help <command>` prints command-specific usage. |
 | `--version`, `-v` | Print version and exit |
 
 ### Environment variables
