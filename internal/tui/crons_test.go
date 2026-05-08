@@ -15,6 +15,21 @@ func newTestCronsModel(t *testing.T) (cronsModel, *fakeBackend) {
 	return m, fake
 }
 
+// openDetail drives the picker through its "enter + run-log payload"
+// transition into the detail substate so tests that need to start
+// in detail don't have to repeat the two-step plumbing. The post-
+// loading-state change made enter alone insufficient — the detail
+// substate is gated on cronRunsLoadedMsg arriving.
+func openDetail(t *testing.T, m cronsModel) cronsModel {
+	t.Helper()
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(cronRunsLoadedMsg{jobID: m.selectedID})
+	if m.subset != cronSubDetail {
+		t.Fatalf("openDetail: expected detail substate, got %v", m.subset)
+	}
+	return m
+}
+
 func sampleJobs() []protocol.CronJob {
 	enabled := true
 	return []protocol.CronJob{
@@ -84,12 +99,18 @@ func TestCronsKey_A_TogglesAllAgentsFilter(t *testing.T) {
 	}
 }
 
-func TestCronsKey_Enter_OpensDetail(t *testing.T) {
+func TestCronsKey_Enter_FreezesUntilRunsLoad(t *testing.T) {
 	m, _ := newTestCronsModel(t)
 	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
 	m, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.subset != cronSubDetail {
-		t.Fatalf("expected substate=detail, got %v", m.subset)
+
+	// Enter alone freezes the list and holds the user on a loading
+	// line; the detail substate is gated on the run-log payload.
+	if !m.selecting {
+		t.Error("expected selecting=true after enter")
+	}
+	if m.subset == cronSubDetail {
+		t.Errorf("detail substate should not flip until cronRunsLoadedMsg, got %v", m.subset)
 	}
 	if m.selectedID != "job-1" {
 		t.Errorf("expected selectedID=job-1, got %q", m.selectedID)
@@ -100,6 +121,75 @@ func TestCronsKey_Enter_OpensDetail(t *testing.T) {
 	msg := cmd()
 	if _, ok := msg.(cronRunsLoadedMsg); !ok {
 		t.Errorf("expected cronRunsLoadedMsg, got %T", msg)
+	}
+
+	// Delivering the payload drops the freeze and reveals detail.
+	m, _ = m.Update(cronRunsLoadedMsg{jobID: "job-1"})
+	if m.selecting {
+		t.Error("expected selecting=false after run-log payload")
+	}
+	if m.subset != cronSubDetail {
+		t.Errorf("expected detail substate after payload, got %v", m.subset)
+	}
+}
+
+func TestCronsSelecting_BlocksNavigation(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	// Multi-job list (no agent filter) so navigation has somewhere
+	// to go.
+	m.filterAgentID = ""
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.selecting {
+		t.Fatal("setup: expected selecting=true after enter")
+	}
+	startIdx := m.list.Index()
+
+	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+
+	if m.list.Index() != startIdx {
+		t.Errorf("list index moved while selecting: was %d, now %d", startIdx, m.list.Index())
+	}
+	if cmd != nil {
+		t.Errorf("expected no cmd while selecting, got %T", cmd)
+	}
+}
+
+func TestCronsSelecting_HidesActions(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	if len(m.Actions()) == 0 {
+		t.Fatal("setup: expected actions before enter")
+	}
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(m.Actions()) != 0 {
+		t.Errorf("expected no actions while selecting, got %+v", m.Actions())
+	}
+}
+
+func TestCronsSelecting_ViewRendersLoading(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	view := m.View()
+	if !contains(view, "Loading Daily report") {
+		t.Errorf("expected loading line naming the picked job, got:\n%s", view)
+	}
+}
+
+func TestCronsSelecting_ErrorClearsFreezeAndSurfaces(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(cronRunsLoadedMsg{jobID: "job-1", err: errString("network down")})
+	if m.selecting {
+		t.Error("expected selecting=false even on error so the picker isn't stranded")
+	}
+	if m.subset != cronSubDetail {
+		t.Errorf("expected detail substate so the user sees the run-log error, got %v", m.subset)
+	}
+	if m.runsErr == nil {
+		t.Error("expected runsErr to be surfaced on the detail page")
 	}
 }
 
@@ -118,10 +208,7 @@ func TestCronsKey_Esc_FromList_GoesBack(t *testing.T) {
 func TestCronsKey_Esc_FromDetail_ReturnsToList(t *testing.T) {
 	m, _ := newTestCronsModel(t)
 	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.subset != cronSubDetail {
-		t.Fatal("setup: expected detail substate")
-	}
+	m = openDetail(t, m)
 	m, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.subset != cronSubList {
 		t.Errorf("expected substate=list after esc from detail, got %v", m.subset)
@@ -139,7 +226,7 @@ func TestCronsKey_Esc_FromDetail_ReturnsToList(t *testing.T) {
 func TestCronsKey_T_TogglesEnabled(t *testing.T) {
 	m, fake := newTestCronsModel(t)
 	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = openDetail(t, m)
 	_, cmd := m.handleKey(tea.KeyPressMsg{Code: 't', Text: "t"})
 	if cmd == nil {
 		t.Fatal("expected a cmd from toggle")
@@ -294,7 +381,7 @@ func TestCronsForm_EditSubmitUsesRawUpdate(t *testing.T) {
 		Payload:       protocol.CronPayload{Kind: "agentTurn", Text: "old text", Model: "haiku-4-5"},
 	}}
 	m, _ = m.Update(cronsLoadedMsg{jobs: jobs})
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})   // open detail
+	m = openDetail(t, m)
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: 'e', Text: "e"}) // open edit form
 	if m.subset != cronSubForm {
 		t.Fatalf("expected form substate, got %v", m.subset)
@@ -351,7 +438,7 @@ func TestCronsForm_PrePopulatesModelAndDelivery(t *testing.T) {
 func TestCronsConfirmDelete_YesDispatchesRemove(t *testing.T) {
 	m, fake := newTestCronsModel(t)
 	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = openDetail(t, m)
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if m.subset != cronSubConfirmDelete {
 		t.Fatalf("expected confirm substate, got %v", m.subset)
@@ -377,7 +464,7 @@ func TestCronsConfirmDelete_YesDispatchesRemove(t *testing.T) {
 func TestCronsConfirmDelete_NoCancels(t *testing.T) {
 	m, _ := newTestCronsModel(t)
 	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = openDetail(t, m)
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if m.subset != cronSubDetail {

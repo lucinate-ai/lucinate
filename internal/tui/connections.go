@@ -70,6 +70,16 @@ type connectionsModel struct {
 	subState  connectionsSubState
 	hideHints bool
 
+	// selecting is true after the user has picked a connection from
+	// the list and we're handing off to the AppModel's connect flow
+	// (which transitions to viewConnecting on the next tick). The
+	// window is brief but the list is still rendered until the
+	// transition lands, so we freeze input + render a "Connecting
+	// to <name>..." line to mirror the agent / session pickers and
+	// stop the user from racing the cursor against the handoff.
+	selecting     bool
+	selectingName string
+
 	// Form state shared by add and edit. The form has a fixed
 	// type-radio at the top (always rendered, focusable on add and
 	// read-only on edit since type is immutable) plus 2-3 text fields
@@ -224,6 +234,13 @@ func (m connectionsModel) Update(msg tea.Msg) (connectionsModel, tea.Cmd) {
 		// fall-through here keeps the list happy if it ever arrives
 		// directly.
 	}
+	if m.selecting {
+		// Handoff to the AppModel connect flow is in flight. Drop
+		// keystrokes and list-internal cmds — the next tick will
+		// swap us out for viewConnecting, and we don't want the
+		// user racing the transition with another keypress.
+		return m, nil
+	}
 	if key, ok := msg.(tea.KeyPressMsg); ok {
 		return m.handleKey(key)
 	}
@@ -254,6 +271,11 @@ func (m connectionsModel) handleKey(msg tea.KeyPressMsg) (connectionsModel, tea.
 	if msg.String() == "enter" {
 		if item, ok := m.list.SelectedItem().(connectionItem); ok {
 			conn := item.conn
+			m.selecting = true
+			m.selectingName = conn.Name
+			if m.selectingName == "" {
+				m.selectingName = conn.ID
+			}
 			return m, func() tea.Msg {
 				return connectionPickedMsg{connection: &conn}
 			}
@@ -282,6 +304,11 @@ func (m connectionsModel) handleKey(msg tea.KeyPressMsg) (connectionsModel, tea.
 // cancel pairs so native platform embedders can render them as
 // buttons rather than relying on inline `y/n` prompts.
 func (m connectionsModel) Actions() []Action {
+	if m.selecting {
+		// Mirror the loading view: no actionable surface while the
+		// connect handoff is in flight.
+		return nil
+	}
 	switch m.subState {
 	case subStateConnDeleteConfirm:
 		return []Action{
@@ -660,6 +687,17 @@ func (m *connectionsModel) setSize(w, h int) {
 }
 
 func (m connectionsModel) View() string {
+	if m.selecting {
+		// Pinned during the synchronous handoff to the AppModel
+		// connect flow. viewConnecting takes over within a tick;
+		// this view exists so the list doesn't stay rendered (and
+		// inviting more keypresses) during that transition.
+		name := m.selectingName
+		if name == "" {
+			name = "connection"
+		}
+		return fmt.Sprintf("\n  Connecting to %s...\n", name)
+	}
 	switch m.subState {
 	case subStateConnForm:
 		return m.viewForm()
