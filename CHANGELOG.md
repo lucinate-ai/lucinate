@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-05-09
+### Added
+- feat(crons): add duplicate action to cron job list
+- feat(openai): implement local session compaction via summarisation
+
+### Changed
+- docs: refresh cron detail keybindings and transcript esc note
+
+### Fixed
+- fix(crons): send agentTurn payload as message and wrap form errors
+- fix(tui): rebind cron run-now to ! and show triggering ack
+- fix(tui): return to cron detail on esc from transcript view
+
 ## [1.11.0] - 2026-05-06
 ### Added
 - feat(cli): add short flag aliases for chat and send subcommands

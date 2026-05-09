@@ -15,9 +15,18 @@ import (
 )
 
 // pendingConfirmation holds a deferred action awaiting user confirmation.
+//
+// runningStatus, when non-empty, is appended as a pending system row
+// after the user confirms — the renderer animates a spinner glyph next
+// to it so the user sees that something is in flight (used by /compact
+// and /reset, whose actions can take seconds against slower backends).
+// The handler that consumes the action's result is responsible for
+// flipping the pending flag off and replacing the placeholder content
+// with the final outcome message.
 type pendingConfirmation struct {
-	prompt string
-	action func() tea.Cmd
+	prompt        string
+	runningStatus string
+	action        func() tea.Cmd
 }
 
 // slashCommands is the list of available slash commands for autocomplete.
@@ -189,7 +198,8 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		}
 		sessionKey := m.sessionKey
 		m.pendingConfirm = &pendingConfirmation{
-			prompt: "Compact session context? This summarises older messages to reduce token usage. (y/n)",
+			prompt:        "Compact session context? This summarises older messages to reduce token usage. (y/n)",
+			runningStatus: "Compacting session...",
 			action: func() tea.Cmd {
 				return func() tea.Msg {
 					err := compact.SessionCompact(context.Background(), sessionKey)
@@ -208,7 +218,8 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		sessionKey := m.sessionKey
 		agentID := m.agentID
 		m.pendingConfirm = &pendingConfirmation{
-			prompt: "Clear this session? This permanently deletes all messages and starts fresh. (y/n)",
+			prompt:        "Clear this session? This permanently deletes all messages and starts fresh. (y/n)",
+			runningStatus: "Clearing session...",
 			action: func() tea.Cmd {
 				return func() tea.Msg {
 					if err := b.SessionDelete(context.Background(), sessionKey); err != nil {

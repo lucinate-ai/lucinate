@@ -267,6 +267,16 @@ type cronsModel struct {
 	runs        []protocol.CronRunLogEntry
 	runsLoading bool
 	runsErr     error
+	// running is set the moment "Run now" is triggered and cleared when
+	// the gateway acknowledges. It exists so the detail view can render
+	// a "triggering..." banner immediately, before the round-trip
+	// completes — without it the user has no signal the keystroke landed.
+	running bool
+	// runStatus is a transient one-line ack rendered in the detail view
+	// after cronJobRanMsg arrives ("Run triggered." / error). It is
+	// cleared on the next refresh / navigation.
+	runStatus string
+	runFailed bool
 
 	// Form substate.
 	form cronForm
@@ -459,10 +469,14 @@ func (m cronsModel) Update(msg tea.Msg) (cronsModel, tea.Cmd) {
 		return m, m.loadJobs()
 
 	case cronJobRanMsg:
+		m.running = false
 		if msg.err != nil {
-			m.err = msg.err
+			m.runFailed = true
+			m.runStatus = fmt.Sprintf("Run failed: %v", msg.err)
 			return m, nil
 		}
+		m.runFailed = false
+		m.runStatus = "Run triggered."
 		m.runsLoading = true
 		var refreshRuns tea.Cmd
 		if m.selectedID != "" {
@@ -546,6 +560,9 @@ func (m cronsModel) handleListKey(msg tea.KeyPressMsg) (cronsModel, tea.Cmd) {
 		m.runs = nil
 		m.runsErr = nil
 		m.runsLoading = true
+		m.runStatus = ""
+		m.runFailed = false
+		m.running = false
 		return m, m.loadRuns(item.job.ID)
 	}
 	for _, a := range m.Actions() {
@@ -620,6 +637,9 @@ func (m cronsModel) listActions() []Action {
 	var actions []Action
 	if !m.loading && m.err == nil {
 		actions = append(actions, Action{ID: "new", Label: "New job", Key: "n"})
+		if len(m.list.Items()) > 0 {
+			actions = append(actions, Action{ID: "duplicate", Label: "Duplicate", Key: "d"})
+		}
 	}
 	if m.filterAgentID != "" {
 		label := "Show all agents"
@@ -640,7 +660,11 @@ func (m cronsModel) detailActions() []Action {
 	job, ok := m.findJob(m.selectedID)
 	var actions []Action
 	if ok {
-		actions = append(actions, Action{ID: "run", Label: "Run now", Key: "R"})
+		// Bound to "!" rather than "R" because the case-sensitive pair
+		// (R=run, r=refresh) was easy to misfire — terminals that
+		// don't report shift on letter keys would land on refresh
+		// when the user expected run.
+		actions = append(actions, Action{ID: "run", Label: "Run now", Key: "!"})
 		toggleLabel := "Disable"
 		if !job.Enabled {
 			toggleLabel = "Enable"
@@ -679,6 +703,8 @@ func (m cronsModel) TriggerAction(id string) (cronsModel, tea.Cmd) {
 		m.sizePayloadTextarea()
 		m.subset = cronSubForm
 		return m, m.form.name.Focus()
+	case "duplicate":
+		return m.actionDuplicate()
 	case "run":
 		return m.actionRun()
 	case "toggle":
@@ -728,6 +754,8 @@ func (m cronsModel) actionRefresh() (cronsModel, tea.Cmd) {
 		}
 		m.runsLoading = true
 		m.loading = true
+		m.runStatus = ""
+		m.runFailed = false
 		return m, tea.Batch(m.loadJobs(), m.loadRuns(m.selectedID))
 	}
 	return m, nil
@@ -738,6 +766,15 @@ func (m cronsModel) actionRun() (cronsModel, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	if m.running {
+		// Swallow repeat presses while the previous trigger is still
+		// in flight — otherwise the gateway would receive duplicate
+		// run-now requests for a single keystroke burst.
+		return m, nil
+	}
+	m.running = true
+	m.runStatus = ""
+	m.runFailed = false
 	cron := m.cron
 	id := job.ID
 	return m, func() tea.Msg {
@@ -775,6 +812,26 @@ func (m cronsModel) actionEdit() (cronsModel, tea.Cmd) {
 		// Render the form anyway so the user sees the explanation; the
 		// save action is suppressed while the unsupported banner is up.
 		form.unsupported = err
+	}
+	m.form = form
+	m.sizePayloadTextarea()
+	m.subset = cronSubForm
+	return m, m.form.name.Focus()
+}
+
+// actionDuplicate opens the form pre-populated from the highlighted
+// list item, but in create mode so submission goes through CronAdd.
+// Triggered from the list substate ("d"); the source job is read from
+// m.list.SelectedItem rather than m.selectedID, which is only set
+// after entering the detail view.
+func (m cronsModel) actionDuplicate() (cronsModel, tea.Cmd) {
+	item, ok := m.list.SelectedItem().(cronItem)
+	if !ok {
+		return m, nil
+	}
+	form, banner := newDuplicateForm(item.job)
+	if banner != "" {
+		form.unsupported = banner
 	}
 	m.form = form
 	m.sizePayloadTextarea()
@@ -839,11 +896,14 @@ func hasTranscriptContent(job protocol.CronJob, runs []protocol.CronRunLogEntry)
 
 // cronPayloadText returns the human-authored prompt for an agentTurn
 // cron job, falling back across the union fields the gateway uses.
+// Message is the canonical field for agentTurn; Text remains as a
+// fallback for historical jobs (and is the canonical field for the
+// systemEvent kind, which the form does not surface).
 func cronPayloadText(job protocol.CronJob) string {
-	if t := strings.TrimSpace(job.Payload.Text); t != "" {
-		return t
+	if m := strings.TrimSpace(job.Payload.Message); m != "" {
+		return m
 	}
-	return strings.TrimSpace(job.Payload.Message)
+	return strings.TrimSpace(job.Payload.Text)
 }
 
 // -----------------------------------------------------------------------------
@@ -890,18 +950,51 @@ func newCreateForm() cronForm {
 // returned banner string is non-empty and the caller should disable the
 // save path.
 func newEditForm(job protocol.CronJob) (cronForm, string) {
-	f := newCreateForm()
+	f, unsupported := populateFormFromJob(job)
 	f.mode = "edit"
 	f.editingID = job.ID
 	f.name.SetValue(job.Name)
+	if unsupported != "" {
+		unsupported = strings.Replace(unsupported, "{action}", "Edit", 1)
+	}
+	return f, unsupported
+}
+
+// newDuplicateForm pre-populates a create-mode form from an existing
+// job. Like the edit form it copies every field the TUI models, but
+// leaves editingID empty so submission goes through CronAdd rather than
+// CronUpdate. The name is prefixed with "Copy of " so the duplicate is
+// distinguishable in the list before the user edits it.
+func newDuplicateForm(job protocol.CronJob) (cronForm, string) {
+	f, unsupported := populateFormFromJob(job)
+	// mode stays "create" and editingID stays "" so submitForm -> CronAdd.
+	f.name.SetValue(duplicateName(job.Name))
+	if unsupported != "" {
+		unsupported = strings.Replace(unsupported, "{action}", "Duplicate", 1)
+	}
+	return f, unsupported
+}
+
+// populateFormFromJob copies every form-modelled field off a job into a
+// fresh create-mode form. Shared between the edit and duplicate flows
+// because the only differences between them are mode/editingID and the
+// name handling. The unsupported banner uses a "{action}" placeholder
+// the caller swaps in so the wording matches whichever flow opened the
+// form.
+func populateFormFromJob(job protocol.CronJob) (cronForm, string) {
+	f := newCreateForm()
 	f.description.SetValue(job.Description)
 	f.cronExpr.SetValue(job.Schedule.Expr)
 	f.timezone.SetValue(job.Schedule.Tz)
 	f.agentID.SetValue(job.AgentID)
 	f.model.SetValue(job.Payload.Model)
-	f.payloadText.SetValue(job.Payload.Text)
+	// Prefer Message because it is the canonical agentTurn prompt field
+	// (the gateway schema only accepts `message` for that kind). Text is
+	// left as a fallback for any historical jobs that still carry the
+	// prompt in the systemEvent-style `text` field.
+	f.payloadText.SetValue(job.Payload.Message)
 	if f.payloadText.Value() == "" {
-		f.payloadText.SetValue(job.Payload.Message)
+		f.payloadText.SetValue(job.Payload.Text)
 	}
 	if job.SessionTarget != "" {
 		f.sessionTarget = job.SessionTarget
@@ -922,12 +1015,22 @@ func newEditForm(job protocol.CronJob) (cronForm, string) {
 
 	var unsupported string
 	if job.Schedule.Kind != "" && job.Schedule.Kind != "cron" {
-		unsupported = fmt.Sprintf("Edit not supported for schedule kind %q. Use the openclaw CLI.", job.Schedule.Kind)
+		unsupported = fmt.Sprintf("{action} not supported for schedule kind %q. Use the openclaw CLI.", job.Schedule.Kind)
 	}
 	if job.Payload.Kind != "" && job.Payload.Kind != "agentTurn" && unsupported == "" {
-		unsupported = fmt.Sprintf("Edit not supported for payload kind %q. Use the openclaw CLI.", job.Payload.Kind)
+		unsupported = fmt.Sprintf("{action} not supported for payload kind %q. Use the openclaw CLI.", job.Payload.Kind)
 	}
 	return f, unsupported
+}
+
+// duplicateName builds the cloned job's name. Empty names are passed
+// through so the form-level "name is required" validation catches the
+// case rather than producing a spurious "Copy of " placeholder.
+func duplicateName(original string) string {
+	if original == "" {
+		return ""
+	}
+	return "Copy of " + original
 }
 
 func (m cronsModel) handleFormKey(msg tea.KeyPressMsg) (cronsModel, tea.Cmd) {
@@ -1066,6 +1169,10 @@ func (m cronsModel) submitForm() (cronsModel, tea.Cmd) {
 		m.form.err = fmt.Errorf("cron expression is required")
 		return m, nil
 	}
+	if m.form.payloadText.Value() == "" {
+		m.form.err = fmt.Errorf("payload text is required")
+		return m, nil
+	}
 	m.form.err = nil
 	m.form.saving = true
 	cron := m.cron
@@ -1099,9 +1206,13 @@ func buildAddParams(f cronForm) protocol.CronAddParams {
 			Tz:   f.timezone.Value(),
 		},
 		Payload: protocol.CronPayload{
-			Kind:  "agentTurn",
-			Text:  f.payloadText.Value(),
-			Model: f.model.Value(),
+			Kind: "agentTurn",
+			// agentTurn carries the prompt in `message`. The schema's
+			// `additionalProperties: false` rejects `text` (which is the
+			// systemEvent payload's prompt field), so use the wire-correct
+			// field for this kind.
+			Message: f.payloadText.Value(),
+			Model:   f.model.Value(),
 		},
 		Delivery: buildDelivery(f),
 	}
@@ -1131,9 +1242,11 @@ func buildJobPatchMap(f cronForm) map[string]any {
 			"tz":   f.timezone.Value(),
 		},
 		"payload": map[string]any{
-			"kind":  "agentTurn",
-			"text":  f.payloadText.Value(),
-			"model": f.model.Value(),
+			"kind": "agentTurn",
+			// See buildAddParams for the kind/field-name rationale: agentTurn
+			// schemas reject `text` outright, so we send `message`.
+			"message": f.payloadText.Value(),
+			"model":   f.model.Value(),
 		},
 		"agentId": f.agentID.Value(),
 		"enabled": f.enabled,
@@ -1210,7 +1323,7 @@ func (m cronsModel) viewList() string {
 	if m.err != nil {
 		var b strings.Builder
 		b.WriteString("\n")
-		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.err)))
+		b.WriteString(renderErrorLine(m.err.Error(), m.width))
 		b.WriteString("\n\n")
 		b.WriteString(hints)
 		b.WriteString("\n")
@@ -1258,6 +1371,18 @@ func (m cronsModel) viewDetail() string {
 	}
 	b.WriteString("\n\n")
 
+	switch {
+	case m.running:
+		b.WriteString(statusStyle.Render("  Triggering run..."))
+		b.WriteString("\n\n")
+	case m.runFailed && m.runStatus != "":
+		b.WriteString(errorStyle.Render("  " + m.runStatus))
+		b.WriteString("\n\n")
+	case m.runStatus != "":
+		b.WriteString(statusStyle.Render("  " + m.runStatus))
+		b.WriteString("\n\n")
+	}
+
 	rows := [][2]string{
 		{"Schedule", formatSchedule(job.Schedule)},
 		{"Description", orDash(job.Description)},
@@ -1274,10 +1399,7 @@ func (m cronsModel) viewDetail() string {
 	}
 	b.WriteString("\n")
 	b.WriteString("  Payload:\n")
-	payload := job.Payload.Text
-	if payload == "" {
-		payload = job.Payload.Message
-	}
+	payload := cronPayloadText(job)
 	if payload == "" {
 		payload = "—"
 	}
@@ -1292,7 +1414,7 @@ func (m cronsModel) viewDetail() string {
 	case m.runsLoading:
 		b.WriteString("  Loading...\n")
 	case m.runsErr != nil:
-		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.runsErr)))
+		b.WriteString(renderErrorLine(m.runsErr.Error(), m.width))
 		b.WriteString("\n")
 	case len(m.runs) == 0:
 		b.WriteString("  No run log entries yet.\n")
@@ -1319,7 +1441,8 @@ func (m cronsModel) viewForm() string {
 	b.WriteString("\n\n")
 
 	if m.form.unsupported != "" {
-		b.WriteString(errorStyle.Render("  " + m.form.unsupported))
+		wrapped := wordWrap("  "+m.form.unsupported, m.width)
+		b.WriteString(errorStyle.Render(indentMultiline(wrapped, "  ")))
 		b.WriteString("\n\n")
 	}
 
@@ -1351,7 +1474,7 @@ func (m cronsModel) viewForm() string {
 	}
 
 	if m.form.err != nil {
-		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.form.err)))
+		b.WriteString(renderErrorLine(m.form.err.Error(), m.width))
 		b.WriteString("\n\n")
 	}
 	if m.form.saving {

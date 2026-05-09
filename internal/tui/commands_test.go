@@ -535,6 +535,31 @@ func TestSlashCommand_Reset_SetsConfirmation(t *testing.T) {
 	}
 }
 
+// TestSlashCommand_Compact_SetsRunningStatus pins the runningStatus
+// hookup that drives the spinner while compaction is in flight. The
+// confirmation prompt itself is no-spinner; the running placeholder
+// is appended only after the user confirms (covered separately in
+// TestPendingConfirm_AppendsRunningStatusOnConfirm).
+func TestSlashCommand_Compact_SetsRunningStatus(t *testing.T) {
+	m := newSlashTestModel()
+	if _, _ = m.handleSlashCommand("/compact"); m.pendingConfirm == nil {
+		t.Fatal("expected pendingConfirm")
+	}
+	if m.pendingConfirm.runningStatus == "" {
+		t.Errorf("expected /compact to set a runningStatus so the spinner ticks during the action")
+	}
+}
+
+func TestSlashCommand_Reset_SetsRunningStatus(t *testing.T) {
+	m := newSlashTestModel()
+	if _, _ = m.handleSlashCommand("/reset"); m.pendingConfirm == nil {
+		t.Fatal("expected pendingConfirm")
+	}
+	if m.pendingConfirm.runningStatus == "" {
+		t.Errorf("expected /reset to set a runningStatus so the spinner ticks during the action")
+	}
+}
+
 func TestSlashCommand_Help_IncludesNewCommands(t *testing.T) {
 	m := newSlashTestModel()
 	m.handleSlashCommand("/help")

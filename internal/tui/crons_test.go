@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/a3tai/openclaw-go/protocol"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func newTestCronsModel(t *testing.T) (cronsModel, *fakeBackend) {
@@ -292,8 +294,13 @@ func TestCronsForm_BuildsCronAddParams(t *testing.T) {
 	if params.Schedule.Kind != "cron" || params.Schedule.Expr != "0 9 * * *" || params.Schedule.Tz != "Europe/London" {
 		t.Errorf("Schedule: %+v", params.Schedule)
 	}
-	if params.Payload.Kind != "agentTurn" || params.Payload.Text != "Please generate today's report." {
+	if params.Payload.Kind != "agentTurn" || params.Payload.Message != "Please generate today's report." {
 		t.Errorf("Payload: %+v", params.Payload)
+	}
+	// agentTurn schemas reject `text` (additionalProperties=false), so the
+	// prompt must travel as `message` and `text` must remain empty.
+	if params.Payload.Text != "" {
+		t.Errorf("Payload.Text should be empty for agentTurn, got %q", params.Payload.Text)
 	}
 	if params.Payload.Model != "claude-opus-4-7" {
 		t.Errorf("Payload.Model: %q", params.Payload.Model)
@@ -435,6 +442,244 @@ func TestCronsForm_PrePopulatesModelAndDelivery(t *testing.T) {
 	}
 }
 
+func TestCronsDuplicate_FormPrePopulatesFromJob(t *testing.T) {
+	job := protocol.CronJob{
+		ID:            "job-1",
+		Name:          "Daily report",
+		Description:   "Generate today's report",
+		AgentID:       "agent-1",
+		Enabled:       true,
+		SessionTarget: "main",
+		WakeMode:      "now",
+		Schedule:      protocol.CronSchedule{Kind: "cron", Expr: "0 9 * * *", Tz: "Europe/London"},
+		Payload:       protocol.CronPayload{Kind: "agentTurn", Text: "Generate report.", Model: "claude-opus-4-7"},
+		Delivery:      &protocol.CronDelivery{Mode: "announce", Channel: "slack:#alerts"},
+	}
+	form, banner := newDuplicateForm(job)
+	if banner != "" {
+		t.Fatalf("unexpected unsupported banner: %q", banner)
+	}
+	if form.mode != "create" {
+		t.Errorf("expected duplicate to stay in create mode, got %q", form.mode)
+	}
+	if form.editingID != "" {
+		t.Errorf("expected empty editingID so submit goes through CronAdd, got %q", form.editingID)
+	}
+	if got, want := form.name.Value(), "Copy of Daily report"; got != want {
+		t.Errorf("name: got %q, want %q", got, want)
+	}
+	if got := form.description.Value(); got != "Generate today's report" {
+		t.Errorf("description: %q", got)
+	}
+	if got := form.cronExpr.Value(); got != "0 9 * * *" {
+		t.Errorf("cronExpr: %q", got)
+	}
+	if got := form.timezone.Value(); got != "Europe/London" {
+		t.Errorf("timezone: %q", got)
+	}
+	if got := form.agentID.Value(); got != "agent-1" {
+		t.Errorf("agentID: %q", got)
+	}
+	if got := form.model.Value(); got != "claude-opus-4-7" {
+		t.Errorf("model: %q", got)
+	}
+	if got := form.payloadText.Value(); got != "Generate report." {
+		t.Errorf("payloadText: %q", got)
+	}
+	if form.sessionTarget != "main" {
+		t.Errorf("sessionTarget: %q", form.sessionTarget)
+	}
+	if form.wakeMode != "now" {
+		t.Errorf("wakeMode: %q", form.wakeMode)
+	}
+	if form.deliveryMode != "announce" {
+		t.Errorf("deliveryMode: %q", form.deliveryMode)
+	}
+	if got := form.deliveryTarget.Value(); got != "slack:#alerts" {
+		t.Errorf("deliveryTarget: %q", got)
+	}
+	if !form.enabled {
+		t.Error("enabled should be carried over")
+	}
+}
+
+func TestCronsDuplicate_RefusesUnsupportedScheduleKind(t *testing.T) {
+	job := protocol.CronJob{
+		ID:       "weird",
+		Name:     "Weird",
+		AgentID:  "agent-1",
+		Enabled:  true,
+		Schedule: protocol.CronSchedule{Kind: "every"},
+		Payload:  protocol.CronPayload{Kind: "agentTurn", Text: "X"},
+	}
+	_, banner := newDuplicateForm(job)
+	if banner == "" {
+		t.Fatal("expected unsupported banner for schedule.kind=every")
+	}
+	if !strings.Contains(banner, "Duplicate") {
+		t.Errorf("expected banner to mention Duplicate, got %q", banner)
+	}
+}
+
+func TestCronsKey_D_FromList_OpensDuplicateForm(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleListKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if m.subset != cronSubForm {
+		t.Fatalf("expected substate=form after d, got %v", m.subset)
+	}
+	if m.form.mode != "create" {
+		t.Errorf("expected create mode for duplicate, got %q", m.form.mode)
+	}
+	if m.form.editingID != "" {
+		t.Errorf("expected empty editingID, got %q", m.form.editingID)
+	}
+	if got := m.form.name.Value(); got != "Copy of Daily report" {
+		t.Errorf("name: %q", got)
+	}
+}
+
+func TestCronsDuplicate_SubmitDispatchesCronAdd(t *testing.T) {
+	m, fake := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleListKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if m.subset != cronSubForm {
+		t.Fatalf("expected form substate, got %v", m.subset)
+	}
+	_, cmd := m.submitForm()
+	if cmd == nil {
+		t.Fatal("expected a save cmd")
+	}
+	cmd()
+
+	if fake.lastCronAdd == nil {
+		t.Fatal("expected CronAdd to be invoked")
+	}
+	if fake.lastCronUpdateID != "" || fake.lastCronUpdateRaw != nil {
+		t.Errorf("expected duplicate to bypass CronUpdate path, got id=%q raw=%+v",
+			fake.lastCronUpdateID, fake.lastCronUpdateRaw)
+	}
+	if fake.lastCronAdd.Name != "Copy of Daily report" {
+		t.Errorf("CronAdd.Name: %q", fake.lastCronAdd.Name)
+	}
+	if fake.lastCronAdd.Schedule.Expr != "0 9 * * *" {
+		t.Errorf("CronAdd.Schedule.Expr: %q", fake.lastCronAdd.Schedule.Expr)
+	}
+}
+
+func TestCronsDuplicate_EscFromFormReturnsToList(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleListKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if m.subset != cronSubForm {
+		t.Fatalf("expected form substate, got %v", m.subset)
+	}
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.subset != cronSubList {
+		t.Errorf("expected esc from duplicate form to return to list, got %v", m.subset)
+	}
+}
+
+func TestCronsForm_AgentTurnPayloadUsesMessageNotText(t *testing.T) {
+	// Regression: agentTurn schema requires `message` and rejects `text`
+	// (additionalProperties=false). buildAddParams and buildJobPatchMap
+	// must put the prompt in message.
+	f := newCreateForm()
+	f.name.SetValue("Daily report")
+	f.cronExpr.SetValue("0 9 * * *")
+	f.payloadText.SetValue("Generate today's report.")
+
+	params := buildAddParams(f)
+	if params.Payload.Message != "Generate today's report." {
+		t.Errorf("CronAdd Payload.Message: got %q, want %q",
+			params.Payload.Message, "Generate today's report.")
+	}
+	if params.Payload.Text != "" {
+		t.Errorf("CronAdd Payload.Text should be empty for agentTurn, got %q",
+			params.Payload.Text)
+	}
+
+	f.editingID = "job-1"
+	f.mode = "edit"
+	patch := buildJobPatchMap(f)
+	payload := patch["payload"].(map[string]any)
+	if payload["message"] != "Generate today's report." {
+		t.Errorf("patch payload.message: got %#v", payload["message"])
+	}
+	if _, present := payload["text"]; present {
+		t.Errorf("patch payload should not include `text` for agentTurn, got %#v", payload)
+	}
+}
+
+func TestCronsForm_PrePopulatesFromMessageField(t *testing.T) {
+	// Jobs created via gateway/CLI carry the agentTurn prompt in
+	// Payload.Message — the form must pick that up so duplicate/edit
+	// don't show an empty payload field.
+	job := protocol.CronJob{
+		ID:            "job-1",
+		Name:          "Daily",
+		AgentID:       "agent-1",
+		Enabled:       true,
+		SessionTarget: "isolated",
+		WakeMode:      "now",
+		Schedule:      protocol.CronSchedule{Kind: "cron", Expr: "0 9 * * *"},
+		Payload:       protocol.CronPayload{Kind: "agentTurn", Message: "from gateway"},
+	}
+	form, _ := newDuplicateForm(job)
+	if got := form.payloadText.Value(); got != "from gateway" {
+		t.Errorf("payloadText: got %q, want %q", got, "from gateway")
+	}
+}
+
+func TestCronsForm_RefusesEmptyPayload(t *testing.T) {
+	m, fake := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleListKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m.form.payloadText.SetValue("")
+
+	m, cmd := m.submitForm()
+	if cmd != nil {
+		t.Fatal("expected submit to be refused with empty payload")
+	}
+	if m.form.err == nil || !strings.Contains(m.form.err.Error(), "payload") {
+		t.Errorf("expected payload-required error, got %v", m.form.err)
+	}
+	if fake.lastCronAdd != nil {
+		t.Errorf("CronAdd should not have been invoked, got %+v", fake.lastCronAdd)
+	}
+}
+
+func TestRenderErrorLine_WrapsLongMessage(t *testing.T) {
+	long := "cron.add: INVALID_REQUEST: invalid cron.add params: at /payload: must have required property 'text'; at /payload/kind: must be equal to constant"
+	out := renderErrorLine(long, 60)
+	for _, line := range strings.Split(out, "\n") {
+		stripped := ansi.Strip(line)
+		if len(stripped) > 60 {
+			t.Errorf("line exceeded width 60 (len=%d): %q", len(stripped), stripped)
+		}
+	}
+	if !strings.Contains(out, "Error:") {
+		t.Errorf("expected Error: prefix, got %q", out)
+	}
+}
+
+func TestRenderErrorLine_ZeroWidthPassesThrough(t *testing.T) {
+	out := renderErrorLine("boom", 0)
+	if !strings.Contains(out, "Error: boom") {
+		t.Errorf("expected unwrapped output to contain 'Error: boom', got %q", out)
+	}
+}
+
+func TestCronsListActions_DuplicateHiddenWhenEmpty(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: nil})
+	for _, a := range m.Actions() {
+		if a.ID == "duplicate" {
+			t.Fatalf("duplicate action should be hidden when list is empty; got %+v", a)
+		}
+	}
+}
+
 func TestCronsConfirmDelete_YesDispatchesRemove(t *testing.T) {
 	m, fake := newTestCronsModel(t)
 	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
@@ -507,6 +752,85 @@ func TestCronsTranscript_DispatchesRunLogContent(t *testing.T) {
 	}
 	if len(sel.runs) != 2 {
 		t.Errorf("expected 2 runs forwarded, got %d", len(sel.runs))
+	}
+}
+
+func TestCronsRunNow_KeyTriggersRunAndAcknowledges(t *testing.T) {
+	m, fake := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.subset != cronSubDetail {
+		t.Fatal("setup: expected detail substate")
+	}
+
+	// "!" is the unambiguous run-now binding (replaced "R" to avoid the
+	// case-collision with refresh).
+	m, cmd := m.handleKey(tea.KeyPressMsg{Code: '!', Text: "!"})
+	if cmd == nil {
+		t.Fatal("expected a cmd from !")
+	}
+	if !m.running {
+		t.Error("expected m.running=true while the run-now request is in flight")
+	}
+	view := m.View()
+	if !strings.Contains(view, "Triggering run...") {
+		t.Errorf("expected detail view to show Triggering banner, got:\n%s", view)
+	}
+
+	msg := cmd()
+	if _, ok := msg.(cronJobRanMsg); !ok {
+		t.Fatalf("expected cronJobRanMsg, got %T", msg)
+	}
+	if fake.lastCronRunID != "job-1" {
+		t.Errorf("expected CronRun on job-1, got %q", fake.lastCronRunID)
+	}
+
+	m, _ = m.Update(cronJobRanMsg{})
+	if m.running {
+		t.Error("expected m.running=false after ack")
+	}
+	if m.runStatus != "Run triggered." {
+		t.Errorf("expected runStatus ack, got %q", m.runStatus)
+	}
+	view = m.View()
+	if !strings.Contains(view, "Run triggered.") {
+		t.Errorf("expected detail view to show ack, got:\n%s", view)
+	}
+}
+
+func TestCronsRunNow_LowercaseRStillTriggersRefresh(t *testing.T) {
+	m, fake := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Drain the initial loadRuns so we can detect the refresh-triggered one.
+	m, _ = m.Update(cronRunsLoadedMsg{jobID: "job-1"})
+	fake.lastCronRunID = ""
+
+	_, cmd := m.handleKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd == nil {
+		t.Fatal("expected a cmd from r (refresh)")
+	}
+	if fake.lastCronRunID != "" {
+		t.Errorf("lowercase r must not trigger CronRun, got %q", fake.lastCronRunID)
+	}
+}
+
+func TestCronsRunNow_AckClearedOnNavigation(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: '!', Text: "!"})
+	m, _ = m.Update(cronJobRanMsg{})
+	if m.runStatus == "" {
+		t.Fatal("setup: expected runStatus to be set")
+	}
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// The ack handler sets loading=true to drive a refresh; let that
+	// settle so the list's enter handler isn't gated on loading.
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.runStatus != "" {
+		t.Errorf("expected runStatus cleared on re-entering detail, got %q", m.runStatus)
 	}
 }
 

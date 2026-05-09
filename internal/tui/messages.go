@@ -16,6 +16,7 @@ type chatMessage struct {
 	thinking      string // reasoning/intermediate thought content from the model
 	streaming     bool
 	awaitingDelta bool // true for the pre-response spinner placeholder, before any delta arrives
+	pending       bool // system-row in-progress marker; the renderer appends a spinner glyph until cleared
 	errMsg        string
 	rendered      bool  // true if content has been glamour-rendered (contains ANSI codes)
 	timestampMs   int64 // unix millis; only used by "separator" rows to label resume time
@@ -314,6 +315,13 @@ type showCronsMsg struct {
 
 // goBackFromCronsMsg signals the AppModel to return from the cron view.
 type goBackFromCronsMsg struct{}
+
+// goBackFromCronTranscriptMsg signals the AppModel to return from the
+// read-only cron transcript view (a chat model with transcript=true)
+// to the cron detail screen that opened it. The cronsModel's subset/
+// selectedID is preserved across the transcript hop, so resuming
+// viewCrons drops back into the right detail page.
+type goBackFromCronTranscriptMsg struct{}
 
 // cronsLoadedMsg is returned when the cron job list is fetched.
 type cronsLoadedMsg struct {

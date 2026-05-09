@@ -318,6 +318,34 @@ func TestChatModel_NoInitialMessage_NoDrain(t *testing.T) {
 	}
 }
 
+func TestChatModel_TranscriptEsc_ReturnsToCronDetail(t *testing.T) {
+	fb := newFakeBackend()
+	m := newChatModel(fb, "", "agent-id", "agent-id", "", config.DefaultPreferences(), true, "", "", false)
+	m.transcript = true
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected esc on transcript chat to emit a back cmd")
+	}
+	if _, ok := cmd().(goBackFromCronTranscriptMsg); !ok {
+		t.Errorf("expected goBackFromCronTranscriptMsg, got %T", cmd())
+	}
+}
+
+func TestChatModel_NonTranscriptEsc_DoesNothingWhenIdle(t *testing.T) {
+	fb := newFakeBackend()
+	m := newChatModel(fb, "session-key", "agent-id", "agent-id", "", config.DefaultPreferences(), false, "", "", false)
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		// A regular chat must not bubble a back signal on esc — that path
+		// is reserved for the transcript-mode model.
+		if _, ok := cmd().(goBackFromCronTranscriptMsg); ok {
+			t.Errorf("non-transcript esc must not emit goBackFromCronTranscriptMsg")
+		}
+	}
+}
+
 // TestNewChatModel_DefaultCursorMatchesBubblesPalette guards the
 // default branch of the gate: when the embedder hasn't asked for a
 // bright cursor (the desktop CLI case), the textarea is left on

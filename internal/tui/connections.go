@@ -711,7 +711,7 @@ func (m connectionsModel) viewList() string {
 	var b strings.Builder
 	if m.lastErr != nil {
 		b.WriteString("\n")
-		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.lastErr)))
+		b.WriteString(renderErrorLine(m.lastErr.Error(), m.width))
 		b.WriteString("\n")
 	}
 	if m.store == nil || len(m.store.Connections) == 0 {

@@ -680,6 +680,76 @@ func TestChatUpdate_SessionCompactedMsg_Success(t *testing.T) {
 	}
 }
 
+// TestChatUpdate_SessionCompactedMsg_ReplacesPendingPlaceholder verifies
+// that the pending spinner placeholder posted on confirmation is
+// rewritten in place rather than appended after — otherwise the user
+// would see "Compacting session..." stuck above "Session compacted."
+// instead of the placeholder turning into the outcome.
+func TestChatUpdate_SessionCompactedMsg_ReplacesPendingPlaceholder(t *testing.T) {
+	m := newTestChatModel()
+	m.messages = []chatMessage{
+		{role: "system", content: "Confirmed."},
+		{role: "system", content: "Compacting session...", pending: true},
+	}
+
+	updated, _ := m.Update(sessionCompactedMsg{err: nil})
+
+	if len(updated.messages) != 2 {
+		t.Fatalf("expected placeholder rewritten in place (2 messages), got %d: %+v", len(updated.messages), updated.messages)
+	}
+	got := updated.messages[1]
+	if got.pending {
+		t.Errorf("placeholder still flagged pending after success — spinner would never stop")
+	}
+	if got.content != "Session compacted." {
+		t.Errorf("expected placeholder replaced with success line, got %q", got.content)
+	}
+}
+
+// TestChatUpdate_SessionCompactedMsg_ErrorReplacesPendingPlaceholder is
+// the symmetric error-path check: a failed compact must clear the
+// pending flag (so the spinner stops) and surface the error in place
+// of the placeholder content.
+func TestChatUpdate_SessionCompactedMsg_ErrorReplacesPendingPlaceholder(t *testing.T) {
+	m := newTestChatModel()
+	m.messages = []chatMessage{
+		{role: "system", content: "Compacting session...", pending: true},
+	}
+
+	updated, _ := m.Update(sessionCompactedMsg{err: errString("boom")})
+
+	if len(updated.messages) != 1 {
+		t.Fatalf("expected placeholder rewritten in place (1 message), got %d: %+v", len(updated.messages), updated.messages)
+	}
+	got := updated.messages[0]
+	if got.pending {
+		t.Errorf("placeholder still flagged pending after error — spinner would never stop")
+	}
+	if got.errMsg == "" || !strings.Contains(got.errMsg, "boom") {
+		t.Errorf("expected placeholder replaced with error message, got %+v", got)
+	}
+}
+
+// TestHasStreamingMessage_PendingSystemRow keeps the spinner ticking on
+// pending system rows (the /compact and /reset placeholders). Without
+// this branch the spinner would stop on the next tick because no
+// assistant or tool message is in flight.
+func TestHasStreamingMessage_PendingSystemRow(t *testing.T) {
+	m := newTestChatModel()
+	m.messages = []chatMessage{
+		{role: "user", content: "hi"},
+		{role: "assistant", content: "hello"},
+	}
+	if m.hasStreamingMessage() {
+		t.Error("precondition: no streaming/tool/pending rows should mean false")
+	}
+
+	m.messages = append(m.messages, chatMessage{role: "system", content: "Compacting session...", pending: true})
+	if !m.hasStreamingMessage() {
+		t.Error("expected pending system row to keep the spinner ticking")
+	}
+}
+
 func TestChatUpdate_SessionCompactedMsg_Error(t *testing.T) {
 	m := newTestChatModel()
 	updated, _ := m.Update(sessionCompactedMsg{err: errString("gateway error")})

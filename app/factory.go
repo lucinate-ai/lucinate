@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/lucinate-ai/lucinate/internal/backend"
 	hermesBackend "github.com/lucinate-ai/lucinate/internal/backend/hermes"
 	openaiBackend "github.com/lucinate-ai/lucinate/internal/backend/openai"
 	openclawBackend "github.com/lucinate-ai/lucinate/internal/backend/openclaw"
@@ -46,6 +47,21 @@ func (s *secretAwareHermesBackend) StoreAPIKey(key string) error {
 	}
 	return s.Backend.StoreAPIKey(key)
 }
+
+// Compile-time assertions that the auth-modal wrappers preserve every
+// capability sub-interface the embedded backend exposes. Go promotes
+// embedded methods, so the wrappers satisfy these interfaces "for
+// free" — but a future refactor that drops the embedding (e.g.
+// reaching for explicit forwarding only) would silently break the
+// TUI's `m.backend.(backend.CompactBackend)` style dispatch. These
+// asserts catch the regression at build time.
+var (
+	_ backend.Backend        = (*secretAwareOpenAIBackend)(nil)
+	_ backend.CompactBackend = (*secretAwareOpenAIBackend)(nil)
+	_ backend.APIKeyAuth     = (*secretAwareOpenAIBackend)(nil)
+	_ backend.Backend        = (*secretAwareHermesBackend)(nil)
+	_ backend.APIKeyAuth     = (*secretAwareHermesBackend)(nil)
+)
 
 // DefaultBackendFactory builds an unconnected backend for a stored
 // connection by dispatching on Connection.Type. Auth resolution mirrors

@@ -6,7 +6,7 @@ See [connections.md](connections.md) for the cross-backend connection lifecycle 
 
 ## Capabilities
 
-`Backend.Capabilities()` reports `AuthRecovery: AuthRecoveryAPIKey` and `AgentWorkspace: false`. Everything else is off — `/status`, `/compact`, `/think`, `/stats`, and `!!` render a "not available on this connection" system message.
+`Backend.Capabilities()` reports `AuthRecovery: AuthRecoveryAPIKey`, `AgentManagement: true`, and `SessionCompact: true` (the local summarisation pass — see [Compaction](#compaction) below). Everything else is off — `/status`, `/think`, `/stats`, and `!!` render a "not available on this connection" system message.
 
 ### `/think` is currently a no-op
 
@@ -77,3 +77,15 @@ The chat layer passes the active skill catalog through `ChatSendParams.Skills`. 
 ## Streaming
 
 `ChatSend` issues `POST /v1/chat/completions` with `stream: true` and parses the SSE response line-by-line, emitting `protocol.ChatEvent` for each `delta.content` chunk and a final event when `[DONE]` arrives. `ChatAbort` cancels the stored `context.CancelFunc` for the run, which terminates the in-flight HTTP request.
+
+## Compaction
+
+`/compact` runs locally — there is no gateway-side compactor, so `SessionCompact` issues a streaming `POST /v1/chat/completions` against the agent's configured model with a summarisation prompt and the older portion of the transcript as context. Deltas are accumulated into a string without touching the events channel, so the compaction is invisible to the chat view. The accumulated text is written back to `history.jsonl` as a single `role: "system"` message with `Summary: true`, followed by the most recent `compactKeepTail` messages preserved verbatim. `compactMinHistory` gates the no-op-when-too-small case (returns success without a network round-trip).
+
+Streaming (rather than non-streaming) is intentional: some Ollama setups, particularly with reasoning-capable models, return an empty `message.content` on the non-streaming path while the streamed `delta.content` deltas produce the actual answer. Reusing the streaming code path means /compact works across the same compatibility matrix the regular chat send already covers.
+
+The `Summary` flag is what distinguishes a compact-produced digest from the legacy "skip stored system messages" defence in `runStream`: messages with `Summary: true` are forwarded on every turn after compaction, while any other `role: "system"` line in `history.jsonl` is still ignored. `ChatHistory` mirrors the same rule so the digest renders in the chat view rather than vanishing on history refresh.
+
+A previously-compacted session that gets compacted again folds the existing summary into the new one — `renderTranscriptForCompact` includes prior summaries under a `summary:` label so multiple compactions don't lose detail accumulated across earlier passes.
+
+The transcript is dumped as labelled text inside a single `role: user` message, not forwarded as the literal user/assistant message sequence. Forwarding raw turns ends the request on `role: assistant` — and OpenAI-compatible servers (Ollama, vLLM, llama.cpp) interpret that as "the conversation is complete" and respond with empty content, defeating the summarisation. Wrapping the transcript in a user turn lets the model treat it as input data and produce the summary as a normal reply.
