@@ -57,7 +57,9 @@ The list view loads on `Init()` via `loadJobs()`, which calls `CronsList(Enabled
 - Next run, Last run (with status), Payload body
 - Run history table
 
-Actions: `R` run-now, `t` toggle enable, `e` edit, `x` delete (→ confirm substate), `T` open a read-only transcript reconstructed from the run log (see [Transcript view](#transcript-view)), `r` refresh, `esc` back to list.
+Actions: `!` run-now, `t` toggle enable, `e` edit, `x` delete (→ confirm substate), `T` open a read-only transcript reconstructed from the run log (see [Transcript view](#transcript-view)), `r` refresh, `esc` back to list.
+
+Run-now is bound to `!` rather than the more obvious `R` because the case-sensitive pair (`R` run vs. `r` refresh) was a misfire trap on terminals that don't preserve shift on letter keys. The detail view renders a transient `Triggering run...` banner the moment `!` fires, replaced by `Run triggered.` (or `Run failed: <err>`) once `cronJobRanMsg` arrives — a `running` flag on `cronsModel` gates duplicate keystrokes while the request is in flight.
 
 ### Transcript view
 
@@ -66,6 +68,8 @@ Actions: `R` run-now, `t` toggle enable, `e` edit, `x` delete (→ confirm subst
 The builder walks `m.runs` (newest-first as returned by `cron.runs sortDir=desc`) in reverse and emits, per run: a separator with `RunAtMs`, a user turn with the cron's `payload.Text` / `payload.Message`, and either an assistant turn with `Summary` (Glamour-rendered when it looks like markdown) or an `errMsg` assistant turn with `Error`. Repeating the payload per run is intentional — each run is an independent invocation of the same prompt, and the structure makes per-run timing and outcome obvious.
 
 The action itself is gated by `hasTranscriptContent`: if no run carries a `Summary` or `Error`, the `T` entry is suppressed from `Actions()` so it doesn't dangle on jobs with nothing to show.
+
+The transcript chat view sets `chatModel.transcript = true`. With no input box to consume it, `Esc` would otherwise be a no-op, so the chat key handler emits `goBackFromCronTranscriptMsg` when the flag is set; `AppModel` switches state back to `viewCrons`, where `cronsModel.subset`/`selectedID` are preserved across the transcript hop, so the user lands back on the originating detail page.
 
 ## Form substate
 
