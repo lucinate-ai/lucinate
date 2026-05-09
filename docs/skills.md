@@ -72,9 +72,9 @@ The visible chat row shows the user-typed text. On history reload the rendered t
 
 ### Tab completion
 
-`completeSlashCommand(prefix)` matches built-in commands and skill names by prefix. The Tab handler in `chat.go` works on the slash token under the cursor — not just at the start of input — so `use /rev<TAB>` completes to `use /review`. `findSlashTokenAt(value, cursorByte)` (`commands.go`) locates the token and `setTextareaToValueWithCursor` performs the in-place replacement, repositioning the cursor at the end of the inserted completion.
+Skill names participate in the same completion menu as built-in slash commands. `matchingSlashCommands(prefix)` (`completion.go`) returns every match for the current prefix — built-ins in curated order, then skills — and the menu rendered between the viewport and input lists them all. Tab extends the input to the longest common prefix; if multiple skills share a prefix, repeated Tab cycles them (Shift+Tab cycles back). Mid-message completion still works: `use /rev<TAB>` resolves the slash token under the cursor regardless of position. See [commands.md → Tab completion](commands.md#tab-completion) for the cycle/LCP machinery.
 
-Completion only fires when the cursor sits at the end of the slash token (next character is whitespace or end-of-buffer); inserting mid-token would clobber the trailing characters.
+Completion only fires when the cursor sits at the end of the slash token (next character is whitespace or end-of-buffer); inserting mid-token would clobber the trailing characters and `findSlashTokenAt` returns ok=false.
 
 ## UI commands
 

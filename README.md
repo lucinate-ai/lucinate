@@ -123,7 +123,8 @@ Select an agent from the list to start chatting.
 | `Alt+Enter` | Insert newline |
 | `Ctrl+W` | Delete word |
 | `PgUp` / `PgDn` | Scroll chat history |
-| `Tab` | Autocomplete slash command |
+| `Tab` | Show slash-command menu, extend to common prefix, then cycle |
+| `Shift+Tab` | Cycle backward through matches |
 | `Esc` | Back to agent list |
 | `Ctrl+C` | Quit |
 
@@ -142,7 +143,7 @@ In the config view, use `Space` to toggle checkboxes and `←`/`→` to adjust n
 
 ## Commands
 
-Type these in the chat input. Tab autocompletes partial commands; after `/agent ` Tab also completes the agent name.
+Type these in the chat input. As soon as you type `/`, a menu shows every matching command and skill. Tab extends the input to the longest common prefix; press it again at the prefix to cycle through candidates (Shift+Tab to cycle back). The same menu and Tab cycling apply to agent names after `/agent `.
 
 | Command | Action |
 |---------|--------|

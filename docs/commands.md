@@ -50,13 +50,34 @@ Stats are loaded asynchronously via `client.SessionUsage()` on chat init and aft
 
 ## Tab completion
 
-`completeSlashCommand(prefix)` iterates the static `slashCommands` slice and then the loaded skill names. The first prefix match wins. Order in `slashCommands` is significant where one command is a prefix of another: `/agents` is listed before `/agent` and `/model` before `/models` so that tab-completing `/age` and `/mod` resolves to the longer-established command — extending a completion by one character is cheaper than backspacing.
+A live menu (rendered between the conversation viewport and the input) appears as soon as the cursor sits at the end of a completable token with at least one matching candidate. Two sources feed the same menu and the same Tab/Shift+Tab semantics:
 
-The Tab handler (`chat.go`) operates on the slash token at the cursor — not just at the start of input — so completion works mid-message and within multi-line input. `findSlashTokenAt(value, cursorByte)` walks back from the cursor to a `/` that is at the start of input or preceded by whitespace, requiring the cursor to sit at the end of the token (next character is whitespace or EOF). `setTextareaToValueWithCursor` performs the in-place replacement and repositions the cursor at the end of the inserted completion. `slashCommandHint(value, cursorByte)` returns the typed prefix and the suffix shown greyed-out in the input bar.
+- **Slash commands and skills** — `matchingSlashCommands(prefix)` (`completion.go`) returns built-ins from the static `slashCommands` slice in their curated order, followed by skill names. Source detection: `findSlashTokenAt(value, cursorByte)`.
+- **Agent names** — the argument of `/agent <name>`. `matchingAgentNames(prefix)` returns every loaded agent whose lowercased form has the prefix as a prefix, preserving each agent's original casing. Source detection: `findAgentArgAt(value, cursorByte)`, which treats the entire tail of the line after `/agent ` as the token (so names with spaces complete in one shot).
 
-### Agent name completion
+`completionAtCursor()` resolves the active source — slash commands take priority — and returns a `completionContext{start, cursorByte, prefix, candidates}`. The Tab handler dispatches a single `handleCompletionTab(ctx)` over this context, applying bash-style menu-complete semantics:
 
-After `/agent ` the next token is treated as an agent name and completed against the cached agent list. The chat model fetches the list once on init via `loadAgentNames()` and stores display names in `m.agentNames`; completion silently degrades to no-op if the list hasn't loaded yet or the backend errored. `findAgentArgAt(value, cursorByte)` recognises the argument context only when the cursor sits at end-of-line and the line begins with `/agent ` (single space); the entire tail of the line is the token, so agent names containing spaces are completed in one shot. `completeAgentName` does a case-insensitive prefix match — empty prefix completes to the first known agent. `agentNameHint` mirrors `slashCommandHint` and feeds the same greyed-out hint renderer.
+- One match → full completion in place.
+- Multiple matches with a longest common prefix beyond what the user typed → the input is extended up to that LCP. `longestCommonPrefixFold(strs)` computes a case-insensitive LCP using the first candidate's casing — agent names like `Main` and `Mail` collapse to `Mai`, slash candidates (already lowercase) behave identically to the byte-wise variant.
+- Multiple matches at the LCP → enter cycle mode. The first Tab snapshots the candidate list into `m.completion.cycleCandidates`, sets `cycleIndex = 0`, and replaces the input with the first candidate. Subsequent Tab presses advance the index modulo the snapshot length; Shift+Tab decrements with the same wraparound. The snapshot persists across presses because Tab returns early before `refreshCompletionMenu` runs.
+
+Any non-Tab keystroke routes through `refreshCompletionMenu`, which clears `cycling` and recomputes `candidates` from the current textarea contents via `completionAtCursor()`. The menu auto-hides when no source applies (whitespace breaks a slash token, cursor leaves end-of-line in the agent-arg context, the input is cleared, or the message is sent — `Reset()` calls in the Enter handler explicitly invoke `refreshCompletionMenu` so the menu doesn't outlive the input).
+
+The curated order in `slashCommands` (e.g. `/agents` before `/agent`, `/model` before `/models`) now only breaks ties for the inline ghost-hint and the legacy `completeSlashCommand` callers — Tab uses LCP, so the order no longer steers it.
+
+`setTextareaToValueWithCursor` performs the in-place replacement and repositions the cursor at the end of the inserted text.
+
+### Inline ghost-hint fallback
+
+`slashCommandHint` and `agentNameHint` still drive a single-line greyed-out hint in the help bar — but only as a fallback for short terminals where the menu can't render. With the menu visible, the help line switches to `Tab: extend · Shift+Tab: back · N matches`.
+
+### Layout
+
+`chatModel.baseViewportHeight` records the viewport height with the menu hidden; `applyLayout()` shrinks the viewport by `menuRowsToRender()` whenever menu state changes, so the conversation pane reflows cleanly. The menu suppresses itself entirely when the baseline cannot leave at least `completionMenuViewportFloor` rows for the conversation — Tab still does LCP extension on the underlying state. Candidate counts above `completionMenuMaxRows` collapse the tail into a `+N more` line.
+
+### Agent name source
+
+The chat model fetches the agent list once on init via `loadAgentNames()` and stores display names in `m.agentNames`; completion silently degrades to a no-op when the list hasn't loaded yet or the backend errored (`matchingAgentNames` returns nil, so `completionAtCursor` reports an empty candidate list and the menu stays hidden). `findAgentArgAt` recognises the argument context only when the cursor sits at end-of-line and the line begins with `/agent ` (single space). Empty prefix matches every agent — Tab on `/agent ` opens the menu listing the full roster, with the LCP/cycle flow taking over from there.
 
 ## Confirmation pattern
 

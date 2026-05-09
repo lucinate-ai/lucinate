@@ -8,7 +8,8 @@
 | Alt+Enter | Insert newline |
 | Ctrl+W | Delete word backward |
 | Up arrow (empty input) | Recall last sent message for editing |
-| Tab | Complete slash command or skill name |
+| Tab | Open slash menu, extend to longest common prefix, then cycle |
+| Shift+Tab | Cycle backward through slash-menu candidates |
 | Page Up / Page Down | Scroll message history |
 | Esc | Cancel in-progress response |
 
