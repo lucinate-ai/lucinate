@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 )
@@ -20,6 +21,26 @@ func newSlashTestModel() *chatModel {
 			{role: "user", content: "hello"},
 			{role: "assistant", content: "hi there"},
 		},
+	}
+}
+
+// newSlashTabTestModel produces a chatModel with a real textarea so the
+// completion-menu Tab tests can drive Update with key events. The
+// baseline newSlashTestModel leaves textarea zero-valued, which is fine
+// for the slash-command dispatch tests but not for cursor-aware code.
+func newSlashTabTestModel() *chatModel {
+	ta := textarea.New()
+	ta.Focus()
+	ta.SetWidth(80)
+	ta.SetHeight(inputHeight)
+	return &chatModel{
+		viewport:           viewport.New(),
+		textarea:           ta,
+		backend:            newFakeBackend(),
+		agentName:          "test",
+		width:              80,
+		height:             30,
+		baseViewportHeight: 20,
 	}
 }
 
@@ -685,5 +706,148 @@ func TestCompleteSlashCommand_IncludesSkills(t *testing.T) {
 	}
 	if got := m.completeSlashCommand("/sum"); got != "/summarise" {
 		t.Errorf("completeSlashCommand(%q) = %q, want %q", "/sum", got, "/summarise")
+	}
+}
+
+func tabKey() tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: tea.KeyTab}
+}
+
+func shiftTabKey() tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+}
+
+func TestTabCompletion_LCPExtendsMultiCandidate(t *testing.T) {
+	m := newSlashTabTestModel()
+	m.skills = []agentSkill{{Name: "example"}, {Name: "exams"}}
+	m.textarea.SetValue("/exa")
+	m.textarea.CursorEnd()
+
+	updated, _ := m.Update(tabKey())
+	if got := updated.textarea.Value(); got != "/exam" {
+		t.Errorf("after Tab: got %q, want %q", got, "/exam")
+	}
+	if updated.completion.cycling {
+		t.Error("expected cycling=false after LCP extension")
+	}
+	if !updated.completion.visible {
+		t.Error("expected menu visible after LCP extension")
+	}
+}
+
+func TestTabCompletion_FullOnSingleCandidate(t *testing.T) {
+	m := newSlashTabTestModel()
+	m.textarea.SetValue("/qu")
+	m.textarea.CursorEnd()
+
+	updated, _ := m.Update(tabKey())
+	if got := updated.textarea.Value(); got != "/quit" {
+		t.Errorf("after Tab: got %q, want %q", got, "/quit")
+	}
+	if updated.completion.cycling {
+		t.Error("expected cycling=false on single-candidate completion")
+	}
+}
+
+func TestTabCompletion_CycleAtLCP(t *testing.T) {
+	m := newSlashTabTestModel()
+	m.skills = []agentSkill{{Name: "example"}, {Name: "exams"}}
+	m.textarea.SetValue("/exa")
+	m.textarea.CursorEnd()
+
+	// First Tab: LCP extension to /exam.
+	updated, _ := m.Update(tabKey())
+	if got := updated.textarea.Value(); got != "/exam" {
+		t.Fatalf("Tab #1: got %q, want %q", got, "/exam")
+	}
+
+	// Second Tab: at LCP, start cycling, pick first candidate.
+	updated, _ = updated.Update(tabKey())
+	if got := updated.textarea.Value(); got != "/example" {
+		t.Fatalf("Tab #2: got %q, want %q", got, "/example")
+	}
+	if !updated.completion.cycling || updated.completion.cycleIndex != 0 {
+		t.Errorf("Tab #2: expected cycling=true index=0, got cycling=%v index=%d", updated.completion.cycling, updated.completion.cycleIndex)
+	}
+
+	// Third Tab: advance cycle.
+	updated, _ = updated.Update(tabKey())
+	if got := updated.textarea.Value(); got != "/exams" {
+		t.Fatalf("Tab #3: got %q, want %q", got, "/exams")
+	}
+
+	// Fourth Tab: wrap around.
+	updated, _ = updated.Update(tabKey())
+	if got := updated.textarea.Value(); got != "/example" {
+		t.Fatalf("Tab #4 (wrap): got %q, want %q", got, "/example")
+	}
+}
+
+func TestTabCompletion_ShiftTabCyclesBack(t *testing.T) {
+	m := newSlashTabTestModel()
+	m.skills = []agentSkill{{Name: "example"}, {Name: "exams"}}
+	m.textarea.SetValue("/exam")
+	m.textarea.CursorEnd()
+
+	// Tab from LCP enters cycle and selects /example.
+	updated, _ := m.Update(tabKey())
+	if got := updated.textarea.Value(); got != "/example" {
+		t.Fatalf("Tab: got %q, want %q", got, "/example")
+	}
+
+	// Shift+Tab from index 0 wraps to last (/exams).
+	updated, _ = updated.Update(shiftTabKey())
+	if got := updated.textarea.Value(); got != "/exams" {
+		t.Errorf("Shift+Tab: got %q, want %q", got, "/exams")
+	}
+}
+
+func TestTabCompletion_NonTabResetsCycle(t *testing.T) {
+	m := newSlashTabTestModel()
+	m.skills = []agentSkill{{Name: "example"}, {Name: "exams"}}
+	m.textarea.SetValue("/exam")
+	m.textarea.CursorEnd()
+
+	// Enter cycle.
+	updated, _ := m.Update(tabKey())
+	if !updated.completion.cycling {
+		t.Fatal("expected to be cycling after Tab at LCP")
+	}
+
+	// Any printable keypress should reset cycle state via refreshCompletionMenu.
+	updated, _ = updated.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if updated.completion.cycling {
+		t.Error("expected cycling=false after non-Tab keypress")
+	}
+}
+
+func TestCompletionMenu_HidesWhenTokenBroken(t *testing.T) {
+	m := newSlashTabTestModel()
+	m.textarea.SetValue("/h")
+	m.textarea.CursorEnd()
+
+	// Trigger a refresh by typing 'e' — textarea becomes "/he" with cursor
+	// at end, and "/he" is still a prefix of /help so the menu opens.
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if !updated.completion.visible {
+		t.Fatalf("expected menu visible at /he, got value=%q visible=%v", updated.textarea.Value(), updated.completion.visible)
+	}
+
+	// Typing a space breaks the slash-token boundary — cursor sits after
+	// whitespace, so findSlashTokenAt returns ok=false.
+	updated, _ = updated.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	if updated.completion.visible {
+		t.Errorf("expected menu hidden after space breaks the token, value=%q", updated.textarea.Value())
+	}
+}
+
+func TestTabCompletion_NoCandidatesIsNoOp(t *testing.T) {
+	m := newSlashTabTestModel()
+	m.textarea.SetValue("/zzz")
+	m.textarea.CursorEnd()
+
+	updated, _ := m.Update(tabKey())
+	if got := updated.textarea.Value(); got != "/zzz" {
+		t.Errorf("expected textarea unchanged, got %q", got)
 	}
 }

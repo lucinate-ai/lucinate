@@ -107,6 +107,12 @@ var (
 	helpStyle = lipgloss.NewStyle().
 			Foreground(subtle)
 
+	// Completion-menu highlight — applied to the row at the current
+	// cycle index when Tab is cycling through candidates.
+	completionMenuHighlightStyle = lipgloss.NewStyle().
+					Foreground(accent).
+					Bold(true)
+
 	// Connection status bar — a thin dim row above non-chat views
 	// telling the user which connection is in scope. The chat view
 	// folds the same info into its own header bar.

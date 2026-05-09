@@ -147,38 +147,40 @@ const spinnerInterval = 120 * time.Millisecond
 
 // chatModel is the chat view.
 type chatModel struct {
-	viewport        viewport.Model
-	textarea        textarea.Model
-	messages        []chatMessage
-	backend         backend.Backend
-	connName        string // active connection name, rendered in the header bar
-	sessionKey      string
-	agentID         string
-	agentName       string
-	sending         bool
-	runID           string // active run ID for cancellation
-	pendingMessages []string
-	width           int
-	height          int
-	renderer        *glamour.TermRenderer
-	stats           *sessionStats
-	modelID         string
-	promptTokens    int // input + cache read + cache write for the latest turn (a per-session snapshot, not cumulative); 0 until first sessions.list refresh
-	contextWindow   int // model context capacity for the active session; 0 when unknown
-	skills          []agentSkill
-	agentNames      []string // populated asynchronously by loadAgentNames; powers /agent <TAB> completion
-	spinnerFrame    int
-	spinnerTicking  bool
-	prefs           config.Preferences
-	pendingConfirm  *pendingConfirmation
-	historyLimit    int
-	historyLoading  bool   // true while the initial history fetch is in flight; gates the placeholder in updateViewport
-	thinkingLevel   string // current thinking level; "" means not set / using gateway default
-	connState       ConnStateMsg
-	hideInput       bool   // when true, the textarea + help line are not rendered; the textarea model still receives input bytes
-	transcript      bool   // true when the model is rendering a cron run-log transcript: read-only, esc returns to the cron detail view that opened it
-	terminalFocused bool   // tracks tea.FocusMsg/BlurMsg so the completion bell only rings when the user is looking elsewhere
-	updateLatest    string // populated by AppModel when the startup check finds a newer release; rendered as a header badge
+	viewport           viewport.Model
+	textarea           textarea.Model
+	messages           []chatMessage
+	backend            backend.Backend
+	connName           string // active connection name, rendered in the header bar
+	sessionKey         string
+	agentID            string
+	agentName          string
+	sending            bool
+	runID              string // active run ID for cancellation
+	pendingMessages    []string
+	width              int
+	height             int
+	renderer           *glamour.TermRenderer
+	stats              *sessionStats
+	modelID            string
+	promptTokens       int // input + cache read + cache write for the latest turn (a per-session snapshot, not cumulative); 0 until first sessions.list refresh
+	contextWindow      int // model context capacity for the active session; 0 when unknown
+	skills             []agentSkill
+	agentNames         []string // populated asynchronously by loadAgentNames; powers /agent <TAB> completion
+	completion         completionMenuState
+	baseViewportHeight int // viewport height with the completion menu hidden; setSize updates it, applyLayout subtracts the menu's footprint when visible
+	spinnerFrame       int
+	spinnerTicking     bool
+	prefs              config.Preferences
+	pendingConfirm     *pendingConfirmation
+	historyLimit       int
+	historyLoading     bool   // true while the initial history fetch is in flight; gates the placeholder in updateViewport
+	thinkingLevel      string // current thinking level; "" means not set / using gateway default
+	connState          ConnStateMsg
+	hideInput          bool   // when true, the textarea + help line are not rendered; the textarea model still receives input bytes
+	transcript         bool   // true when the model is rendering a cron run-log transcript: read-only, esc returns to the cron detail view that opened it
+	terminalFocused    bool   // tracks tea.FocusMsg/BlurMsg so the completion bell only rings when the user is looking elsewhere
+	updateLatest       string // populated by AppModel when the startup check finds a newer release; rendered as a header badge
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -611,14 +613,26 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			value := m.textarea.Value()
 			cursorByte := textareaCursorByteOffset(&m.textarea)
 			if start, prefix, ok := findSlashTokenAt(value, cursorByte); ok {
-				if match := m.completeSlashCommand(prefix); match != "" && match != strings.ToLower(prefix) {
-					newValue := value[:start] + match + value[cursorByte:]
-					setTextareaToValueWithCursor(&m.textarea, newValue, start+len(match))
-				}
-			} else if start, prefix, ok := findAgentArgAt(value, cursorByte); ok {
+				m.handleSlashTab(value, start, cursorByte, prefix)
+				return m, nil
+			}
+			if start, prefix, ok := findAgentArgAt(value, cursorByte); ok {
 				if match := m.completeAgentName(prefix); match != "" && !strings.EqualFold(match, prefix) {
 					newValue := value[:start] + match + value[cursorByte:]
 					setTextareaToValueWithCursor(&m.textarea, newValue, start+len(match))
+				}
+			}
+			return m, nil
+		case "shift+tab":
+			if m.completion.cycling && len(m.completion.cycleCandidates) > 0 {
+				value := m.textarea.Value()
+				cursorByte := textareaCursorByteOffset(&m.textarea)
+				if start, _, ok := findSlashTokenAt(value, cursorByte); ok {
+					n := len(m.completion.cycleCandidates)
+					m.completion.cycleIndex = (m.completion.cycleIndex - 1 + n) % n
+					pick := m.completion.cycleCandidates[m.completion.cycleIndex]
+					newValue := value[:start] + pick + value[cursorByte:]
+					setTextareaToValueWithCursor(&m.textarea, newValue, start+len(pick))
 				}
 			}
 			return m, nil
@@ -633,6 +647,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.textarea.Reset()
 				m.textarea.SetValue(text)
 				m.textarea.CursorEnd()
+				m.refreshCompletionMenu()
 				m.updateViewport()
 				return m, nil
 			}
@@ -645,6 +660,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			// Resolve a pending confirmation prompt.
 			if m.pendingConfirm != nil {
 				m.textarea.Reset()
+				m.refreshCompletionMenu()
 				confirm := m.pendingConfirm
 				m.pendingConfirm = nil
 				lower := strings.ToLower(text)
@@ -670,18 +686,21 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			// Slash commands are local — handle immediately even while sending.
 			if handled, cmd := m.handleSlashCommand(text); handled {
 				m.textarea.Reset()
+				m.refreshCompletionMenu()
 				return m, cmd
 			}
 
 			if m.sending {
 				// Queue the message for later delivery.
 				m.textarea.Reset()
+				m.refreshCompletionMenu()
 				m.pendingMessages = append(m.pendingMessages, text)
 				m.updateViewport()
 				return m, nil
 			}
 
 			m.textarea.Reset()
+			m.refreshCompletionMenu()
 
 			if strings.HasPrefix(text, "!!") {
 				command := strings.TrimSpace(text[2:])
@@ -802,6 +821,14 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	m.textarea, cmd = m.textarea.Update(msg)
 	if cmd != nil {
 		cmds = append(cmds, cmd)
+	}
+
+	// Refresh the slash-command completion menu after the textarea has
+	// consumed a keystroke. Tab/Shift+Tab return early above so this only
+	// fires for keys that may have changed the input (typing, backspace,
+	// arrow keys that move the cursor in/out of a slash token).
+	if _, ok := msg.(tea.KeyPressMsg); ok {
+		m.refreshCompletionMenu()
 	}
 
 	passToViewport := true
@@ -992,7 +1019,8 @@ func (m *chatModel) setSize(w, h int) {
 	}
 
 	m.viewport.SetWidth(w)
-	m.viewport.SetHeight(vpHeight)
+	m.baseViewportHeight = vpHeight
+	m.applyLayout()
 
 	m.textarea.SetWidth(w - 7)
 	m.updateViewport()
@@ -1060,11 +1088,18 @@ func (m chatModel) View() string {
 		borderStyle = localExecBorderStyle
 	}
 
+	var menu string
+	if !m.hideInput {
+		menu, _ = m.renderCompletionMenu()
+	}
+
 	var help string
 	if isRemoteExec {
 		help = helpStyle.Render(execPrefixStyle.Render(" remote command") + " — runs on gateway host")
 	} else if isLocalExec {
 		help = helpStyle.Render(localExecPrefixStyle.Render(" local command") + " — runs on this machine")
+	} else if menu != "" {
+		help = helpStyle.Render(fmt.Sprintf(" Tab: extend · Shift+Tab: back · %d matches", len(m.completion.candidates)))
 	} else {
 		value := m.textarea.Value()
 		cursorByte := textareaCursorByteOffset(&m.textarea)
@@ -1098,11 +1133,10 @@ func (m chatModel) View() string {
 		Width(m.width - 4).
 		Render(m.textarea.View())
 
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		header,
-		m.viewport.View(),
-		input,
-		help,
-	)
+	parts := []string{header, m.viewport.View()}
+	if menu != "" {
+		parts = append(parts, menu)
+	}
+	parts = append(parts, input, help)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }

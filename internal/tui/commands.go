@@ -30,10 +30,11 @@ type pendingConfirmation struct {
 }
 
 // slashCommands is the list of available slash commands for autocomplete.
-// "/agents" is intentionally listed before "/agent" so tab-completing "/age"
-// resolves to the picker (the more common command) rather than the switcher.
-// "/model" likewise sits before "/models" — typing "s" to extend a completion
-// is cheaper than backspacing one.
+// Ordering breaks ties only for the inline ghost-hint and the legacy
+// completeSlashCommand callers — "/agents" appears before "/agent" so the
+// hint surfaces the picker first, "/model" before "/models" likewise.
+// Tab now extends to the longest common prefix and the completion menu
+// shows every candidate, so the curated order no longer rules Tab.
 var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/help", "/model", "/models", "/quit", "/reset", "/sessions", "/skills", "/stats", "/status", "/think"}
 
 // thinkingLevels is the ordered list of valid thinking levels.
