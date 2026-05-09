@@ -64,3 +64,5 @@ The full output of a tool call is not currently rendered; only the header line i
 ## Streaming placeholder
 
 When the user sends a message, an empty assistant message with `streaming: true` is appended immediately so there is always something to animate (see [chat-ux.md](chat-ux.md#streaming-animation)). As delta events arrive, the message content is built up incrementally. If the final event arrives before any delta (e.g. an error), the placeholder message is removed from the display.
+
+The same spinner glyph also decorates *pending system rows* — `chatMessage.pending` flags a system message as in-flight, and the renderer appends the current spinner frame after the body. `/compact` and `/reset` use this to give visible feedback while their actions run; the result handler clears `pending` (or replaces the row entirely) once the outcome lands.

@@ -8,7 +8,7 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 |---|---|
 | [connections.md](connections.md) | Connection types overview, picker, startup decision tree, capability negotiation, secrets |
 | [backend_openclaw.md](backend_openclaw.md) | OpenClaw backend: capability surface, skill catalog injection, device-token auth |
-| [backend_openai.md](backend_openai.md) | OpenAI-compat backend: SSE streaming, on-disk agent storage, IDENTITY.md/SOUL.md composition |
+| [backend_openai.md](backend_openai.md) | OpenAI-compat backend: SSE streaming, on-disk agent storage, IDENTITY.md/SOUL.md composition, local-pass compaction |
 | [backend_hermes.md](backend_hermes.md) | Hermes backend: `/v1/responses` chaining, synthetic single agent, server-side state |
 | [authentication.md](authentication.md) | Device pairing, Ed25519 identity, gateway connection and token lifecycle |
 | [agents.md](agents.md) | Agent picker, auto-selection, agent creation |
