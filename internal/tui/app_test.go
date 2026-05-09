@@ -334,6 +334,36 @@ func TestAppModel_SessionCreatedError_ClearsSelectingLock(t *testing.T) {
 	}
 }
 
+// TestAppModel_SessionCreatedSuccess_ClearsSelectingLock: on the happy
+// path the picker hands off to chat — but selectModel outlives the
+// picker view (only rebuilt on connect, not on /agents), so the
+// `selecting` flag has to be cleared on success too. Otherwise the
+// next /agents from chat lands the user on "Loading <agent>..." for
+// the agent they just opened.
+func TestAppModel_SessionCreatedSuccess_ClearsSelectingLock(t *testing.T) {
+	m := AppModel{state: viewSelect, prefs: config.Preferences{}}
+	m.selectModel = newSelectModel(nil, false, false, nil, false, "")
+	m.selectModel.loading = false
+	m.selectModel.selecting = true
+	m.selectModel.selectingName = "Alpha"
+
+	next, _ := m.update(sessionCreatedMsg{
+		sessionKey: "main",
+		agentID:    "alpha",
+		agentName:  "Alpha",
+	})
+
+	if next.selectModel.selecting {
+		t.Error("selecting must be cleared on success so /agents doesn't return to a frozen picker")
+	}
+	if next.selectModel.selectingName != "" {
+		t.Errorf("selectingName not cleared: %q", next.selectModel.selectingName)
+	}
+	if next.state != viewChat {
+		t.Errorf("state = %v, want viewChat", next.state)
+	}
+}
+
 // TestAppModel_CreateSessionHonoursRequestTimeout: a stuck CreateSession
 // (the symptom seen after first-time pairing, where the freshly
 // authenticated connection silently drops the RPC) must surface as a
