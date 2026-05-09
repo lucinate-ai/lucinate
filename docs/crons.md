@@ -45,7 +45,7 @@ The list view loads on `Init()` via `loadJobs()`, which calls `CronsList(Enabled
 - **Line 1**: bold name + dim relative-time chip (`in 8h`, `due`, `—`).
 - **Line 2**: chips for session target (`main`/`isolated`), wake mode (`now`/`heartbeat`), agent ID, and a status badge (`ok`/`error`/`disabled`/`idle`).
 
-`enter` opens detail; `r` refreshes; `n` opens the create form; `esc` emits `goBackFromCronsMsg{}` to return to chat.
+`enter` opens detail; `r` refreshes; `n` opens the create form; `d` opens the create form pre-populated from the highlighted job (the duplicate flow — see [Duplicate flow](#duplicate-flow)); `esc` emits `goBackFromCronsMsg{}` to return to chat.
 
 ## Detail substate
 
@@ -80,6 +80,10 @@ The create and edit form share `cronForm` and the `cronFormField` enum (12 field
 The save path is suppressed in this state — we surface the brittleness rather than silently round-trip a truncated representation.
 
 Tab/Shift+Tab navigates fields. Space toggles the cycle/checkbox controls (`sessionTarget`, `wakeMode`, `deliveryMode`, `enabled`). Inside the payload `textarea`, Enter inserts a newline; Ctrl+S (or Alt+Enter) saves from anywhere; Esc cancels and returns to whichever substate opened the form.
+
+### Duplicate flow
+
+`d` on the list substate opens the same form as `n`, but pre-populated from the highlighted job. The form stays in `mode=create` with `editingID=""`, so submission goes through `CronAdd` (not `CronUpdateRaw`) and produces a brand-new job rather than mutating the source. The name is prefixed with `Copy of ` so the duplicate is visually distinguishable in the list before the user edits it; every other field — schedule, timezone, agent, model, payload, session/wake, delivery, enabled — is copied verbatim. `populateFormFromJob` is shared with `newEditForm` so the two flows can't drift in which fields they carry over. Duplicating a job whose schedule kind is anything other than `cron` (or whose payload kind is anything other than `agentTurn`) is refused with the same banner the edit flow shows, for the same reason: the TUI form would silently truncate the unmodelled union fields.
 
 ### Raw-patch edit semantics
 

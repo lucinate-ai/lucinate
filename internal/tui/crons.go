@@ -592,6 +592,9 @@ func (m cronsModel) listActions() []Action {
 	var actions []Action
 	if !m.loading && m.err == nil {
 		actions = append(actions, Action{ID: "new", Label: "New job", Key: "n"})
+		if len(m.list.Items()) > 0 {
+			actions = append(actions, Action{ID: "duplicate", Label: "Duplicate", Key: "d"})
+		}
 	}
 	if m.filterAgentID != "" {
 		label := "Show all agents"
@@ -655,6 +658,8 @@ func (m cronsModel) TriggerAction(id string) (cronsModel, tea.Cmd) {
 		m.sizePayloadTextarea()
 		m.subset = cronSubForm
 		return m, m.form.name.Focus()
+	case "duplicate":
+		return m.actionDuplicate()
 	case "run":
 		return m.actionRun()
 	case "toggle":
@@ -762,6 +767,26 @@ func (m cronsModel) actionEdit() (cronsModel, tea.Cmd) {
 		// Render the form anyway so the user sees the explanation; the
 		// save action is suppressed while the unsupported banner is up.
 		form.unsupported = err
+	}
+	m.form = form
+	m.sizePayloadTextarea()
+	m.subset = cronSubForm
+	return m, m.form.name.Focus()
+}
+
+// actionDuplicate opens the form pre-populated from the highlighted
+// list item, but in create mode so submission goes through CronAdd.
+// Triggered from the list substate ("d"); the source job is read from
+// m.list.SelectedItem rather than m.selectedID, which is only set
+// after entering the detail view.
+func (m cronsModel) actionDuplicate() (cronsModel, tea.Cmd) {
+	item, ok := m.list.SelectedItem().(cronItem)
+	if !ok {
+		return m, nil
+	}
+	form, banner := newDuplicateForm(item.job)
+	if banner != "" {
+		form.unsupported = banner
 	}
 	m.form = form
 	m.sizePayloadTextarea()
@@ -877,10 +902,39 @@ func newCreateForm() cronForm {
 // returned banner string is non-empty and the caller should disable the
 // save path.
 func newEditForm(job protocol.CronJob) (cronForm, string) {
-	f := newCreateForm()
+	f, unsupported := populateFormFromJob(job)
 	f.mode = "edit"
 	f.editingID = job.ID
 	f.name.SetValue(job.Name)
+	if unsupported != "" {
+		unsupported = strings.Replace(unsupported, "{action}", "Edit", 1)
+	}
+	return f, unsupported
+}
+
+// newDuplicateForm pre-populates a create-mode form from an existing
+// job. Like the edit form it copies every field the TUI models, but
+// leaves editingID empty so submission goes through CronAdd rather than
+// CronUpdate. The name is prefixed with "Copy of " so the duplicate is
+// distinguishable in the list before the user edits it.
+func newDuplicateForm(job protocol.CronJob) (cronForm, string) {
+	f, unsupported := populateFormFromJob(job)
+	// mode stays "create" and editingID stays "" so submitForm -> CronAdd.
+	f.name.SetValue(duplicateName(job.Name))
+	if unsupported != "" {
+		unsupported = strings.Replace(unsupported, "{action}", "Duplicate", 1)
+	}
+	return f, unsupported
+}
+
+// populateFormFromJob copies every form-modelled field off a job into a
+// fresh create-mode form. Shared between the edit and duplicate flows
+// because the only differences between them are mode/editingID and the
+// name handling. The unsupported banner uses a "{action}" placeholder
+// the caller swaps in so the wording matches whichever flow opened the
+// form.
+func populateFormFromJob(job protocol.CronJob) (cronForm, string) {
+	f := newCreateForm()
 	f.description.SetValue(job.Description)
 	f.cronExpr.SetValue(job.Schedule.Expr)
 	f.timezone.SetValue(job.Schedule.Tz)
@@ -909,12 +963,22 @@ func newEditForm(job protocol.CronJob) (cronForm, string) {
 
 	var unsupported string
 	if job.Schedule.Kind != "" && job.Schedule.Kind != "cron" {
-		unsupported = fmt.Sprintf("Edit not supported for schedule kind %q. Use the openclaw CLI.", job.Schedule.Kind)
+		unsupported = fmt.Sprintf("{action} not supported for schedule kind %q. Use the openclaw CLI.", job.Schedule.Kind)
 	}
 	if job.Payload.Kind != "" && job.Payload.Kind != "agentTurn" && unsupported == "" {
-		unsupported = fmt.Sprintf("Edit not supported for payload kind %q. Use the openclaw CLI.", job.Payload.Kind)
+		unsupported = fmt.Sprintf("{action} not supported for payload kind %q. Use the openclaw CLI.", job.Payload.Kind)
 	}
 	return f, unsupported
+}
+
+// duplicateName builds the cloned job's name. Empty names are passed
+// through so the form-level "name is required" validation catches the
+// case rather than producing a spurious "Copy of " placeholder.
+func duplicateName(original string) string {
+	if original == "" {
+		return ""
+	}
+	return "Copy of " + original
 }
 
 func (m cronsModel) handleFormKey(msg tea.KeyPressMsg) (cronsModel, tea.Cmd) {

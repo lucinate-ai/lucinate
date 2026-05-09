@@ -30,7 +30,7 @@ No file browsers, no task boards, no dashboards. Just chat.
 - **Local agent skills** loaded from `~/.agents/skills/` — invoke as a slash command (`/review`) or drop one mid-message (`use /review on the diff`)
 - **Live token/cost stats** in the header bar (OpenClaw)
 - **Thinking level control** via `/think` — tune reasoning depth per session (OpenClaw)
-- **Cron browser** — list, edit, run, and create scheduled jobs without leaving the terminal (OpenClaw)
+- **Cron browser** — list, edit, run, create, and duplicate scheduled jobs without leaving the terminal (OpenClaw)
 
 ## Install
 

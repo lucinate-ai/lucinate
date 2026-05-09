@@ -349,6 +349,154 @@ func TestCronsForm_PrePopulatesModelAndDelivery(t *testing.T) {
 	}
 }
 
+func TestCronsDuplicate_FormPrePopulatesFromJob(t *testing.T) {
+	job := protocol.CronJob{
+		ID:            "job-1",
+		Name:          "Daily report",
+		Description:   "Generate today's report",
+		AgentID:       "agent-1",
+		Enabled:       true,
+		SessionTarget: "main",
+		WakeMode:      "now",
+		Schedule:      protocol.CronSchedule{Kind: "cron", Expr: "0 9 * * *", Tz: "Europe/London"},
+		Payload:       protocol.CronPayload{Kind: "agentTurn", Text: "Generate report.", Model: "claude-opus-4-7"},
+		Delivery:      &protocol.CronDelivery{Mode: "announce", Channel: "slack:#alerts"},
+	}
+	form, banner := newDuplicateForm(job)
+	if banner != "" {
+		t.Fatalf("unexpected unsupported banner: %q", banner)
+	}
+	if form.mode != "create" {
+		t.Errorf("expected duplicate to stay in create mode, got %q", form.mode)
+	}
+	if form.editingID != "" {
+		t.Errorf("expected empty editingID so submit goes through CronAdd, got %q", form.editingID)
+	}
+	if got, want := form.name.Value(), "Copy of Daily report"; got != want {
+		t.Errorf("name: got %q, want %q", got, want)
+	}
+	if got := form.description.Value(); got != "Generate today's report" {
+		t.Errorf("description: %q", got)
+	}
+	if got := form.cronExpr.Value(); got != "0 9 * * *" {
+		t.Errorf("cronExpr: %q", got)
+	}
+	if got := form.timezone.Value(); got != "Europe/London" {
+		t.Errorf("timezone: %q", got)
+	}
+	if got := form.agentID.Value(); got != "agent-1" {
+		t.Errorf("agentID: %q", got)
+	}
+	if got := form.model.Value(); got != "claude-opus-4-7" {
+		t.Errorf("model: %q", got)
+	}
+	if got := form.payloadText.Value(); got != "Generate report." {
+		t.Errorf("payloadText: %q", got)
+	}
+	if form.sessionTarget != "main" {
+		t.Errorf("sessionTarget: %q", form.sessionTarget)
+	}
+	if form.wakeMode != "now" {
+		t.Errorf("wakeMode: %q", form.wakeMode)
+	}
+	if form.deliveryMode != "announce" {
+		t.Errorf("deliveryMode: %q", form.deliveryMode)
+	}
+	if got := form.deliveryTarget.Value(); got != "slack:#alerts" {
+		t.Errorf("deliveryTarget: %q", got)
+	}
+	if !form.enabled {
+		t.Error("enabled should be carried over")
+	}
+}
+
+func TestCronsDuplicate_RefusesUnsupportedScheduleKind(t *testing.T) {
+	job := protocol.CronJob{
+		ID:       "weird",
+		Name:     "Weird",
+		AgentID:  "agent-1",
+		Enabled:  true,
+		Schedule: protocol.CronSchedule{Kind: "every"},
+		Payload:  protocol.CronPayload{Kind: "agentTurn", Text: "X"},
+	}
+	_, banner := newDuplicateForm(job)
+	if banner == "" {
+		t.Fatal("expected unsupported banner for schedule.kind=every")
+	}
+	if !strings.Contains(banner, "Duplicate") {
+		t.Errorf("expected banner to mention Duplicate, got %q", banner)
+	}
+}
+
+func TestCronsKey_D_FromList_OpensDuplicateForm(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleListKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if m.subset != cronSubForm {
+		t.Fatalf("expected substate=form after d, got %v", m.subset)
+	}
+	if m.form.mode != "create" {
+		t.Errorf("expected create mode for duplicate, got %q", m.form.mode)
+	}
+	if m.form.editingID != "" {
+		t.Errorf("expected empty editingID, got %q", m.form.editingID)
+	}
+	if got := m.form.name.Value(); got != "Copy of Daily report" {
+		t.Errorf("name: %q", got)
+	}
+}
+
+func TestCronsDuplicate_SubmitDispatchesCronAdd(t *testing.T) {
+	m, fake := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleListKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if m.subset != cronSubForm {
+		t.Fatalf("expected form substate, got %v", m.subset)
+	}
+	_, cmd := m.submitForm()
+	if cmd == nil {
+		t.Fatal("expected a save cmd")
+	}
+	cmd()
+
+	if fake.lastCronAdd == nil {
+		t.Fatal("expected CronAdd to be invoked")
+	}
+	if fake.lastCronUpdateID != "" || fake.lastCronUpdateRaw != nil {
+		t.Errorf("expected duplicate to bypass CronUpdate path, got id=%q raw=%+v",
+			fake.lastCronUpdateID, fake.lastCronUpdateRaw)
+	}
+	if fake.lastCronAdd.Name != "Copy of Daily report" {
+		t.Errorf("CronAdd.Name: %q", fake.lastCronAdd.Name)
+	}
+	if fake.lastCronAdd.Schedule.Expr != "0 9 * * *" {
+		t.Errorf("CronAdd.Schedule.Expr: %q", fake.lastCronAdd.Schedule.Expr)
+	}
+}
+
+func TestCronsDuplicate_EscFromFormReturnsToList(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleListKey(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if m.subset != cronSubForm {
+		t.Fatalf("expected form substate, got %v", m.subset)
+	}
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.subset != cronSubList {
+		t.Errorf("expected esc from duplicate form to return to list, got %v", m.subset)
+	}
+}
+
+func TestCronsListActions_DuplicateHiddenWhenEmpty(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: nil})
+	for _, a := range m.Actions() {
+		if a.ID == "duplicate" {
+			t.Fatalf("duplicate action should be hidden when list is empty; got %+v", a)
+		}
+	}
+}
+
 func TestCronsConfirmDelete_YesDispatchesRemove(t *testing.T) {
 	m, fake := newTestCronsModel(t)
 	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
