@@ -758,10 +758,7 @@ func TestCronsTranscript_DispatchesRunLogContent(t *testing.T) {
 func TestCronsRunNow_KeyTriggersRunAndAcknowledges(t *testing.T) {
 	m, fake := newTestCronsModel(t)
 	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.subset != cronSubDetail {
-		t.Fatal("setup: expected detail substate")
-	}
+	m = openDetail(t, m)
 
 	// "!" is the unambiguous run-now binding (replaced "R" to avoid the
 	// case-collision with refresh).
@@ -818,7 +815,7 @@ func TestCronsRunNow_LowercaseRStillTriggersRefresh(t *testing.T) {
 func TestCronsRunNow_AckClearedOnNavigation(t *testing.T) {
 	m, _ := newTestCronsModel(t)
 	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
-	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = openDetail(t, m)
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: '!', Text: "!"})
 	m, _ = m.Update(cronJobRanMsg{})
 	if m.runStatus == "" {
