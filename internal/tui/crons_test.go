@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -420,6 +421,85 @@ func TestCronsTranscript_DispatchesRunLogContent(t *testing.T) {
 	}
 	if len(sel.runs) != 2 {
 		t.Errorf("expected 2 runs forwarded, got %d", len(sel.runs))
+	}
+}
+
+func TestCronsRunNow_KeyTriggersRunAndAcknowledges(t *testing.T) {
+	m, fake := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.subset != cronSubDetail {
+		t.Fatal("setup: expected detail substate")
+	}
+
+	// "!" is the unambiguous run-now binding (replaced "R" to avoid the
+	// case-collision with refresh).
+	m, cmd := m.handleKey(tea.KeyPressMsg{Code: '!', Text: "!"})
+	if cmd == nil {
+		t.Fatal("expected a cmd from !")
+	}
+	if !m.running {
+		t.Error("expected m.running=true while the run-now request is in flight")
+	}
+	view := m.View()
+	if !strings.Contains(view, "Triggering run...") {
+		t.Errorf("expected detail view to show Triggering banner, got:\n%s", view)
+	}
+
+	msg := cmd()
+	if _, ok := msg.(cronJobRanMsg); !ok {
+		t.Fatalf("expected cronJobRanMsg, got %T", msg)
+	}
+	if fake.lastCronRunID != "job-1" {
+		t.Errorf("expected CronRun on job-1, got %q", fake.lastCronRunID)
+	}
+
+	m, _ = m.Update(cronJobRanMsg{})
+	if m.running {
+		t.Error("expected m.running=false after ack")
+	}
+	if m.runStatus != "Run triggered." {
+		t.Errorf("expected runStatus ack, got %q", m.runStatus)
+	}
+	view = m.View()
+	if !strings.Contains(view, "Run triggered.") {
+		t.Errorf("expected detail view to show ack, got:\n%s", view)
+	}
+}
+
+func TestCronsRunNow_LowercaseRStillTriggersRefresh(t *testing.T) {
+	m, fake := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Drain the initial loadRuns so we can detect the refresh-triggered one.
+	m, _ = m.Update(cronRunsLoadedMsg{jobID: "job-1"})
+	fake.lastCronRunID = ""
+
+	_, cmd := m.handleKey(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd == nil {
+		t.Fatal("expected a cmd from r (refresh)")
+	}
+	if fake.lastCronRunID != "" {
+		t.Errorf("lowercase r must not trigger CronRun, got %q", fake.lastCronRunID)
+	}
+}
+
+func TestCronsRunNow_AckClearedOnNavigation(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: '!', Text: "!"})
+	m, _ = m.Update(cronJobRanMsg{})
+	if m.runStatus == "" {
+		t.Fatal("setup: expected runStatus to be set")
+	}
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	// The ack handler sets loading=true to drive a refresh; let that
+	// settle so the list's enter handler isn't gated on loading.
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.runStatus != "" {
+		t.Errorf("expected runStatus cleared on re-entering detail, got %q", m.runStatus)
 	}
 }
 

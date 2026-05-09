@@ -256,6 +256,16 @@ type cronsModel struct {
 	runs        []protocol.CronRunLogEntry
 	runsLoading bool
 	runsErr     error
+	// running is set the moment "Run now" is triggered and cleared when
+	// the gateway acknowledges. It exists so the detail view can render
+	// a "triggering..." banner immediately, before the round-trip
+	// completes — without it the user has no signal the keystroke landed.
+	running bool
+	// runStatus is a transient one-line ack rendered in the detail view
+	// after cronJobRanMsg arrives ("Run triggered." / error). It is
+	// cleared on the next refresh / navigation.
+	runStatus string
+	runFailed bool
 
 	// Form substate.
 	form cronForm
@@ -426,10 +436,14 @@ func (m cronsModel) Update(msg tea.Msg) (cronsModel, tea.Cmd) {
 		return m, m.loadJobs()
 
 	case cronJobRanMsg:
+		m.running = false
 		if msg.err != nil {
-			m.err = msg.err
+			m.runFailed = true
+			m.runStatus = fmt.Sprintf("Run failed: %v", msg.err)
 			return m, nil
 		}
+		m.runFailed = false
+		m.runStatus = "Run triggered."
 		m.runsLoading = true
 		var refreshRuns tea.Cmd
 		if m.selectedID != "" {
@@ -506,6 +520,9 @@ func (m cronsModel) handleListKey(msg tea.KeyPressMsg) (cronsModel, tea.Cmd) {
 		m.runs = nil
 		m.runsErr = nil
 		m.runsLoading = true
+		m.runStatus = ""
+		m.runFailed = false
+		m.running = false
 		return m, m.loadRuns(item.job.ID)
 	}
 	for _, a := range m.Actions() {
@@ -595,7 +612,11 @@ func (m cronsModel) detailActions() []Action {
 	job, ok := m.findJob(m.selectedID)
 	var actions []Action
 	if ok {
-		actions = append(actions, Action{ID: "run", Label: "Run now", Key: "R"})
+		// Bound to "!" rather than "R" because the case-sensitive pair
+		// (R=run, r=refresh) was easy to misfire — terminals that
+		// don't report shift on letter keys would land on refresh
+		// when the user expected run.
+		actions = append(actions, Action{ID: "run", Label: "Run now", Key: "!"})
 		toggleLabel := "Disable"
 		if !job.Enabled {
 			toggleLabel = "Enable"
@@ -683,6 +704,8 @@ func (m cronsModel) actionRefresh() (cronsModel, tea.Cmd) {
 		}
 		m.runsLoading = true
 		m.loading = true
+		m.runStatus = ""
+		m.runFailed = false
 		return m, tea.Batch(m.loadJobs(), m.loadRuns(m.selectedID))
 	}
 	return m, nil
@@ -693,6 +716,15 @@ func (m cronsModel) actionRun() (cronsModel, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	if m.running {
+		// Swallow repeat presses while the previous trigger is still
+		// in flight — otherwise the gateway would receive duplicate
+		// run-now requests for a single keystroke burst.
+		return m, nil
+	}
+	m.running = true
+	m.runStatus = ""
+	m.runFailed = false
 	cron := m.cron
 	id := job.ID
 	return m, func() tea.Msg {
@@ -1202,6 +1234,18 @@ func (m cronsModel) viewDetail() string {
 		b.WriteString(cronStatusDisabledStyle.Render("disabled"))
 	}
 	b.WriteString("\n\n")
+
+	switch {
+	case m.running:
+		b.WriteString(statusStyle.Render("  Triggering run..."))
+		b.WriteString("\n\n")
+	case m.runFailed && m.runStatus != "":
+		b.WriteString(errorStyle.Render("  " + m.runStatus))
+		b.WriteString("\n\n")
+	case m.runStatus != "":
+		b.WriteString(statusStyle.Render("  " + m.runStatus))
+		b.WriteString("\n\n")
+	}
 
 	rows := [][2]string{
 		{"Schedule", formatSchedule(job.Schedule)},
