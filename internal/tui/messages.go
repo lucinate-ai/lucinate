@@ -315,6 +315,13 @@ type showCronsMsg struct {
 // goBackFromCronsMsg signals the AppModel to return from the cron view.
 type goBackFromCronsMsg struct{}
 
+// goBackFromCronTranscriptMsg signals the AppModel to return from the
+// read-only cron transcript view (a chat model with transcript=true)
+// to the cron detail screen that opened it. The cronsModel's subset/
+// selectedID is preserved across the transcript hop, so resuming
+// viewCrons drops back into the right detail page.
+type goBackFromCronTranscriptMsg struct{}
+
 // cronsLoadedMsg is returned when the cron job list is fetched.
 type cronsLoadedMsg struct {
 	jobs []protocol.CronJob

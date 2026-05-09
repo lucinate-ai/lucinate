@@ -634,8 +634,13 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		m.chatModel.setSize(m.width, m.height)
 		m.chatModel.messages = buildCronTranscriptMessages(cronPayloadText(msg.job), msg.runs, m.chatModel.renderer)
 		m.chatModel.historyLoading = false
+		m.chatModel.transcript = true
 		m.chatModel.updateViewport()
 		m.state = viewChat
+		return m, nil
+
+	case goBackFromCronTranscriptMsg:
+		m.state = viewCrons
 		return m, nil
 
 	case newSessionCreatedMsg:

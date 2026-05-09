@@ -176,6 +176,7 @@ type chatModel struct {
 	thinkingLevel   string // current thinking level; "" means not set / using gateway default
 	connState       ConnStateMsg
 	hideInput       bool   // when true, the textarea + help line are not rendered; the textarea model still receives input bytes
+	transcript      bool   // true when the model is rendering a cron run-log transcript: read-only, esc returns to the cron detail view that opened it
 	terminalFocused bool   // tracks tea.FocusMsg/BlurMsg so the completion bell only rings when the user is looking elsewhere
 	updateLatest    string // populated by AppModel when the startup check finds a newer release; rendered as a header badge
 }
@@ -579,6 +580,9 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		case "esc":
 			if m.sending {
 				return m, m.cancelTurn()
+			}
+			if m.transcript {
+				return m, func() tea.Msg { return goBackFromCronTranscriptMsg{} }
 			}
 			return m, nil
 		case "tab":
