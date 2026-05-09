@@ -33,7 +33,7 @@ jobs:
         id: tap-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.HOMEBREW_TAP_APP_ID }}
+          client-id: ${{ vars.HOMEBREW_TAP_APP_CLIENT_ID }}
           private-key: ${{ secrets.HOMEBREW_TAP_APP_PRIVATE_KEY }}
           owner: lucinate-ai
           repositories: homebrew-tap
@@ -41,7 +41,7 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
+          version: "~> v2"
           args: release --clean --skip=validate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -56,7 +56,7 @@ jobs:
         if: ${{ !contains(github.ref_name, '-') }}
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ vars.WEBSITE_DISPATCH_APP_ID }}
+          client-id: ${{ vars.WEBSITE_DISPATCH_APP_CLIENT_ID }}
           private-key: ${{ secrets.WEBSITE_DISPATCH_APP_PRIVATE_KEY }}
           owner: lucinate-ai
           repositories: website

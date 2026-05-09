@@ -28,5 +28,5 @@ jobs:
       - name: GoReleaser (dry run)
         uses: goreleaser/goreleaser-action@v7
         with:
-          version: latest
+          version: "~> v2"
           args: release --clean --snapshot --skip=publish
