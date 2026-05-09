@@ -50,11 +50,20 @@ type AgentMeta struct {
 
 // Message is one transcript entry, persisted line-delimited in
 // history.jsonl.
+//
+// Summary marks a system message produced by /compact: a model-written
+// digest of the older portion of the conversation that replaces those
+// messages on disk so subsequent turns spend fewer tokens. The flag
+// distinguishes a real summary from the legacy "skip stored system
+// messages" defence in runStream — summaries are forwarded to the
+// model on every turn after compaction; everything else with role
+// "system" is still ignored.
 type Message struct {
-	Role    string    `json:"role"`              // "user" | "assistant" | "system"
+	Role    string    `json:"role"` // "user" | "assistant" | "system"
 	Content string    `json:"content"`
 	Time    time.Time `json:"time"`
 	Model   string    `json:"model,omitempty"`   // model used to generate (assistant only)
+	Summary bool      `json:"summary,omitempty"` // /compact-produced digest of earlier turns
 }
 
 // AgentStore manages a per-connection agents directory. The path is
@@ -285,6 +294,56 @@ func (s *AgentStore) LoadHistory(agentID string, limit int) ([]Message, error) {
 		out = out[len(out)-limit:]
 	}
 	return out, nil
+}
+
+// RewriteHistory atomically replaces history.jsonl with the given
+// messages. Used by /compact to swap older turns for a model-written
+// summary. The write goes to a sibling tempfile and renames into
+// place, so a crash mid-write can't truncate the transcript.
+//
+// An empty slice writes an empty file — callers that want to clear
+// history entirely should prefer SessionDelete via the backend, which
+// also touches UpdatedAt.
+func (s *AgentStore) RewriteHistory(agentID string, msgs []Message) error {
+	dir := s.AgentDir(agentID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".history-*.jsonl")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	for _, msg := range msgs {
+		if msg.Time.IsZero() {
+			msg.Time = time.Now().UTC()
+		}
+		line, err := json.Marshal(msg)
+		if err != nil {
+			tmp.Close()
+			os.Remove(tmpPath)
+			return err
+		}
+		line = append(line, '\n')
+		if _, err := tmp.Write(line); err != nil {
+			tmp.Close()
+			os.Remove(tmpPath)
+			return err
+		}
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, filepath.Join(dir, "history.jsonl")); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return s.touch(agentID)
 }
 
 // SetModel updates the agent's default model. Called when /model

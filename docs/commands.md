@@ -17,7 +17,7 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/agents` | Return to the agent picker by emitting `goBackMsg{}` |
 | `/cancel` | Cancel the in-progress response (also triggered by Escape) — see [chat-ux.md](chat-ux.md) |
 | `/clear` | Wipe `m.messages` from the local display (does not affect gateway history) |
-| `/compact` | Compact the session context — see [sessions.md](sessions.md#compact-and-reset) — **OpenClaw only** |
+| `/compact` | Compact the session context — see [sessions.md](sessions.md#compact-and-reset) |
 | `/config` | Open the preferences view by emitting `showConfigMsg{}` |
 | `/connections` | Open the connections picker mid-session, tearing down the active backend — see [connections.md](connections.md) |
 | `/crons` | Open the cron browser filtered to the current agent — see [crons.md](crons.md) — **OpenClaw only** |
@@ -60,4 +60,6 @@ After `/agent ` the next token is treated as an agent name and completed against
 
 ## Confirmation pattern
 
-Destructive commands (`/compact`, `/reset`) use a two-step confirmation. On first invocation a `pendingConfirmation` struct is stored on the model containing the prompt string and an action closure. The prompt is displayed as a system message. On the next Enter keypress, if the input is `y` or `yes` the closure is executed; anything else cancels. This prevents accidental data loss.
+Destructive commands (`/compact`, `/reset`) use a two-step confirmation. On first invocation a `pendingConfirmation` struct is stored on the model containing the prompt string, an optional `runningStatus` line, and an action closure. The prompt is displayed as a system message. On the next Enter keypress, if the input is `y` or `yes` the closure is executed; anything else cancels. This prevents accidental data loss.
+
+When `runningStatus` is set, the confirmation handler also appends a pending system row (`pending: true`) carrying that status text. The renderer animates the same braille spinner used for in-flight assistant turns next to the row, and `hasStreamingMessage` keeps `spinnerTickCmd` firing until the action returns. The result handler (`sessionCompactedMsg`, `sessionClearedMsg`) calls `replacePendingSystem` to swap the placeholder for the outcome line in place — no stale "Compacting session…" stuck above the result.

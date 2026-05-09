@@ -70,6 +70,10 @@ func (m *chatModel) updateViewport() {
 				b.WriteString(errorStyle.Render(wordWrap(msg.errMsg, contentWidth)))
 			} else {
 				b.WriteString(statusStyle.Render(wordWrap(msg.content, contentWidth)))
+				if msg.pending {
+					b.WriteString(" ")
+					b.WriteString(cursorStyle.Render(spinnerFrames[m.spinnerFrame%len(spinnerFrames)]))
+				}
 			}
 
 		case "tool":

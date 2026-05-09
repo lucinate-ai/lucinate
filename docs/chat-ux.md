@@ -24,6 +24,8 @@ When a message is sent, an assistant message with `streaming: true` is appended 
 
 As delta events arrive from the gateway, the message content is built up in place. When the final event arrives, `streaming` is set to false and the spinner stops. If the final event arrives before any delta (empty response), the placeholder is removed from the display entirely.
 
+The same spinner also decorates pending system rows (`chatMessage.pending`) — the in-flight placeholders posted by `/compact` and `/reset` after confirmation. `hasStreamingMessage()` treats any pending system row as a reason to keep ticking, and the result handler swaps the placeholder for the outcome via `replacePendingSystem` so the spinner is replaced in place rather than appended after. See [commands.md](commands.md#confirmation-pattern) for the wiring.
+
 See [message-rendering.md](message-rendering.md#streaming-placeholder) for the rendering side of this.
 
 ## Thinking levels

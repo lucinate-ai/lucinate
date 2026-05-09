@@ -16,6 +16,7 @@ type chatMessage struct {
 	thinking      string // reasoning/intermediate thought content from the model
 	streaming     bool
 	awaitingDelta bool // true for the pre-response spinner placeholder, before any delta arrives
+	pending       bool // system-row in-progress marker; the renderer appends a spinner glyph until cleared
 	errMsg        string
 	rendered      bool  // true if content has been glamour-rendered (contains ANSI codes)
 	timestampMs   int64 // unix millis; only used by "separator" rows to label resume time

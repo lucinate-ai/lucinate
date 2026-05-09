@@ -187,15 +187,21 @@ func spinnerTickCmd() tea.Cmd {
 	})
 }
 
-// hasStreamingMessage reports whether any assistant message is still streaming
-// or a tool is in the running state. The spinner tick keeps firing as long as
-// either is true so both the streaming cursor and the tool-card glyph animate.
+// hasStreamingMessage reports whether any assistant message is still streaming,
+// a tool is in the running state, or a system row is in the pending state
+// (the spinner placeholder used by /compact and /reset while their actions
+// are in flight). The spinner tick keeps firing as long as any of these is
+// true so the streaming cursor, the tool-card glyph, and the system-row
+// pending glyph all animate.
 func (m *chatModel) hasStreamingMessage() bool {
 	for i := range m.messages {
 		if m.messages[i].streaming {
 			return true
 		}
 		if m.messages[i].role == "tool" && m.messages[i].toolState == "running" {
+			return true
+		}
+		if m.messages[i].role == "system" && m.messages[i].pending {
 			return true
 		}
 	}
@@ -211,6 +217,22 @@ func (m *chatModel) removeThinkingPlaceholder() {
 			m.messages = m.messages[:len(m.messages)-1]
 		}
 	}
+}
+
+// replacePendingSystem swaps the most recent pending system row for
+// replacement, preserving its position in the transcript so the
+// spinner placeholder turns into its outcome line in place. If no
+// pending row is found (the prompt was cancelled, or some prior
+// handler already cleared it), the replacement is appended instead so
+// the user still sees the result.
+func (m *chatModel) replacePendingSystem(replacement chatMessage) {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].role == "system" && m.messages[i].pending {
+			m.messages[i] = replacement
+			return
+		}
+	}
+	m.messages = append(m.messages, replacement)
 }
 
 // ensureSpinnerTicking starts the spinner animation if one is not already scheduled.
@@ -525,16 +547,16 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 
 	case sessionCompactedMsg:
 		if msg.err != nil {
-			m.messages = append(m.messages, chatMessage{role: "system", errMsg: fmt.Sprintf("compact failed: %v", msg.err)})
+			m.replacePendingSystem(chatMessage{role: "system", errMsg: fmt.Sprintf("compact failed: %v", msg.err)})
 		} else {
-			m.messages = append(m.messages, chatMessage{role: "system", content: "Session compacted."})
+			m.replacePendingSystem(chatMessage{role: "system", content: "Session compacted."})
 		}
 		m.updateViewport()
 		return m, nil
 
 	case sessionClearedMsg:
 		if msg.err != nil {
-			m.messages = append(m.messages, chatMessage{role: "system", errMsg: fmt.Sprintf("clear session failed: %v", msg.err)})
+			m.replacePendingSystem(chatMessage{role: "system", errMsg: fmt.Sprintf("clear session failed: %v", msg.err)})
 		} else {
 			m.sessionKey = msg.newSessionKey
 			m.messages = nil
@@ -628,8 +650,17 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				lower := strings.ToLower(text)
 				if lower == "y" || lower == "yes" {
 					m.messages = append(m.messages, chatMessage{role: "system", content: "Confirmed."})
+					var spinnerCmd tea.Cmd
+					if confirm.runningStatus != "" {
+						m.messages = append(m.messages, chatMessage{
+							role:    "system",
+							content: confirm.runningStatus,
+							pending: true,
+						})
+						spinnerCmd = m.ensureSpinnerTicking()
+					}
 					m.updateViewport()
-					return m, confirm.action()
+					return m, tea.Batch(confirm.action(), spinnerCmd)
 				}
 				m.messages = append(m.messages, chatMessage{role: "system", content: "Cancelled."})
 				m.updateViewport()
