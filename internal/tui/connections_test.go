@@ -165,7 +165,7 @@ func TestConnectionsModel_EnterEmitsPickedMsg(t *testing.T) {
 	m.rebuildItems()
 	m.list.Select(0)
 
-	_, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected pick cmd")
 	}
@@ -176,6 +176,73 @@ func TestConnectionsModel_EnterEmitsPickedMsg(t *testing.T) {
 	}
 	if picked.connection == nil || picked.connection.ID != store.Connections[0].ID {
 		t.Errorf("picked the wrong connection: %+v", picked.connection)
+	}
+	// Enter must also flip the selecting flag so the list freezes
+	// during the synchronous handoff to AppModel's connect flow.
+	if !m.selecting {
+		t.Error("expected selecting=true after enter")
+	}
+	if m.selectingName == "" {
+		t.Error("expected selectingName populated for the loading view")
+	}
+}
+
+func TestConnectionsModel_SelectingBlocksNavigation(t *testing.T) {
+	store := newSeededStore(t)
+	// Add a second connection so navigation has somewhere to go.
+	store.Connections = append(store.Connections, config.Connection{
+		ID:   "conn-2",
+		Name: "Second",
+		Type: config.ConnTypeOpenClaw,
+		URL:  "ws://example.test",
+	})
+	m := newConnectionsModel(store, false, false)
+	m.setSize(80, 20)
+	m.rebuildItems()
+	m.list.Select(0)
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.selecting {
+		t.Fatal("setup: expected selecting=true after enter")
+	}
+	startIdx := m.list.Index()
+
+	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.list.Index() != startIdx {
+		t.Errorf("list index moved while selecting: was %d, now %d", startIdx, m.list.Index())
+	}
+	if cmd != nil {
+		t.Errorf("expected no cmd while selecting, got %T", cmd)
+	}
+}
+
+func TestConnectionsModel_SelectingHidesActions(t *testing.T) {
+	store := newSeededStore(t)
+	m := newConnectionsModel(store, false, false)
+	m.setSize(80, 20)
+	m.rebuildItems()
+	m.list.Select(0)
+	if len(m.Actions()) == 0 {
+		t.Fatal("setup: expected actions before enter")
+	}
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if len(m.Actions()) != 0 {
+		t.Errorf("expected no actions while selecting, got %+v", m.Actions())
+	}
+}
+
+func TestConnectionsModel_SelectingViewRendersLoading(t *testing.T) {
+	store := newSeededStore(t)
+	m := newConnectionsModel(store, false, false)
+	m.setSize(80, 20)
+	m.rebuildItems()
+	m.list.Select(0)
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	view := m.View()
+	if !contains(view, "Connecting to "+store.Connections[0].Name) {
+		t.Errorf("expected loading line naming the picked connection, got:\n%s", view)
 	}
 }
 

@@ -92,16 +92,27 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 
 // sessionsModel is the session browser view.
 type sessionsModel struct {
-	list       list.Model
-	backend    backend.Backend
-	agentID    string
-	agentName  string
-	modelID    string
-	mainKey    string
-	loading    bool
-	err        error
-	hideHints  bool
-	activeConn *config.Connection // rendered above the session list — see renderConnectionBanner.
+	list      list.Model
+	backend   backend.Backend
+	agentID   string
+	agentName string
+	modelID   string
+	mainKey   string
+	loading   bool
+	err       error
+	hideHints bool
+	// selecting is true after the user has picked a session and we're
+	// about to transition into the chat view. The window is brief —
+	// sessionSelectedMsg dispatches synchronously and the chat view's
+	// own loading state takes over on the next tick — but during it
+	// the list is still on screen, so we freeze input + render a
+	// loading line to match the agent picker's behaviour and stop the
+	// user from racing the cursor against the transition.
+	selecting bool
+	// selectingTitle is the chosen session's display label, surfaced
+	// in the loading view so the user can confirm what they picked.
+	selectingTitle string
+	activeConn     *config.Connection // rendered above the session list — see renderConnectionBanner.
 }
 
 func newSessionsModel(b backend.Backend, agentID, agentName, modelID, mainKey string, hideHints bool, activeConn *config.Connection, disableExitKeys bool) sessionsModel {
@@ -220,6 +231,14 @@ func (m sessionsModel) Init() tea.Cmd {
 }
 
 func (m sessionsModel) Update(msg tea.Msg) (sessionsModel, tea.Cmd) {
+	// After enter is pressed we hand control to the parent which
+	// will swap us out for the chat view. Drop further input —
+	// keystrokes, list-internal cmds — so the user can't keep
+	// moving the cursor while the transition is in flight.
+	if m.selecting {
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case sessionsLoadedMsg:
 		m.loading = false
@@ -292,6 +311,11 @@ func (m sessionsModel) handleKey(msg tea.KeyPressMsg) (sessionsModel, tea.Cmd) {
 			return m, nil
 		}
 		if item, ok := m.list.SelectedItem().(sessionItem); ok {
+			m.selecting = true
+			m.selectingTitle = item.title
+			if m.selectingTitle == "" {
+				m.selectingTitle = item.key
+			}
 			return m, func() tea.Msg {
 				return sessionSelectedMsg{
 					sessionKey: item.key,
@@ -319,6 +343,11 @@ func (m sessionsModel) handleKey(msg tea.KeyPressMsg) (sessionsModel, tea.Cmd) {
 // browser currently exposes. Loading/error transitions are reflected
 // because the list is recomputed on every Update tick.
 func (m sessionsModel) Actions() []Action {
+	if m.selecting {
+		// Mirror the loading view: no actionable surface while we
+		// wait for the chat view to take over.
+		return nil
+	}
 	var actions []Action
 	if !m.loading && m.err == nil {
 		actions = append(actions, Action{ID: "new-session", Label: "New session", Key: "n"})
@@ -369,6 +398,17 @@ func (m sessionsModel) TriggerAction(id string) (sessionsModel, tea.Cmd) {
 func (m sessionsModel) View() string {
 	if m.loading {
 		return "\n  Loading sessions...\n"
+	}
+	if m.selecting {
+		// Pinned during the transition into chat so the list
+		// disappears with the rest of the picker UI; the connection
+		// banner stays so the user still sees scope.
+		banner := renderConnectionBanner(m.activeConn)
+		title := m.selectingTitle
+		if title == "" {
+			title = "session"
+		}
+		return banner + fmt.Sprintf("\n  Loading %s...\n", title)
 	}
 	hints := ""
 	if !m.hideHints {

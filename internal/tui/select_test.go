@@ -807,6 +807,93 @@ func TestSelectModel_AutoPickName_MissBeatsSingleAgentAutoPick(t *testing.T) {
 	}
 }
 
+func TestSelectModel_EnterTriggersSelectingState(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+	)
+	// Two agents — single-agent auto-pick won't fire — so the user
+	// has to press enter explicitly.
+	if m.selecting {
+		t.Fatal("selecting should be false before enter")
+	}
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if !m.selected {
+		t.Error("expected selected=true after enter")
+	}
+	if !m.selecting {
+		t.Error("expected selecting=true after enter so the picker freezes")
+	}
+	if m.selectingName != "Alpha" {
+		t.Errorf("selectingName = %q, want Alpha", m.selectingName)
+	}
+}
+
+func TestSelectModel_SelectingBlocksNavigation(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+	)
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.selecting {
+		t.Fatal("setup: expected selecting=true after enter")
+	}
+	startIdx := m.list.Index()
+
+	// Down arrow while selecting must NOT move the cursor — the
+	// CreateSession round-trip is in flight and a moved cursor
+	// would race the resolved-agent payload.
+	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.list.Index() != startIdx {
+		t.Errorf("list index moved while selecting: was %d, now %d", startIdx, m.list.Index())
+	}
+	if cmd != nil {
+		t.Errorf("expected no cmd while selecting, got %T", cmd)
+	}
+}
+
+func TestSelectModel_SelectingHidesActions(t *testing.T) {
+	m := newSelectModel(nil, false, true, nil, false, "")
+	m.allowAgentManagement = true
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+	)
+	if len(m.Actions()) == 0 {
+		t.Fatal("setup: expected actions before enter")
+	}
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if len(m.Actions()) != 0 {
+		t.Errorf("expected no actions while selecting, got %+v", m.Actions())
+	}
+}
+
+func TestSelectModel_SelectingViewRendersLoading(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+	)
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "Loading Alpha") {
+		t.Errorf("expected loading line naming the picked agent, got:\n%s", view)
+	}
+	// The list itself must not render — otherwise the user sees a
+	// stale cursor below the loading line and is tempted to keep
+	// navigating.
+	if strings.Contains(view, "Beta") {
+		t.Errorf("expected list to be hidden while selecting, got:\n%s", view)
+	}
+}
+
 func TestSelectModel_AutoPickName_OneShot(t *testing.T) {
 	// After the autoPickName has been consumed once, a second
 	// agentsLoadedMsg (e.g. agent-create reload) must not re-fire it.

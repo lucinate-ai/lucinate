@@ -78,7 +78,18 @@ type selectModel struct {
 	err       error
 	mainKey   string
 	selected  bool
-	hideHints bool
+	// selecting is true after the user has picked an agent and the
+	// app is round-tripping CreateSession to the gateway. While set,
+	// the picker freezes: list navigation is disabled and the view
+	// renders a loading line so the user can't keep moving the
+	// cursor while a request is in flight. Cleared by app.go when a
+	// sessionCreatedMsg error bounces back into the picker.
+	selecting bool
+	// selectingName is the display label of the agent that triggered
+	// selecting; surfaced in the loading view so the user sees which
+	// agent they chose.
+	selectingName string
+	hideHints     bool
 	// showConnections enables the "Connections" action so the user
 	// can jump back to the connections picker from the agent list
 	// without going through chat first. Only meaningful in managed
@@ -339,6 +350,17 @@ func (m *selectModel) switchFocus() tea.Cmd {
 }
 
 func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
+	// Once the user has picked an agent we've handed control to
+	// app.go, which is round-tripping CreateSession. Drop further
+	// input — keystrokes, list-internal cmds — so the user can't
+	// keep moving the cursor while we wait. The agentsLoadedMsg /
+	// agentCreatedMsg / agentDeletedMsg paths are unreachable here
+	// (loadAgents fires only on retry, create, or delete) so it's
+	// safe to short-circuit at the top.
+	if m.selecting {
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case agentsLoadedMsg:
 		m.loading = false
@@ -469,8 +491,13 @@ func (m selectModel) handleKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 	// rather than a discoverable view-level command, so it stays inline.
 	if msg.String() == "enter" {
 		if !m.loading && m.err == nil {
-			if _, ok := m.list.SelectedItem().(agentItem); ok {
+			if item, ok := m.list.SelectedItem().(agentItem); ok {
 				m.selected = true
+				m.selecting = true
+				m.selectingName = item.agent.Name
+				if m.selectingName == "" {
+					m.selectingName = item.agent.ID
+				}
 				return m, nil
 			}
 		}
@@ -498,6 +525,12 @@ func (m selectModel) handleKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 // interactions and intentionally exposes no actions — those keys are
 // inherent form navigation, not discoverable commands.
 func (m selectModel) Actions() []Action {
+	if m.selecting {
+		// Mirror the loading view: no actionable surface while the
+		// gateway round-trip is in flight, so embedders that render
+		// Actions as buttons can't smuggle a re-entry past the gate.
+		return nil
+	}
 	if m.subState == subStateConfirmDelete {
 		// In confirm-delete the only available actions are the
 		// destructive ones. confirm-delete only appears when the
@@ -703,6 +736,17 @@ func (m selectModel) updateCreateForm(msg tea.Msg) (selectModel, tea.Cmd) {
 func (m selectModel) View() string {
 	if m.loading {
 		return "\n  Connecting to gateway...\n"
+	}
+	if m.selecting {
+		// Pinned during the CreateSession round-trip so navigation
+		// affordances disappear with the rest of the picker UI; the
+		// connection banner stays so the user still sees scope.
+		banner := renderConnectionBanner(m.activeConn)
+		name := m.selectingName
+		if name == "" {
+			name = "agent"
+		}
+		return banner + fmt.Sprintf("\n  Loading %s...\n", name)
 	}
 	hints := m.renderHints()
 	banner := renderConnectionBanner(m.activeConn)

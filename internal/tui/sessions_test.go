@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func newTestSessionsModel() sessionsModel {
@@ -221,5 +223,89 @@ func TestSkipHeaders_StaysOnSessionItem(t *testing.T) {
 	idx := m.list.Index()
 	if idx < 0 {
 		t.Errorf("expected non-negative index, got %d", idx)
+	}
+}
+
+// --- selecting state ---
+
+func TestSessionsKey_Enter_TriggersSelectingState(t *testing.T) {
+	m := newTestSessionsModel()
+	m, _ = m.Update(sessionsLoadedMsg{
+		sessions: []sessionItem{
+			{key: "s1", title: "First chat", group: "Conversations"},
+		},
+	})
+	if m.selecting {
+		t.Fatal("selecting should be false before enter")
+	}
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if !m.selecting {
+		t.Error("expected selecting=true after enter so the picker freezes")
+	}
+	if m.selectingTitle != "First chat" {
+		t.Errorf("selectingTitle = %q, want First chat", m.selectingTitle)
+	}
+}
+
+func TestSessionsSelecting_BlocksNavigation(t *testing.T) {
+	m := newTestSessionsModel()
+	m, _ = m.Update(sessionsLoadedMsg{
+		sessions: []sessionItem{
+			{key: "s1", title: "First", group: "Conversations"},
+			{key: "s2", title: "Second", group: "Conversations"},
+		},
+	})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.selecting {
+		t.Fatal("setup: expected selecting=true after enter")
+	}
+	startIdx := m.list.Index()
+
+	m, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+
+	if m.list.Index() != startIdx {
+		t.Errorf("list index moved while selecting: was %d, now %d", startIdx, m.list.Index())
+	}
+	if cmd != nil {
+		t.Errorf("expected no cmd while selecting, got %T", cmd)
+	}
+}
+
+func TestSessionsSelecting_HidesActions(t *testing.T) {
+	m := newTestSessionsModel()
+	m, _ = m.Update(sessionsLoadedMsg{
+		sessions: []sessionItem{
+			{key: "s1", title: "First", group: "Conversations"},
+		},
+	})
+	if len(m.Actions()) == 0 {
+		t.Fatal("setup: expected actions before enter")
+	}
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if len(m.Actions()) != 0 {
+		t.Errorf("expected no actions while selecting, got %+v", m.Actions())
+	}
+}
+
+func TestSessionsSelecting_ViewRendersLoading(t *testing.T) {
+	m := newTestSessionsModel()
+	m, _ = m.Update(sessionsLoadedMsg{
+		sessions: []sessionItem{
+			{key: "s1", title: "First chat", group: "Conversations"},
+			{key: "s2", title: "Second", group: "Conversations"},
+		},
+	})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "Loading First chat") {
+		t.Errorf("expected loading line naming the picked session, got:\n%s", view)
+	}
+	if strings.Contains(view, "Second") {
+		t.Errorf("expected list to be hidden while selecting, got:\n%s", view)
 	}
 }

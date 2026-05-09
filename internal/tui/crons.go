@@ -251,6 +251,17 @@ type cronsModel struct {
 	loading bool
 	err     error
 
+	// selecting is true after the user has picked a job from the
+	// list and we're round-tripping CronListRunLog. While set, the
+	// list is frozen (no navigation, no actions) and the view shows
+	// a "Loading <job>..." line. Cleared when cronRunsLoadedMsg
+	// arrives, at which point we flip into the detail substate with
+	// runs already populated. Mirrors the agent / session pickers'
+	// freeze so the user can't keep moving the cursor while a
+	// gateway round-trip is in flight.
+	selecting      bool
+	selectingTitle string
+
 	// Detail substate.
 	selectedID  string
 	runs        []protocol.CronRunLogEntry
@@ -401,6 +412,17 @@ func (m cronsModel) findJob(id string) (protocol.CronJob, bool) {
 }
 
 func (m cronsModel) Update(msg tea.Msg) (cronsModel, tea.Cmd) {
+	if m.selecting {
+		// Drop everything except the run-log payload that ends the
+		// freeze. Keystrokes, list-internal cmds, refresh ticks
+		// from background work are all suppressed so the user
+		// can't keep moving the cursor or trigger another load
+		// while this one is in flight.
+		if _, ok := msg.(cronRunsLoadedMsg); !ok {
+			return m, nil
+		}
+	}
+
 	switch msg := msg.(type) {
 	case cronsLoadedMsg:
 		m.loading = false
@@ -418,6 +440,17 @@ func (m cronsModel) Update(msg tea.Msg) (cronsModel, tea.Cmd) {
 			return m, nil
 		}
 		m.runsLoading = false
+		// First arrival after a list pick: drop the freeze and
+		// reveal the detail page. The user lands on the detail
+		// view fully populated (or with the run-log error
+		// surfaced inline) instead of staring at a half-loaded
+		// page. Refresh-from-detail paths leave m.selecting=false
+		// already so they take the no-op branch here.
+		if m.selecting {
+			m.selecting = false
+			m.selectingTitle = ""
+			m.subset = cronSubDetail
+		}
 		if msg.err != nil {
 			m.runsErr = msg.err
 			return m, nil
@@ -515,8 +548,15 @@ func (m cronsModel) handleListKey(msg tea.KeyPressMsg) (cronsModel, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
+		// Freeze the list while we load the run history. We delay
+		// flipping into cronSubDetail until cronRunsLoadedMsg
+		// arrives so the user lands on a fully-populated detail
+		// page rather than a half-loaded one — and so the list
+		// disappears with the rest of the picker UI behind a
+		// loading line, like the agent + session pickers.
+		m.selecting = true
+		m.selectingTitle = displayJobName(item.job)
 		m.selectedID = item.job.ID
-		m.subset = cronSubDetail
 		m.runs = nil
 		m.runsErr = nil
 		m.runsLoading = true
@@ -570,6 +610,11 @@ func (m cronsModel) handleConfirmKey(msg tea.KeyPressMsg) (cronsModel, tea.Cmd) 
 // -----------------------------------------------------------------------------
 
 func (m cronsModel) Actions() []Action {
+	if m.selecting {
+		// Mirror the loading view: no actionable surface while the
+		// run-log round-trip is in flight.
+		return nil
+	}
 	switch m.subset {
 	case cronSubList:
 		return m.listActions()
@@ -1244,6 +1289,16 @@ func buildDelivery(f cronForm) *protocol.CronDelivery {
 
 func (m cronsModel) View() string {
 	banner := renderConnectionBanner(m.activeConn)
+	if m.selecting {
+		// Pinned during the CronListRunLog round-trip so the list
+		// disappears with the rest of the picker UI; the connection
+		// banner stays so the user still sees scope.
+		title := m.selectingTitle
+		if title == "" {
+			title = "job"
+		}
+		return banner + fmt.Sprintf("\n  Loading %s...\n", title)
+	}
 	switch m.subset {
 	case cronSubList:
 		return banner + m.viewList()

@@ -661,6 +661,11 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case sessionCreatedMsg:
 		if msg.err != nil {
 			m.selectModel.err = msg.err
+			// Drop the selection-loading lock so the user can
+			// retry / pick a different agent — without this the
+			// picker would stay frozen on the loading line.
+			m.selectModel.selecting = false
+			m.selectModel.selectingName = ""
 			m.state = viewSelect
 			return m, nil
 		}
@@ -671,6 +676,14 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		// loading history.
 		initialMsg := m.initialMessage
 		m.initialMessage = ""
+		// Drop the selection-loading lock now the round-trip has
+		// landed. selectModel outlives the picker view (it's only
+		// reconstructed on connect, not on /agents), so without
+		// this the lock would still be set when the user returns
+		// via /agents — pinning the picker on "Loading <agent>..."
+		// for the agent they just opened.
+		m.selectModel.selecting = false
+		m.selectModel.selectingName = ""
 		m.chatModel = newChatModel(m.backend, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), initialMsg, m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
