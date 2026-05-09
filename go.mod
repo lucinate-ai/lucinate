@@ -11,10 +11,11 @@ require (
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260419004333-9332b2225b80
+	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
 	github.com/olekukonko/tablewriter v1.1.4
 	github.com/sahilm/fuzzy v0.1.1
-	golang.org/x/mod v0.35.0
+	golang.org/x/mod v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -35,7 +36,6 @@ require (
 	github.com/dlclark/regexp2 v1.11.0 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
