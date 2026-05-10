@@ -5,8 +5,10 @@ import (
 	"testing"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/lucinate-ai/lucinate/internal/config"
 	"github.com/lucinate-ai/lucinate/internal/routines"
 )
 
@@ -301,3 +303,203 @@ func TestRoutinesDetailActions_DeleteKeyIsX(t *testing.T) {
 // list.Item interface is satisfied by routineItem; this is a compile-time
 // guard that the test seeding path actually creates list-recognised items.
 var _ list.Item = routineItem{}
+
+// withTempRoutinesDir reroutes config.DataDir at a temp directory so
+// Save/Load/Delete don't touch the user's real ~/.lucinate.
+func withTempRoutinesDir(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	config.SetDataDir(dir)
+	t.Cleanup(func() { config.SetDataDir("") })
+}
+
+func TestRoutinesForm_RejectsNonKebabName(t *testing.T) {
+	withTempRoutinesDir(t)
+	m := newRoutinesModel(true, true)
+	m.openCreateFormWithSteps([]string{"first prompt"})
+
+	m.form.name.SetValue("My Routine")
+	m, cmd := m.submitForm()
+
+	if cmd != nil {
+		t.Fatal("expected no save cmd when name fails kebab validation")
+	}
+	if m.form.err == nil {
+		t.Fatal("expected form err for non-kebab name")
+	}
+	got := m.form.err.Error()
+	if !strings.Contains(got, "kebab-case") {
+		t.Errorf("error %q should mention kebab-case", got)
+	}
+	if !strings.Contains(got, "my-routine") {
+		t.Errorf("error %q should suggest the kebab form", got)
+	}
+
+	listed, err := routines.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Errorf("rejected save still wrote %d routines: %+v", len(listed), listed)
+	}
+}
+
+func TestRoutinesForm_AcceptsKebabName(t *testing.T) {
+	withTempRoutinesDir(t)
+	m := newRoutinesModel(true, true)
+	m.openCreateFormWithSteps([]string{"do the thing"})
+
+	m.form.name.SetValue("my-routine")
+	_, cmd := m.submitForm()
+
+	if cmd == nil {
+		t.Fatal("expected save cmd for kebab-cased name")
+	}
+	// Drive the cmd so the routine actually lands on disk.
+	if msg := cmd(); msg == nil {
+		t.Fatal("save cmd returned nil")
+	}
+	listed, err := routines.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Name != "my-routine" {
+		t.Errorf("expected one routine 'my-routine', got %+v", listed)
+	}
+}
+
+// makeFormWithLayout builds a routineForm with synthetic line-start
+// metadata so ensureFocusVisible can be exercised without rendering
+// real textareas. height is the viewport height; bodyLines is the
+// total content height; starts maps focusable-field index → starting
+// line. The viewport is given just enough fake content to satisfy
+// scroll bounds.
+func makeFormWithLayout(t *testing.T, height int, bodyLines int, starts []int) routineForm {
+	t.Helper()
+	vp := viewport.New()
+	vp.SetWidth(80)
+	vp.SetHeight(height)
+	// Fake content: bodyLines newlines so YOffset clamping has
+	// something realistic to clamp against.
+	vp.SetContent(strings.Repeat("x\n", bodyLines))
+	return routineForm{
+		body:            vp,
+		fieldLineStarts: starts,
+		bodyLines:       bodyLines,
+	}
+}
+
+func TestRoutineForm_EnsureFocusVisible_ScrollsDownToReachLaterField(t *testing.T) {
+	// 11 fields, sized so 9 of them sit below a 10-row window.
+	// Focused field starts at line 51, viewport height 10 → expected
+	// offset puts the focused field's last line on the bottom edge.
+	starts := []int{0, 5, 10, 15, 21, 27, 33, 39, 45, 51, 57}
+	form := makeFormWithLayout(t, 10, 63, starts)
+	form.focused = 9
+	form.body.SetYOffset(0)
+
+	form.ensureFocusVisible()
+
+	got := form.body.YOffset()
+	// Field 9 spans lines 51..56 (next start is 57). Window height 10.
+	// Acceptable offsets keep [51,56] inside [offset, offset+10).
+	if got < 47 || got > 51 {
+		t.Errorf("YOffset=%d, want in [47,51] so step 9 (lines 51..56) is visible", got)
+	}
+}
+
+func TestRoutineForm_EnsureFocusVisible_ScrollsUpToReachEarlierField(t *testing.T) {
+	starts := []int{0, 5, 10, 15, 21, 27, 33, 39, 45, 51, 57}
+	form := makeFormWithLayout(t, 10, 63, starts)
+	form.focused = 1 // field at line 5..9
+	form.body.SetYOffset(40) // start scrolled past it
+
+	form.ensureFocusVisible()
+
+	got := form.body.YOffset()
+	if got > 5 {
+		t.Errorf("YOffset=%d, want ≤5 so field 1 (line 5) is visible", got)
+	}
+}
+
+func TestRoutineForm_EnsureFocusVisible_NoOpWhenAlreadyVisible(t *testing.T) {
+	starts := []int{0, 5, 10, 15, 21, 27, 33, 39, 45, 51, 57}
+	form := makeFormWithLayout(t, 20, 63, starts)
+	form.focused = 4 // line 21..26
+	form.body.SetYOffset(15)
+
+	form.ensureFocusVisible()
+
+	if got := form.body.YOffset(); got != 15 {
+		t.Errorf("YOffset=%d, want 15 (already-visible focus shouldn't scroll)", got)
+	}
+}
+
+func TestRoutineForm_EnsureFocusVisible_ClampsToBodyLines(t *testing.T) {
+	// Focusing the very last field shouldn't try to push offset past
+	// the maximum scroll position — the viewport would just clamp it
+	// itself but ensureFocusVisible should produce a sane value too.
+	starts := []int{0, 5}
+	form := makeFormWithLayout(t, 10, 12, starts)
+	form.focused = 1 // line 5..11
+	form.body.SetYOffset(0)
+
+	form.ensureFocusVisible()
+
+	got := form.body.YOffset()
+	maxOffset := 12 - 10
+	if got > maxOffset {
+		t.Errorf("YOffset=%d, want ≤%d (clamped to bodyLines-height)", got, maxOffset)
+	}
+	// And the focus's start must still be inside the window.
+	if got > 5 {
+		t.Errorf("YOffset=%d hides field start at line 5", got)
+	}
+}
+
+func TestRoutinesForm_HelpLineAlwaysRendersWithManySteps(t *testing.T) {
+	// Regression: with 30 steps and a 24-row terminal the previous
+	// inline rendering pushed the help line off the bottom. The
+	// viewport-based form keeps title and footer pinned, so the help
+	// text must always appear in the rendered output.
+	withTempRoutinesDir(t)
+	steps := make([]string, 30)
+	for i := range steps {
+		steps[i] = "step body"
+	}
+	m := newRoutinesModel(false, true)
+	m.setSize(80, 24)
+	m.openCreateFormWithSteps(steps)
+	// Focus the last step — the worst case for the previous layout.
+	m.form.focused = fieldStepStart + 29
+
+	out := m.viewForm()
+
+	if !strings.Contains(out, "ctrl+s: save") {
+		t.Errorf("help line missing from rendered form with many steps:\n%s", out)
+	}
+	// And the title should still render at the top.
+	if !strings.Contains(out, "Routines · New") {
+		t.Errorf("title missing from rendered form:\n%s", out)
+	}
+}
+
+func TestRoutinesForm_RejectsEmptyAndPunctuationOnly(t *testing.T) {
+	withTempRoutinesDir(t)
+	m := newRoutinesModel(true, true)
+	m.openCreateFormWithSteps([]string{"step"})
+
+	cases := []string{"", "  ", "!!!", "   !!! "}
+	for _, in := range cases {
+		m.form.err = nil
+		m.form.name.SetValue(in)
+		var cmd tea.Cmd
+		m, cmd = m.submitForm()
+		if cmd != nil {
+			t.Errorf("%q: expected no cmd, got %v", in, cmd)
+		}
+		if m.form.err == nil {
+			t.Errorf("%q: expected form err", in)
+		}
+	}
+}

@@ -186,7 +186,15 @@ type startRoutineMsg struct {
 }
 
 // showRoutinesMsg signals the AppModel to switch to the routines manager.
-type showRoutinesMsg struct{}
+//
+// prefillSteps, when non-empty, opens the manager directly into the
+// new-routine form with one step per element, name + mode + log left
+// blank for the user to fill in. Used by `/export routine` so the
+// session's user prompts become a saveable routine without leaving
+// the TUI.
+type showRoutinesMsg struct {
+	prefillSteps []string
+}
 
 // goBackFromRoutinesMsg signals the AppModel to return to the chat view
 // from the routines manager.

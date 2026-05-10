@@ -65,7 +65,15 @@ func TestStore_RoundTrip(t *testing.T) {
 }
 
 func TestStore_RejectsInvalidName(t *testing.T) {
-	cases := []string{"", ".", "..", ".hidden", "with/slash", "with\\back"}
+	// Path-unsafe and non-kebab names are both rejected by Save.
+	// validName (path safety) is unchanged; IsValidKebab adds the
+	// stricter form rule on top, so any name that fails either gate
+	// is rejected here.
+	cases := []string{
+		"", ".", "..", ".hidden", "with/slash", "with\\back",
+		"Mixed-Case", "with space", "snake_case", "trailing-",
+		"-leading", "double--hyphen",
+	}
 	for _, name := range cases {
 		if err := Save(Routine{Name: name, Steps: []string{"x"}}); err == nil {
 			t.Errorf("Save(%q) = nil, want error", name)

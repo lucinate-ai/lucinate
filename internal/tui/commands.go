@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -48,7 +50,7 @@ type pendingNavConfirm struct {
 // hint surfaces the picker first, "/model" before "/models" likewise.
 // Tab now extends to the longest common prefix and the completion menu
 // shows every candidate, so the curated order no longer rules Tab.
-var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/help", "/model", "/models", "/quit", "/reset", "/routines", "/routine", "/sessions", "/skills", "/stats", "/status", "/think"}
+var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/export", "/help", "/model", "/models", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/skills", "/stats", "/status", "/think"}
 
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
@@ -290,7 +292,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			}
 		})
 	case "/help", "/commands":
-		helpText := "/quit, /exit — quit lucinate\n/agents — return to agent picker\n/agent <name> — switch agent directly\n/cancel — cancel the current response (also: Esc)\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/connections — switch gateway connection\n/crons — list and manage cron jobs (use /crons all for global)\n/models — open model picker (filter as you type)\n/model <name> — switch model directly\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/status — show gateway health and agent status\n/skills — list available agent skills\n/think — show current thinking level\n/think <level> — set thinking level (off/minimal/low/medium/high)\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
+		helpText := "/quit, /exit — quit lucinate\n/agents — return to agent picker\n/agent <name> — switch agent directly\n/cancel — cancel the current response (also: Esc)\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/connections — switch gateway connection\n/crons — list and manage cron jobs (use /crons all for global)\n/export — write the current session's canonical history to a transcript file (/export routine opens the routine form prefilled with the user prompts)\n/models — open model picker (filter as you type)\n/model <name> — switch model directly\n/record on|off — toggle live transcript capture for this session (bare /record shows state)\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/status — show gateway health and agent status\n/skills — list available agent skills\n/think — show current thinking level\n/think <level> — set thinking level (off/minimal/low/medium/high)\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
 		if len(m.skills) > 0 {
 			helpText += fmt.Sprintf("\n\n%d agent skill(s) available — type /skills to list", len(m.skills))
 		}
@@ -368,6 +370,18 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	// /think with optional level argument.
 	if command == "/think" || strings.HasPrefix(command, "/think ") {
 		return m.handleThinkCommand(text)
+	}
+
+	// /record toggles transcript capture for the current session. Bare
+	// /record reports state; /record on|off flips it.
+	if command == "/record" || strings.HasPrefix(command, "/record ") {
+		return m.handleRecordCommand(text)
+	}
+
+	// /export dumps the current canonical history to a transcript file
+	// (or to a routine, with `/export routine`).
+	if command == "/export" || strings.HasPrefix(command, "/export ") {
+		return m.handleExportCommand(text)
 	}
 
 	// Slash-prefixed input that isn't a built-in: if the first token names a
@@ -784,4 +798,152 @@ func (m *chatModel) handleThinkCommand(text string) (bool, tea.Cmd) {
 		err := thinking.SessionPatchThinking(context.Background(), sessionKey, level)
 		return thinkingChangedMsg{level: level, err: err}
 	}
+}
+
+// handleRecordCommand handles `/record`, `/record on`, `/record off`.
+// Bare /record reports current state. /record on opens a transcript
+// file under <dataDir>/transcripts and seeds it with whatever
+// canonical history is already in m.messages, so the file is
+// self-contained even if recording was started mid-session.
+func (m *chatModel) handleRecordCommand(text string) (bool, tea.Cmd) {
+	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
+	arg := ""
+	if len(parts) == 2 {
+		arg = strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	switch arg {
+	case "":
+		if m.recorder == nil {
+			m.appendMessage(chatMessage{role: "system", content: "Recording is off. Use /record on to start capturing this session."})
+		} else {
+			m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Recording to %s", m.recorder.path)})
+		}
+		m.updateViewport()
+		return true, nil
+	case "on":
+		if m.recorder != nil {
+			m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Already recording to %s", m.recorder.path)})
+			m.updateViewport()
+			return true, nil
+		}
+		rec, err := newTranscriptRecorder(m.sessionKey, m.agentName, m.modelID, m.connName, time.Now())
+		if err != nil {
+			m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("Could not start recording: %v", err)})
+			m.updateViewport()
+			return true, nil
+		}
+		m.recorder = rec
+		m.recordCanonical(m.messages)
+		// recordCanonical clears m.recorder on a write failure; check
+		// before reporting success so the user isn't told a recording
+		// is active when the seeding write already broke it.
+		if m.recorder == nil {
+			m.updateViewport()
+			return true, nil
+		}
+		m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Recording to %s", m.recorder.path)})
+		m.updateViewport()
+		return true, nil
+	case "off":
+		path, stopped := m.stopRecording()
+		if !stopped {
+			m.appendMessage(chatMessage{role: "system", content: "Recording is already off."})
+		} else {
+			m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Recording stopped. Transcript: %s", path)})
+		}
+		m.updateViewport()
+		return true, nil
+	default:
+		m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("unknown /record argument %q — use /record on, /record off, or /record", arg)})
+		m.updateViewport()
+		return true, nil
+	}
+}
+
+// handleExportCommand handles `/export`, `/export all`, `/export routine`.
+// `all` (the default) writes the current canonical history to a
+// transcript file. `routine` extracts user prompts and opens the
+// routine form prepopulated.
+func (m *chatModel) handleExportCommand(text string) (bool, tea.Cmd) {
+	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
+	arg := "all"
+	if len(parts) == 2 {
+		if got := strings.ToLower(strings.TrimSpace(parts[1])); got != "" {
+			arg = got
+		}
+	}
+	switch arg {
+	case "all":
+		path, err := exportTranscript(m.messages, m.sessionKey, m.agentName, m.modelID, m.connName, time.Now())
+		if err != nil {
+			m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("Export failed: %v", err)})
+			m.updateViewport()
+			return true, nil
+		}
+		m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Exported transcript: %s", path)})
+		m.updateViewport()
+		return true, nil
+	case "routine":
+		if _, ok := m.backend.(backend.CronBackend); !ok {
+			// Routines are surfaced through the manager regardless of
+			// backend, but the routine machinery and the /routines
+			// nav assume an OpenClaw-style backend. The form opens
+			// fine without a CronBackend; the gate exists in case a
+			// future backend wants to opt out.
+			_ = ok
+		}
+		steps := extractUserPromptsForRoutine(m.messages)
+		if len(steps) == 0 {
+			m.appendMessage(chatMessage{role: "system", errMsg: "No user prompts in this session yet — nothing to export as a routine."})
+			m.updateViewport()
+			return true, nil
+		}
+		return true, m.gateNavigation("Exporting to routine", func() tea.Msg {
+			return showRoutinesMsg{prefillSteps: steps}
+		})
+	default:
+		m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("unknown /export argument %q — use /export, /export all, or /export routine", arg)})
+		m.updateViewport()
+		return true, nil
+	}
+}
+
+// exportTranscript writes the canonical user/assistant rows in msgs
+// to a freshly-created transcript file and returns its path. Any
+// non-canonical rows (separators, system, tool, streaming
+// placeholders) are filtered out by writeTranscriptEntry's role
+// guard, so callers can pass m.messages directly.
+func exportTranscript(msgs []chatMessage, sessionKey, agentName, modelID, connName string, now time.Time) (string, error) {
+	dir, err := transcriptsDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, transcriptFilename(sessionKey, agentName, "export", now))
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := writeTranscriptHeader(f, sessionKey, agentName, modelID, connName, "export", now); err != nil {
+		return "", err
+	}
+	for _, msg := range msgs {
+		if !isRecordableRole(msg.role) {
+			continue
+		}
+		if msg.streaming {
+			continue
+		}
+		text := messageSourceText(msg)
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		if err := writeTranscriptEntry(f, msg.role, msg.timestampMs, text, msg.thinking); err != nil {
+			return "", err
+		}
+	}
+	return path, nil
 }
