@@ -217,7 +217,7 @@ When the routine is awaiting user input — manual mode, or auto with `paused` s
 routine: demo — MANUAL — sent: 5/10 — ▶ Press Enter to send: <preview>
 ```
 
-`AUTO`/`MANUAL` reflects the mode; `(paused)` is appended when `paused` is set. The renderer is `routineStatusLine` + `routineStatusStyle` in `routines_chat.go`; the preview length is computed from `m.width` so it grows with the terminal (floor 20 chars, fallback 40 when width is not yet known). `applyLayout()` (`completion.go`) subtracts one row from the viewport height when a routine is active so the status row doesn't push the input off-screen.
+`AUTO`/`MANUAL` reflects the mode; `(paused)` is appended when `paused` is set. The row is coloured by mode — amber (`execClr`) for auto, cyan (`userClr`) for manual — so the driver is legible at a glance without the row competing with the purple chat header. The renderer is `routineStatusLine` + `routineStatusStyle` in `routines_chat.go`; the preview length is computed from `m.width` so it grows with the terminal (floor 20 chars, fallback 40 when width is not yet known). `applyLayout()` (`completion.go`) subtracts one row from the viewport height when a routine is active so the status row doesn't push the input off-screen.
 
 ## Key bindings
 
