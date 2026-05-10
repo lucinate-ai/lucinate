@@ -722,12 +722,6 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				return m, func() tea.Msg { return goBackFromCronTranscriptMsg{} }
 			}
 			return m, nil
-		case "alt+m":
-			if m.activeRoutine != nil {
-				m.cycleRoutineMode()
-				m.updateViewport()
-			}
-			return m, nil
 		case "tab":
 			if ctx, ok := m.completionAtCursor(); ok {
 				m.handleCompletionTab(ctx)
@@ -743,6 +737,11 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 					newValue := value[:ctx.start] + pick + value[ctx.cursorByte:]
 					setTextareaToValueWithCursor(&m.textarea, newValue, ctx.start+len(pick))
 				}
+				return m, nil
+			}
+			if m.activeRoutine != nil {
+				m.cycleRoutineMode()
+				m.updateViewport()
 			}
 			return m, nil
 		case "up":

@@ -14,7 +14,7 @@ import (
 // activeRoutine holds the in-flight state for a routine the user has
 // activated via /routine <name>. While set, the chatModel auto-advances in
 // auto mode after each assistant final, repurposes Enter on empty input to
-// send the next step, and binds Alt+M to mode cycling.
+// send the next step, and binds Shift+Tab to mode cycling.
 type activeRoutine struct {
 	routine routines.Routine
 	mode    routines.Mode

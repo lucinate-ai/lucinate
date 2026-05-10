@@ -80,7 +80,7 @@ Lifecycle entry points on `*chatModel`:
 | `maybeAdvanceRoutine()` | Called from the chat `final` event handler. Returns `nil` unless the routine is active, mode is auto, not paused, and a step remains. Otherwise returns `sendNextRoutineStep`. When all steps have been sent, calls `endRoutine("completed")` and returns nil. |
 | `applyDirectives(reply)` | Scans the assistant reply for `/routine:` directives and applies them in order |
 | `endRoutine(reason)` | Closes the logger, clears `activeRoutine`, posts a "Routine X <reason>" notification |
-| `cycleRoutineMode()` | Bound to `Alt+M` — flips between auto and manual; entering auto unsets `paused` |
+| `cycleRoutineMode()` | Bound to `Shift+Tab` (mirrors Claude Code's mode-cycle gesture) — flips between auto and manual; entering auto unsets `paused`. Yields to slash-menu cycling when the completion menu is active. |
 
 Step indexing is strictly monotonic: only `sendNextRoutineStep` increments `ar.sent`, and it does so once per call. Auto-advance is gated solely on `ar.sent < len(Steps)` and the directive/pause flags — there is no path that decrements or skips.
 
@@ -171,7 +171,7 @@ The form has three textinputs (name, mode, log) plus a slice of `textarea.Model`
 | Key | Action |
 |---|---|
 | Tab / Shift+Tab | Cycle focus |
-| Alt+S (or Ctrl+S) | Save — Alt+S is the primary because Ctrl+S is XOFF on most terminals |
+| Ctrl+S (or Alt+S) | Save — Ctrl+S is the surfaced binding; Alt+S is kept as a fallback for terminals that intercept Ctrl+S as XOFF |
 | Alt+Up | Insert blank step above the focused step |
 | Alt+Down | Insert blank step below the focused step |
 | Alt+Delete (or Alt+Backspace) | Remove the focused step (y/n confirm) |
@@ -230,7 +230,7 @@ routine: demo — AUTO — sent: 5/10 — next: <40-char preview>
 
 | Key | Behaviour |
 |---|---|
-| Alt+M | Cycle mode (auto ↔ manual). No-op when no routine is active. Alt is used because every Ctrl+letter has a readline binding (Ctrl+R reverse-search, Ctrl+S XOFF, etc.). |
+| Shift+Tab | Cycle mode (auto ↔ manual). No-op when no routine is active. Mirrors Claude Code's mode-cycle gesture. Yields to slash-menu cycling when the completion menu is active. |
 | Esc | When a routine is active: end the routine and (if streaming) cancel the in-flight turn. Otherwise behaves as before (`/cancel`-equivalent or transcript back). |
 | Enter (empty input) | When a routine is active and idle (manual or paused): send the next step. Otherwise no-op. |
 
@@ -253,7 +253,7 @@ Manual smoke:
 
 1. Drop a routine at `~/.lucinate/routines/demo/STEPS.md` with `mode: manual`. `/routine demo` dispatches step 0; status row reads `MANUAL — sent: 1/N — next: …`.
 2. Press Enter on an empty input — step 1 dispatches.
-3. Alt+M flips status to `AUTO`. Subsequent step finals auto-advance.
+3. Shift+Tab flips status to `AUTO`. Subsequent step finals auto-advance.
 4. Have step N's reply emit `/routine:stop` on its own line — routine ends; "Routine 'demo' stopped by assistant." notification appears above the input and survives the post-turn `refreshHistory`.
 5. Repeat with `log: ./routine.log` set — verify a run header and ISO-timestamped `user:` / `assistant:` lines.
 6. Activate a routine, run `/agents` — confirm the gate prompt; `n` keeps the routine running, `y` ends it cleanly and returns to the picker.

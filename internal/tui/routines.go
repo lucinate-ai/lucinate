@@ -391,7 +391,7 @@ func (m routinesModel) handleFormKey(msg tea.KeyPressMsg) (routinesModel, tea.Cm
 			m.refocus()
 		}
 		return m, nil
-	// alt+s is the primary save key; ctrl+s is kept as an alias defensively
+	// ctrl+s is the surfaced save key; alt+s is kept as an alias defensively
 	// because some terminals interpret ctrl+s as XOFF and never deliver it.
 	case "alt+s", "ctrl+s":
 		return m.submitForm()
@@ -700,7 +700,7 @@ func (m routinesModel) Actions() []Action {
 		}
 	case routinesSubForm:
 		return []Action{
-			{ID: "save", Label: "Save", Key: "alt+s"},
+			{ID: "save", Label: "Save", Key: "ctrl+s"},
 			{ID: "insert-above", Label: "Insert step above", Key: "alt+up"},
 			{ID: "insert-below", Label: "Insert step below", Key: "alt+down"},
 			{ID: "delete-step", Label: "Delete step", Key: "alt+delete"},
@@ -896,7 +896,7 @@ func (m routinesModel) viewForm() string {
 		return b.String()
 	}
 	if !m.hideHints {
-		b.WriteString(helpStyle.Render(" alt+s: save · alt+↑/↓: insert step · alt+delete: remove step · tab: next field · esc: cancel"))
+		b.WriteString(helpStyle.Render(" ctrl+s: save · alt+↑/↓: insert step · alt+delete: remove step · tab: next field · esc: cancel"))
 	}
 	return b.String()
 }

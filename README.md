@@ -198,7 +198,7 @@ The gateway's exec security policy controls which remote commands are allowed. I
 
 Recurring prompt workflow you find yourself retyping every Tuesday? Save it as a routine. Each routine is an ordered list of steps; each step is a complete user message. Activate one with `/routine <name>` and lucinate fires the steps at the assistant in order, optionally auto-advancing after every reply.
 
-Manage them with `/routines` — list, view, add, edit, delete. The form has one textarea per step plus `Alt+↑` / `Alt+↓` to insert above/below and `Alt+Delete` to remove. `Alt+S` saves.
+Manage them with `/routines` — list, view, add, edit, delete. The form has one textarea per step plus `Alt+↑` / `Alt+↓` to insert above/below and `Alt+Delete` to remove. `Ctrl+S` saves.
 
 Routine files live at `~/.lucinate/routines/<name>/STEPS.md`. The format is plain markdown with optional YAML frontmatter and `---` between steps:
 
@@ -232,7 +232,7 @@ Useful keys mid-routine:
 
 | Key | Action |
 |-----|--------|
-| `Alt+M` | Cycle the mode (auto ↔ manual) |
+| `Shift+Tab` | Cycle the mode (auto ↔ manual) |
 | `Enter` (empty input) | Send the next step (manual / paused mode) |
 | `Esc` | Cancel the routine and any in-flight reply |
 

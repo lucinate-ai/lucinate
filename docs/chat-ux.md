@@ -6,11 +6,10 @@
 |---|---|
 | Enter | Send message — or, on empty input with an active routine, advance the routine ([routines.md](routines.md)) |
 | Alt+Enter | Insert newline |
-| Alt+M | Cycle the active routine's mode (auto ↔ manual) — no-op when no routine is active |
 | Ctrl+W | Delete word backward |
 | Up arrow (empty input) | Recall last sent message for editing |
 | Tab | Open slash menu, extend to longest common prefix, then cycle |
-| Shift+Tab | Cycle backward through slash-menu candidates |
+| Shift+Tab | While slash-menu is cycling: cycle backward through candidates. Otherwise, with an active routine: cycle the routine's mode (auto ↔ manual) |
 | Page Up / Page Down | Scroll message history |
 | Esc | Cancel in-progress response — or, with an active routine, end the routine and (if streaming) cancel the turn |
 
