@@ -11,8 +11,8 @@
         "baseUrl": "http://host.docker.internal:11434",
         "models": [
           {
-            "id": "qwen2.5:1.5b",
-            "name": "Qwen 3.5 4B"
+            "id": "%MODEL_NAME%",
+            "name": "%MODEL_NAME%"
           }
         ]
       }
@@ -21,7 +21,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "ollama/qwen2.5:1.5b"
+        "primary": "ollama/%MODEL_NAME%"
       }
     }
   },

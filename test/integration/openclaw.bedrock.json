@@ -11,8 +11,8 @@
         "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
         "models": [
           {
-            "id": "zai.glm-5",
-            "name": "GLM-5"
+            "id": "%MODEL_NAME%",
+            "name": "%MODEL_NAME%"
           }
         ]
       }
@@ -21,7 +21,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "amazon-bedrock/zai.glm-5"
+        "primary": "amazon-bedrock/%MODEL_NAME%"
       }
     }
   },
