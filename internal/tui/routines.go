@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -116,6 +117,24 @@ type routineForm struct {
 	saving  bool
 	err     error
 
+	// body wraps the scrollable middle of the form (header inputs +
+	// step textareas) so a routine with many steps doesn't push the
+	// help line off the bottom of the terminal. The title line above
+	// and the footer (error + help) below the viewport stay pinned;
+	// only the body scrolls.
+	body viewport.Model
+
+	// fieldLineStarts holds the starting line index in the body
+	// content for each focusable field, in focus order (name, mode,
+	// log, step0, step1, …). Recomputed every render so
+	// ensureFocusVisible can scroll the focused field into view
+	// regardless of how many steps precede it.
+	fieldLineStarts []int
+
+	// bodyLines is the total line count of the most recently rendered
+	// body content; used to bound viewport scroll calculations.
+	bodyLines int
+
 	// pendingStepDelete is set when alt+delete is pressed on a step;
 	// the form view replaces help with a y/n prompt until resolved.
 	pendingStepDelete bool
@@ -176,36 +195,82 @@ func (m *routinesModel) setSize(w, h int) {
 	}
 }
 
-// sizeFormBody adjusts the visible height of every step textarea to fit
-// the available terminal vertical space. Header textinputs are always
-// single-line; the remaining height is divided across the step
-// textareas with a per-step floor of 3 lines so each step stays usable
-// even when the form is long.
+// sizeFormBody sizes every step textarea and the body viewport that
+// scrolls them. With the viewport in place we no longer try to make
+// every textarea visible at once (long forms would force them down to
+// 1-line stubs); instead each step gets a fixed 4-line textarea and
+// the viewport handles overflow by scrolling. The visible viewport
+// height is whatever the terminal leaves after the title + footer,
+// floored at 5 lines so at least one step is always at least
+// partially visible.
 func (m *routinesModel) sizeFormBody() {
-	if len(m.form.steps) == 0 {
-		return
-	}
-	const perStepFloor = 3
-	const reservedChrome = 14 // header + name/mode/log labels+inputs + help
-	available := m.height - reservedChrome
-	if available < perStepFloor*len(m.form.steps) {
-		available = perStepFloor * len(m.form.steps)
-	}
-	per := available / len(m.form.steps)
-	if per < perStepFloor {
-		per = perStepFloor
-	}
-	if per > 8 {
-		per = 8 // cap so a single tall textarea doesn't eat the form
-	}
+	const perStepHeight = 4
+	const titleLines = 2 // header line + trailing blank
+	const footerLines = 2 // help line + trailing margin (error squeezes in via shrink)
+	const minBodyHeight = 5
+
 	width := m.width - 4
 	if width < 20 {
 		width = 20
 	}
 	for i := range m.form.steps {
-		m.form.steps[i].SetHeight(per)
+		m.form.steps[i].SetHeight(perStepHeight)
 		m.form.steps[i].SetWidth(width)
 	}
+
+	bodyH := m.height - titleLines - footerLines
+	if bodyH < minBodyHeight {
+		bodyH = minBodyHeight
+	}
+	bodyW := m.width
+	if bodyW < 1 {
+		bodyW = 1
+	}
+	m.form.body.SetWidth(bodyW)
+	m.form.body.SetHeight(bodyH)
+}
+
+// ensureFocusVisible nudges the body viewport's YOffset so the
+// currently focused field's content is fully on-screen. With long
+// step lists this is what stops the focused textarea from being
+// invisible while still receiving keystrokes — the previous form
+// rendered every textarea inline and let the bottom of the document
+// scroll off the terminal, taking the help line with it.
+func (f *routineForm) ensureFocusVisible() {
+	if len(f.fieldLineStarts) == 0 || f.bodyLines == 0 {
+		return
+	}
+	idx := f.focused
+	if idx < 0 || idx >= len(f.fieldLineStarts) {
+		return
+	}
+	start := f.fieldLineStarts[idx]
+	end := f.bodyLines - 1
+	if idx+1 < len(f.fieldLineStarts) {
+		end = f.fieldLineStarts[idx+1] - 1
+	}
+	height := f.body.Height()
+	if height <= 0 {
+		return
+	}
+	offset := f.body.YOffset()
+	switch {
+	case start < offset:
+		offset = start
+	case end >= offset+height:
+		offset = end - height + 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	maxOffset := f.bodyLines - height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	f.body.SetYOffset(offset)
 }
 
 // routinesListLoadedMsg delivers the routines slice from disk.
@@ -509,6 +574,16 @@ func (m routinesModel) submitForm() (routinesModel, tea.Cmd) {
 		m.form.err = fmt.Errorf("name is required")
 		return m, nil
 	}
+	if !routines.IsValidKebab(name) {
+		// Suggest a kebab-form of what the user typed when one is
+		// recoverable, so the fix is a single keypress away.
+		if suggestion := routines.ToKebab(name); suggestion != "" && suggestion != name {
+			m.form.err = fmt.Errorf("name must be kebab-case (lowercase letters, digits, hyphens) — try %q", suggestion)
+		} else {
+			m.form.err = fmt.Errorf("name must be kebab-case (lowercase letters, digits, hyphens)")
+		}
+		return m, nil
+	}
 	mode := strings.ToLower(strings.TrimSpace(m.form.mFm.Value()))
 	if mode != "" && mode != string(routines.ModeAuto) && mode != string(routines.ModeManual) {
 		m.form.err = fmt.Errorf("mode must be 'auto' or 'manual'")
@@ -625,7 +700,7 @@ func duplicateRoutineName(original string, existing []routines.Routine) string {
 
 func newRoutineForm(editingID string, existing routines.Routine) routineForm {
 	name := textinput.New()
-	name.Placeholder = "routine-name"
+	name.Placeholder = "kebab-case-name"
 	name.SetValue(existing.Name)
 	name.Focus()
 
@@ -659,6 +734,7 @@ func newRoutineForm(editingID string, existing routines.Routine) routineForm {
 		log:       log,
 		steps:     steps,
 		focused:   fieldName,
+		body:      viewport.New(),
 	}
 }
 
@@ -883,49 +959,78 @@ func (m routinesModel) viewDetail() string {
 }
 
 func (m routinesModel) viewForm() string {
-	var b strings.Builder
 	title := " Routines · New"
 	if m.form.mode == "edit" {
 		title = " Routines · Edit " + m.form.editingID
 	}
-	b.WriteString(headerStyle.Width(m.width).Render(title))
-	b.WriteString("\n\n")
+	titleLine := headerStyle.Width(m.width).Render(title)
 
-	row := func(label string, field string) {
+	// Build body content + per-field line starts. lineCount counts
+	// the number of '\n' separators written so far; the next field's
+	// content starts at that index because line indices are 0-based
+	// and each field's section ends with a blank line.
+	var b strings.Builder
+	starts := make([]int, 0, fieldStepStart+len(m.form.steps))
+	lineCount := 0
+	writeSection := func(label, body string) {
+		starts = append(starts, lineCount)
 		b.WriteString(lipgloss.NewStyle().Bold(true).Render(label))
 		b.WriteString("\n")
-		b.WriteString(field)
+		lineCount++
+		b.WriteString(body)
 		b.WriteString("\n\n")
+		lineCount += strings.Count(body, "\n") + 2
 	}
-	row("Name", m.form.name.View())
-	row("Mode (auto|manual)", m.form.mFm.View())
-	row("Log path (optional)", m.form.log.View())
-
+	writeSection("Name (kebab-case)", m.form.name.View())
+	writeSection("Mode (auto|manual)", m.form.mFm.View())
+	writeSection("Log path (optional)", m.form.log.View())
 	for i, ta := range m.form.steps {
 		marker := "  "
 		if m.form.stepIndex() == i {
 			marker = "▶ "
 		}
 		label := lipgloss.NewStyle().Bold(true).Render(fmt.Sprintf("%sStep %d", marker, i+1))
+		view := ta.View()
+		starts = append(starts, lineCount)
 		b.WriteString(label)
 		b.WriteString("\n")
-		b.WriteString(ta.View())
+		lineCount++
+		b.WriteString(view)
 		b.WriteString("\n\n")
+		lineCount += strings.Count(view, "\n") + 2
 	}
+	bodyContent := b.String()
 
+	// Stash line-start metadata on the form so ensureFocusVisible
+	// (called from refocus / step CRUD) can scroll the focused field
+	// into view on the next render. Update the viewport content here
+	// rather than in Update so the layout reflects the latest field
+	// values without an explicit refresh hop.
+	m.form.fieldLineStarts = starts
+	m.form.bodyLines = lineCount
+	m.form.body.SetContent(bodyContent)
+	m.form.ensureFocusVisible()
+
+	// Footer: error (when set) + either a pending-delete prompt or
+	// the help line. Help is always pinned so the user can always see
+	// how to operate the form, even with dozens of steps.
+	var footer strings.Builder
 	if m.form.err != nil {
-		b.WriteString(errorStyle.Render(m.form.err.Error()))
-		b.WriteString("\n\n")
+		footer.WriteString(errorStyle.Render(m.form.err.Error()))
+		footer.WriteString("\n")
 	}
 	if m.form.pendingStepDelete {
 		prompt := fmt.Sprintf("Delete step %d? (y/n)", m.form.pendingDeleteIdx+1)
-		b.WriteString(errorStyle.Render(prompt))
-		return b.String()
+		footer.WriteString(errorStyle.Render(prompt))
+	} else if !m.hideHints {
+		footer.WriteString(helpStyle.Render(" ctrl+s: save · alt+↑/↓: insert step · alt+delete: remove step · tab: next field · esc: cancel"))
 	}
-	if !m.hideHints {
-		b.WriteString(helpStyle.Render(" ctrl+s: save · alt+↑/↓: insert step · alt+delete: remove step · tab: next field · esc: cancel"))
+
+	parts := []string{titleLine, m.form.body.View()}
+	if footer.Len() > 0 {
+		parts = append(parts, footer.String())
 	}
-	return b.String()
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m routinesModel) viewConfirmDelete() string {

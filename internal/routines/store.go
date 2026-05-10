@@ -78,9 +78,15 @@ func Load(name string) (Routine, error) {
 
 // Save writes the routine to disk. The directory <routines>/<name>/ is
 // created when missing. Existing STEPS.md is overwritten atomically.
+//
+// Save enforces kebab-case (see IsValidKebab) so any new or renamed
+// routine lands on disk with a typeable, lowercase identifier. Load
+// and Delete remain lenient — non-kebab directories left over from
+// earlier versions continue to work until they're edited, at which
+// point the rename in submitForm forces them onto a kebab name.
 func Save(r Routine) error {
-	if !validName(r.Name) {
-		return fmt.Errorf("invalid routine name %q", r.Name)
+	if !IsValidKebab(r.Name) {
+		return fmt.Errorf("invalid routine name %q: use kebab-case (lowercase letters, digits, hyphens)", r.Name)
 	}
 	root, err := Dir()
 	if err != nil {

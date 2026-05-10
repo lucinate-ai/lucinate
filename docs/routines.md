@@ -55,7 +55,10 @@ Resolved through `config.DataDir()`:
 | `Save(r)` | `MkdirAll(0o700)` + atomic `WriteFile`/`Rename` of `STEPS.md` |
 | `Delete(name)` | `os.RemoveAll(<dir>/<name>)` |
 
-`validName` rejects empty, `.`, `..`, leading-dot, and any name containing `/`, `\\`, or NUL — the same conservative shape used elsewhere for filesystem-derived identifiers.
+Two name predicates live in `internal/routines/`:
+
+- `validName` (path safety) rejects empty, `.`, `..`, leading-dot, and any name containing `/`, `\\`, or NUL. `Load` and `Delete` use this predicate so existing on-disk directories — including any non-kebab names left over from earlier versions — keep working.
+- `IsValidKebab` (form rule) tightens to lowercase ASCII letters, digits, and hyphens; no leading or trailing hyphen, no consecutive hyphens. `Save` enforces it, so any new save or rename lands on disk with a typeable, lowercase identifier. The companion `ToKebab(s string) string` produces a best-effort kebab version of arbitrary input — used by the form's submit error to suggest a fix when the user typed `My Routine!` or similar.
 
 ## Controller
 
@@ -188,6 +191,12 @@ Pressing `d` on the list view opens the form pre-populated from the highlighted 
 - Otherwise: `"Copy of " + name`, walking `(2)`, `(3)`, … to find the first slot that doesn't collide with an existing routine. Routines are name-keyed (the directory under `~/.lucinate/routines/<name>/` is the identity), so collision avoidance is required — unlike cron jobs which have a separate ID.
 
 `Frontmatter.Name` is set to the duplicated name so the `STEPS.md` metadata stays in sync with the directory identity. `Frontmatter.Log` is copied verbatim — if it's a relative path the user can change it in the form before saving so the duplicate doesn't share the original's log file.
+
+### Form layout
+
+The form's middle section (header inputs + step textareas) renders inside a scrollable `viewport.Model`; the title and the footer (error line + help line) stay pinned. `viewForm` records the line index where each focusable field starts as it builds the body content (`fieldLineStarts`), and `ensureFocusVisible` adjusts the viewport's `YOffset` so the focused field is fully on-screen — scrolling down when the user tabs past the bottom of the visible window, scrolling up when they shift-tab back. Without this, a routine with many steps used to push the help line off the terminal entirely.
+
+Step textareas are sized at a fixed 4 lines each rather than auto-fitting the available height: the previous "divide remaining space across all steps" heuristic squeezed every textarea down to a 1-line stub once step count grew, and the user couldn't see the content of any step. The viewport handles overflow now, so a fixed per-step size is friendlier to type into.
 
 ### Submission
 
