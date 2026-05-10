@@ -218,13 +218,19 @@ Routine state changes (started, paused, ended) and routine errors are surfaced a
 
 ## Status row
 
-When `m.activeRoutine != nil`, the chat View renders a single styled row immediately above the input box:
+When `m.activeRoutine != nil`, the chat View renders a single styled row immediately above the input box. While auto-advancing or mid-turn the trailing segment is a passive preview:
 
 ```
-routine: demo — AUTO — sent: 5/10 — next: <40-char preview>
+routine: demo — AUTO — sent: 5/10 — next: <preview>
 ```
 
-`AUTO`/`MANUAL` reflects the mode; `(paused)` is appended when `paused` is set; `next:` previews the next step body, single-lined and ellipsised. The renderer is `routineStatusLine` + `routineStatusStyle` in `routines_chat.go`. `applyLayout()` (`completion.go`) subtracts one row from the viewport height when a routine is active so the status row doesn't push the input off-screen.
+When the routine is awaiting user input — manual mode, or auto with `paused` set, with no turn in flight and steps remaining — the trailing segment switches to a call-to-action so the user sees both what the next message is and that the routine is parked on them:
+
+```
+routine: demo — MANUAL — sent: 5/10 — ▶ Press Enter to send: <preview>
+```
+
+`AUTO`/`MANUAL` reflects the mode; `(paused)` is appended when `paused` is set. The renderer is `routineStatusLine` + `routineStatusStyle` in `routines_chat.go`; the preview length is computed from `m.width` so it grows with the terminal (floor 20 chars, fallback 40 when width is not yet known). `applyLayout()` (`completion.go`) subtracts one row from the viewport height when a routine is active so the status row doesn't push the input off-screen.
 
 ## Key bindings
 
