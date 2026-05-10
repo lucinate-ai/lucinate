@@ -889,6 +889,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.refreshCompletionMenu()
 				m.pendingMessages = append(m.pendingMessages, text)
 				m.updateViewport()
+				m.viewport.GotoBottom()
 				return m, nil
 			}
 
@@ -904,6 +905,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.appendMessage(chatMessage{role: "system", content: "running on gateway..."})
 				m.sending = true
 				m.updateViewport()
+				m.viewport.GotoBottom()
 				cmds = append(cmds, m.execCommand(command))
 				return m, tea.Batch(cmds...)
 			}
@@ -917,6 +919,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.appendMessage(chatMessage{role: "system", content: "running..."})
 				m.sending = true
 				m.updateViewport()
+				m.viewport.GotoBottom()
 				cmds = append(cmds, localExecCommand(command))
 				return m, tea.Batch(cmds...)
 			}
@@ -934,6 +937,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				ar.logger.WriteUser(text)
 			}
 			m.updateViewport()
+			m.viewport.GotoBottom()
 			cmds = append(cmds, m.sendMessage(sent), m.ensureSpinnerTicking())
 			return m, tea.Batch(cmds...)
 		}
