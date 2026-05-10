@@ -94,17 +94,26 @@ func (m *chatModel) sendNextRoutineStep() tea.Cmd {
 	return tea.Batch(m.sendMessage(sent), m.ensureSpinnerTicking())
 }
 
-// maybeAdvanceRoutine returns a tea.Cmd that fires the next step when
-// auto-advance conditions are met. Callers invoke it after the user-message
-// queue has drained on a chat-final event so user-typed messages take
+// maybeAdvanceRoutine reacts to a chat-final event for an active routine:
+// it ends the routine when the last step has now been answered, or fires
+// the next step in auto mode. Returns nil for manual/paused mid-routine
+// finals, where the user drives the next step. Callers invoke it after
+// the user-message queue has drained so user-typed messages take
 // precedence over routine steps.
 func (m *chatModel) maybeAdvanceRoutine() tea.Cmd {
 	ar := m.activeRoutine
-	if ar == nil || ar.paused || ar.mode != routines.ModeAuto {
+	if ar == nil {
 		return nil
 	}
+	// Completion fires regardless of mode — a manual routine that just
+	// answered its final step is just as "done" as an auto one, and the
+	// user needs the same "Routine X completed." notification + cleared
+	// activeRoutine so the input returns to normal chat.
 	if ar.sent >= len(ar.routine.Steps) {
 		m.endRoutine("completed")
+		return nil
+	}
+	if ar.paused || ar.mode != routines.ModeAuto {
 		return nil
 	}
 	return m.sendNextRoutineStep()
