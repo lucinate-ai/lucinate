@@ -161,8 +161,10 @@ Only the *first* line of a multi-line message gets the `[ts] role:` prefix; subs
 |---|---|
 | `routinesSubList` | List of routines (name + step count + mode chips) |
 | `routinesSubDetail` | Read-only view of a single routine — frontmatter, file path, every step rendered in order |
-| `routinesSubForm` | Create / edit form |
+| `routinesSubForm` | Create / edit / duplicate form |
 | `routinesSubConfirmDelete` | y/n prompt before `routines.Delete` fires |
+
+Key bindings follow the project-wide conventions documented in [key-conventions.md](key-conventions.md). The list view exposes `n` (new) and `d` (duplicate, gated on a non-empty list); the detail view exposes `e` (edit) and `x` (delete) — `x` rather than `d` so duplicate and delete stay distinct in the user's vocabulary, matching the cron browser.
 
 The form has three textinputs (name, mode, log) plus a slice of `textarea.Model` for the steps — one per step. The focus index is a single int: `0..2` are the header fields, `3+i` is step `i`. Key bindings inside the form:
 
@@ -177,6 +179,17 @@ The form has three textinputs (name, mode, log) plus a slice of `textarea.Model`
 | Alt+Enter | Newline within a step textarea |
 
 `insertStep(idx, value)` uses an overlap-safe `copy` (`memmove`) so shift-right insertion never duplicates content. `deleteStep(idx)` re-inserts a blank textarea when the slice would otherwise empty out, so the form always has at least one step to type into.
+
+### Duplicate
+
+Pressing `d` on the list view opens the form pre-populated from the highlighted routine, in **create mode** — `editingID` stays empty so submission goes through the plain `routines.Save` path with no rename, no overwrite, no delete-of-original. The cloned name is built by `duplicateRoutineName(name, existing)`:
+
+- `"" → ""` (passes through so the form-level "name is required" check fires).
+- Otherwise: `"Copy of " + name`, walking `(2)`, `(3)`, … to find the first slot that doesn't collide with an existing routine. Routines are name-keyed (the directory under `~/.lucinate/routines/<name>/` is the identity), so collision avoidance is required — unlike cron jobs which have a separate ID.
+
+`Frontmatter.Name` is set to the duplicated name so the `STEPS.md` metadata stays in sync with the directory identity. `Frontmatter.Log` is copied verbatim — if it's a relative path the user can change it in the form before saving so the duplicate doesn't share the original's log file.
+
+### Submission
 
 Submission iterates `form.steps` in order, dropping blank ones, and goes through `routines.Save`. Editing with a renamed `name` writes the new directory and `Delete`s the old one. After save (or delete), the model emits `routinesChangedMsg` so the chat view refreshes its `m.routineNames` cache for `/routine <TAB>` completion.
 
@@ -234,6 +247,7 @@ Unit tests:
 - `internal/tui/events_test.go::TestHandleEvent_FinalBumpsGen` / `TestHandleEvent_FinalEmptyAckDoesNotBumpGen` — pin the gen-bump semantics that anchor the merge boundary.
 - `internal/tui/events_test.go::TestMergeHistoryRefresh_PreservesLiveTail` / `TestMergeHistoryRefresh_NoLiveTail` — pin the merge contract the unconditional refresh depends on.
 - `internal/tui/notifications_test.go` — notify/clear and history-refresh persistence.
+- `internal/tui/routines_test.go::TestRoutinesDuplicate_*` / `TestDuplicateRoutineName_*` / `TestRoutinesDetailKey_X_TriggersDelete` / `TestRoutinesDetailKey_D_NoLongerDeletes` — pin the duplicate flow, the collision-suffix algorithm, and the `d` → `x` delete remap.
 
 Manual smoke:
 

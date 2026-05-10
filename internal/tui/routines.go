@@ -296,6 +296,8 @@ func (m routinesModel) handleListKey(msg tea.KeyPressMsg) (routinesModel, tea.Cm
 		m.subset = routinesSubForm
 		m.sizeFormBody()
 		return m, nil
+	case "d":
+		return m.actionDuplicate()
 	case "enter":
 		item, ok := m.list.SelectedItem().(routineItem)
 		if !ok {
@@ -329,7 +331,7 @@ func (m routinesModel) handleDetailKey(msg tea.KeyPressMsg) (routinesModel, tea.
 		m.subset = routinesSubForm
 		m.sizeFormBody()
 		return m, nil
-	case "d":
+	case "x":
 		m.pendingDeleteName = m.selectedName
 		m.subset = routinesSubConfirmDelete
 		return m, nil
@@ -541,6 +543,76 @@ func (m routinesModel) submitForm() (routinesModel, tea.Cmd) {
 	}
 }
 
+// actionDuplicate opens the form pre-populated from the highlighted
+// list item, but in create mode so submission goes through the plain
+// routines.Save path (no rename, no overwrite-then-delete). Triggered
+// from the list substate ("d"); the source routine is read from
+// m.list.SelectedItem rather than m.selectedName, which is only set
+// after entering the detail view.
+//
+// Mirrors crons.actionDuplicate (internal/tui/crons.go) — the cron
+// browser established this pattern; routines follow the same shape so
+// the UX is consistent across the two managers.
+func (m routinesModel) actionDuplicate() (routinesModel, tea.Cmd) {
+	item, ok := m.list.SelectedItem().(routineItem)
+	if !ok {
+		return m, nil
+	}
+	m.form = newDuplicateRoutineForm(item.routine, m.routines)
+	m.subset = routinesSubForm
+	m.sizeFormBody()
+	return m, nil
+}
+
+// newDuplicateRoutineForm pre-populates a create-mode form from src.
+// The name is uniquified against existing so the initial value already
+// passes the duplicate-name check and never collides with an on-disk
+// directory; editingID stays "" so submitForm goes through the plain
+// create path — no rename, no overwrite, no delete-of-original.
+//
+// Frontmatter.Name is set to the duplicated name so the metadata in
+// STEPS.md stays in sync with the directory identity. Frontmatter.Log
+// is copied verbatim — if it's a relative path the user can change it
+// in the form before saving so the duplicate doesn't share the
+// original's log file.
+func newDuplicateRoutineForm(src routines.Routine, existing []routines.Routine) routineForm {
+	cloned := src
+	cloned.Name = duplicateRoutineName(src.Name, existing)
+	cloned.Frontmatter.Name = cloned.Name
+	return newRoutineForm("", cloned)
+}
+
+// duplicateRoutineName returns "Copy of X" if that slot is free,
+// otherwise "Copy of X (N)" with the smallest N ≥ 2 that does not
+// collide with any existing routine. Empty original passes through so
+// the form-level "name is required" check catches it (mirrors
+// crons.duplicateName).
+//
+// Routines are name-keyed (the directory under ~/.lucinate/routines/<name>
+// is the identity), so collision avoidance is required — unlike cron
+// jobs, two routines cannot share a name. The unbounded loop is bounded
+// in practice by len(existing); a non-colliding suffix is always
+// reachable.
+func duplicateRoutineName(original string, existing []routines.Routine) string {
+	if original == "" {
+		return ""
+	}
+	taken := make(map[string]bool, len(existing))
+	for _, r := range existing {
+		taken[r.Name] = true
+	}
+	candidate := "Copy of " + original
+	if !taken[candidate] {
+		return candidate
+	}
+	for i := 2; ; i++ {
+		c := fmt.Sprintf("Copy of %s (%d)", original, i)
+		if !taken[c] {
+			return c
+		}
+	}
+}
+
 func newRoutineForm(editingID string, existing routines.Routine) routineForm {
 	name := textinput.New()
 	name.Placeholder = "routine-name"
@@ -608,12 +680,22 @@ func (m routinesModel) Actions() []Action {
 	case routinesSubList:
 		var actions []Action
 		actions = append(actions, Action{ID: "new", Label: "New routine", Key: "n"})
+		// Duplicate is a list-only action — same shape as the cron browser.
+		// Hidden when the list is empty so the menu doesn't advertise an
+		// action that has no source row to copy from.
+		if len(m.routines) > 0 {
+			actions = append(actions, Action{ID: "duplicate", Label: "Duplicate", Key: "d"})
+		}
 		actions = append(actions, Action{ID: "back", Label: "Back to chat", Key: "esc"})
 		return actions
 	case routinesSubDetail:
 		return []Action{
 			{ID: "edit", Label: "Edit", Key: "e"},
-			{ID: "delete", Label: "Delete", Key: "d"},
+			// Delete uses `x` to match the cron detail view. Lower-case `d`
+			// is reserved for "duplicate" on the list view; keeping `d` for
+			// delete here would overload it across substates and conflict
+			// with that pattern. See docs/key-conventions.md.
+			{ID: "delete", Label: "Delete", Key: "x"},
 			{ID: "back", Label: "Back", Key: "esc"},
 		}
 	case routinesSubForm:
@@ -651,6 +733,8 @@ func (m routinesModel) TriggerAction(id string) (routinesModel, tea.Cmd) {
 		m.subset = routinesSubForm
 		m.sizeFormBody()
 		return m, nil
+	case "duplicate":
+		return m.actionDuplicate()
 	case "delete":
 		m.pendingDeleteName = m.selectedName
 		m.subset = routinesSubConfirmDelete

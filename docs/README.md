@@ -22,3 +22,4 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 | [skills.md](skills.md) | Skill file format, discovery, catalog injection, activation |
 | [chat-ux.md](chat-ux.md) | Input key bindings, streaming animation, thinking levels, header bar, history depth |
 | [message-rendering.md](message-rendering.md) | Message roles, `System:` prefix convention, history cleanup, markdown rendering |
+| [key-conventions.md](key-conventions.md) | Cross-view keyboard conventions: action keys, confirms, navigation, form keys, reserved keys |
