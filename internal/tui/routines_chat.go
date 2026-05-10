@@ -204,7 +204,11 @@ func (m *chatModel) appendSystemError(msg string) {
 
 // routineStatusLine renders the in-chat status row for the active routine.
 // Returns "" when no routine is active. The output is plain text scoped to
-// at most one display line; the View pads it to the chat width.
+// at most one display line; the View pads it to the chat width. When the
+// routine is awaiting user input (manual or paused, idle, with steps
+// remaining) the trailing segment switches from a passive "next:" preview
+// to a "▶ Press Enter to send:" call-to-action so the user can see both
+// what the next message is and that the routine is parked on them.
 func (m *chatModel) routineStatusLine() string {
 	ar := m.activeRoutine
 	if ar == nil {
@@ -215,12 +219,25 @@ func (m *chatModel) routineStatusLine() string {
 		mode += " (paused)"
 	}
 	total := len(ar.routine.Steps)
-	next := ""
-	if ar.sent < total {
-		next = " — next: " + previewLine(ar.routine.Steps[ar.sent], 40)
+	status := fmt.Sprintf("routine: %s — %s — sent: %d/%d", ar.routine.Name, mode, ar.sent, total)
+	if ar.sent >= total {
+		return status
 	}
-	return fmt.Sprintf("routine: %s — %s — sent: %d/%d%s",
-		ar.routine.Name, mode, ar.sent, total, next)
+	awaitingUser := !m.sending && (ar.mode == routines.ModeManual || ar.paused)
+	prefix := " — next: "
+	if awaitingUser {
+		prefix = " — ▶ Press Enter to send: "
+	}
+	// Size the preview to the remaining width so the user can read as much
+	// of the upcoming step as fits. Fall back to 40 when width is unknown.
+	previewMax := 40
+	if m.width > 0 {
+		previewMax = m.width - 2 - len(status) - len(prefix) // -2 for routineStatusStyle's horizontal padding
+		if previewMax < 20 {
+			previewMax = 20
+		}
+	}
+	return status + prefix + previewLine(ar.routine.Steps[ar.sent], previewMax)
 }
 
 // routineStatusStyle styles the in-chat status row.
