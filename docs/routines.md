@@ -77,7 +77,7 @@ Lifecycle entry points on `*chatModel`:
 |---|---|
 | `startRoutine(name)` | Load + parse from disk, open the log if configured, append the "Routine started" notification, return the `tea.Cmd` for step 0's send |
 | `sendNextRoutineStep()` | Read `Steps[ar.sent]`, increment `ar.sent`, append the user message + assistant placeholder to `m.messages`, set `m.sending=true`, log the user line, return `sendMessage(...)` |
-| `maybeAdvanceRoutine()` | Called from the chat `final` event handler. Returns `nil` unless the routine is active, mode is auto, not paused, and a step remains. Otherwise returns `sendNextRoutineStep`. When all steps have been sent, calls `endRoutine("completed")` and returns nil. |
+| `maybeAdvanceRoutine()` | Called from the chat `final` event handler. Completion fires first: when the answered step was the last, calls `endRoutine("completed")` regardless of mode and returns nil so the user always gets the same notification + cleared `activeRoutine`. Otherwise returns `sendNextRoutineStep` only when mode is auto and not paused; in manual or paused mid-routine it returns nil and the user drives the next step. |
 | `applyDirectives(reply)` | Scans the assistant reply for `/routine:` directives and applies them in order |
 | `endRoutine(reason)` | Closes the logger, clears `activeRoutine`, posts a "Routine X <reason>" notification |
 | `cycleRoutineMode()` | Bound to `Shift+Tab` (mirrors Claude Code's mode-cycle gesture) — flips between auto and manual; entering auto unsets `paused`. Yields to slash-menu cycling when the completion menu is active. |
@@ -240,12 +240,14 @@ Unit tests:
 - `internal/tui/events_test.go::TestHandleEvent_FinalBumpsGen` / `TestHandleEvent_FinalEmptyAckDoesNotBumpGen` — pin the gen-bump semantics that anchor the merge boundary.
 - `internal/tui/events_test.go::TestMergeHistoryRefresh_PreservesLiveTail` / `TestMergeHistoryRefresh_NoLiveTail` — pin the merge contract the unconditional refresh depends on.
 - `internal/tui/notifications_test.go` — notify/clear and history-refresh persistence.
+- `internal/tui/routines_chat_test.go::TestMaybeAdvanceRoutine_ManualCompletion` / `TestMaybeAdvanceRoutine_ManualMidStepIsNoOp` — pin that manual routines complete on their final reply and stay quiet between steps.
 
 Manual smoke:
 
-1. Drop a routine at `~/.lucinate/routines/demo/STEPS.md` with `mode: manual`. `/routine demo` dispatches step 0; status row reads `MANUAL — sent: 1/N — next: …`.
+1. Drop a routine at `~/.lucinate/routines/demo/STEPS.md` with `mode: manual`. `/routine demo` dispatches step 0; status row reads `MANUAL — sent: 1/N — ▶ Press Enter to send: …`.
 2. Press Enter on an empty input — step 1 dispatches.
-3. Shift+Tab flips status to `AUTO`. Subsequent step finals auto-advance.
-4. Have step N's reply emit `/routine:stop` on its own line — routine ends; "Routine 'demo' stopped by assistant." notification appears above the input and survives the post-turn `refreshHistory`.
-5. Repeat with `log: ./routine.log` set — verify a run header and ISO-timestamped `user:` / `assistant:` lines.
-6. Activate a routine, run `/agents` — confirm the gate prompt; `n` keeps the routine running, `y` ends it cleanly and returns to the picker.
+3. Step through to the end. After the final step's reply, a `Routine "demo" completed.` notification appears, the status row disappears, and the input returns to plain chat.
+4. Shift+Tab flips status to `AUTO`. Subsequent step finals auto-advance.
+5. Have step N's reply emit `/routine:stop` on its own line — routine ends; "Routine 'demo' stopped by assistant." notification appears above the input and survives the post-turn `refreshHistory`.
+6. Repeat with `log: ./routine.log` set — verify a run header and ISO-timestamped `user:` / `assistant:` lines.
+7. Activate a routine, run `/agents` — confirm the gate prompt; `n` keeps the routine running, `y` ends it cleanly and returns to the picker.
