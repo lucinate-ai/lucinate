@@ -249,11 +249,31 @@ func (m *chatModel) routineStatusLine() string {
 	return status + prefix + previewLine(ar.routine.Steps[ar.sent], previewMax)
 }
 
-// routineStatusStyle styles the in-chat status row.
-var routineStatusStyle = lipgloss.NewStyle().
-	Foreground(accent).
+// routineStatusAutoStyle and routineStatusManualStyle differentiate the
+// in-chat status row by mode so the user can see at a glance who is
+// driving — amber when the routine auto-advances, cyan when it is parked
+// on the user. We reuse execClr/userClr from the shared palette rather
+// than introducing new colours.
+var routineStatusAutoStyle = lipgloss.NewStyle().
+	Foreground(execClr).
 	Bold(true).
 	Padding(0, 1)
+
+var routineStatusManualStyle = lipgloss.NewStyle().
+	Foreground(userClr).
+	Bold(true).
+	Padding(0, 1)
+
+// routineStatusStyle returns the style to apply to the in-chat status
+// row, picked by the active routine's mode. Falls back to the manual
+// style when no routine is active (callers should already gate on a
+// non-empty status line, but the fallback keeps the helper total).
+func (m *chatModel) routineStatusStyle() lipgloss.Style {
+	if m.activeRoutine != nil && m.activeRoutine.mode == routines.ModeAuto {
+		return routineStatusAutoStyle
+	}
+	return routineStatusManualStyle
+}
 
 // previewLine reduces text to a single-line, ellipsised preview.
 func previewLine(text string, max int) string {

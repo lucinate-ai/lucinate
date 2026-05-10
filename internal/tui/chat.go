@@ -1292,7 +1292,7 @@ func (m chatModel) View() string {
 
 	routineStatus := ""
 	if line := m.routineStatusLine(); line != "" {
-		routineStatus = routineStatusStyle.Width(m.width).Render(line)
+		routineStatus = m.routineStatusStyle().Width(m.width).Render(line)
 	}
 	notifications := m.renderNotifications()
 
