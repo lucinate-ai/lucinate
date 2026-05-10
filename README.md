@@ -28,6 +28,7 @@ No file browsers, no task boards, no dashboards. Just chat.
 - **Shell commands** — run locally with `!` or remotely on the gateway with `!!`
 - **Message queueing** so you can keep typing while the agent is responding
 - **Local agent skills** loaded from `~/.agents/skills/` — invoke as a slash command (`/review`) or drop one mid-message (`use /review on the diff`)
+- **Routines** — author multi-step prompt sequences once, replay them with `/routine <name>`. Auto-advance after each reply, or step through manually. Manage them in-TUI with `/routines`.
 - **Live token/cost stats** in the header bar (OpenClaw)
 - **Thinking level control** via `/think` — tune reasoning depth per session (OpenClaw)
 - **Cron browser** — list, edit, run, create, and duplicate scheduled jobs without leaving the terminal (OpenClaw)
@@ -159,6 +160,8 @@ Type these in the chat input. As soon as you type `/`, a menu shows every matchi
 | `/models` | Open the model picker (filter as you type) |
 | `/model <name>` | Switch model (fuzzy match) |
 | `/reset` | Delete session and start fresh (with confirmation) |
+| `/routine <name>` | Activate a stored multi-step routine in the current session |
+| `/routines` | List, view, edit, or delete routines |
 | `/sessions` | Browse and restore previous sessions |
 | `/skills` | List available agent skills |
 | `/stats` | Show token usage and cost breakdown — OpenClaw only |
@@ -190,6 +193,60 @@ Prefix input with `!!` to run a command on the gateway host. The input border tu
 ```
 
 The gateway's exec security policy controls which remote commands are allowed. If a command is denied, you'll see an error message. Configure exec permissions on the gateway host using `openclaw config`.
+
+## Routines
+
+Recurring prompt workflow you find yourself retyping every Tuesday? Save it as a routine. Each routine is an ordered list of steps; each step is a complete user message. Activate one with `/routine <name>` and lucinate fires the steps at the assistant in order, optionally auto-advancing after every reply.
+
+Manage them with `/routines` — list, view, add, edit, delete. The form has one textarea per step plus `Alt+↑` / `Alt+↓` to insert above/below and `Alt+Delete` to remove. `Alt+S` saves.
+
+Routine files live at `~/.lucinate/routines/<name>/STEPS.md`. The format is plain markdown with optional YAML frontmatter and `---` between steps:
+
+```markdown
+---
+name: review-pr
+mode: auto
+log: ./review.log
+---
+
+list the files changed in the current PR
+
+---
+
+flag any obvious bugs or style issues, one per line
+
+---
+
+write a one-paragraph review summary
+```
+
+`mode: auto` advances on every assistant reply; `manual` (the default) waits for `Enter`. `log:` is optional — when set, each turn is appended to that file, prefixed `user: ...` / `assistant: ...` with ISO timestamps.
+
+While a routine is running you'll see a status row above the input:
+
+```
+routine: review-pr — AUTO — sent: 2/3 — next: write a one-paragraph review summary
+```
+
+Useful keys mid-routine:
+
+| Key | Action |
+|-----|--------|
+| `Alt+M` | Cycle the mode (auto ↔ manual) |
+| `Enter` (empty input) | Send the next step (manual / paused mode) |
+| `Esc` | Cancel the routine and any in-flight reply |
+
+The assistant can steer the routine in its own reply by emitting one of these on its own line:
+
+| Directive | Effect |
+|-----------|--------|
+| `/routine:stop` | End the routine immediately |
+| `/routine:pause` | Pause until you press `Enter` |
+| `/routine:continue` | Explicit no-op (also resumes a paused auto-mode routine) |
+| `/routine:mode auto` | Switch to auto mode |
+| `/routine:mode manual` | Switch to manual mode |
+
+Routines live entirely client-side and work with every backend.
 
 ## One-shot mode
 

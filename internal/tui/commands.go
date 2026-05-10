@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
+	"github.com/lucinate-ai/lucinate/internal/routines"
 )
 
 // pendingConfirmation holds a deferred action awaiting user confirmation.
@@ -29,13 +30,25 @@ type pendingConfirmation struct {
 	action        func() tea.Cmd
 }
 
+// pendingNavConfirm queues a y/n prompt that gates a navigation command.
+// Used when the user runs /agents, /agent <name>, /sessions, /crons, or
+// /connections while a routine is active — those navigations replace
+// (or strand) the chat model that owns the routine controller, so the
+// user is asked to confirm the cancel first. On y, endRoutine runs
+// synchronously (closing the log) and `nav` fires; on anything else, the
+// prompt is dismissed and the routine continues.
+type pendingNavConfirm struct {
+	prompt string
+	nav    tea.Cmd
+}
+
 // slashCommands is the list of available slash commands for autocomplete.
 // Ordering breaks ties only for the inline ghost-hint and the legacy
 // completeSlashCommand callers — "/agents" appears before "/agent" so the
 // hint surfaces the picker first, "/model" before "/models" likewise.
 // Tab now extends to the longest common prefix and the completion menu
 // shows every candidate, so the curated order no longer rules Tab.
-var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/help", "/model", "/models", "/quit", "/reset", "/sessions", "/skills", "/stats", "/status", "/think"}
+var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/help", "/model", "/models", "/quit", "/reset", "/routines", "/routine", "/sessions", "/skills", "/stats", "/status", "/think"}
 
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
@@ -171,7 +184,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	case "/quit", "/exit":
 		return true, tea.Quit
 	case "/agents":
-		return true, func() tea.Msg { return goBackMsg{} }
+		return true, m.gateNavigation("Switching agents", func() tea.Msg { return goBackMsg{} })
 	case "/models":
 		sessionKey := m.sessionKey
 		currentModelID := m.modelID
@@ -244,7 +257,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	case "/config":
 		return true, func() tea.Msg { return showConfigMsg{} }
 	case "/connections":
-		return true, func() tea.Msg { return showConnectionsMsg{} }
+		return true, m.gateNavigation("Switching connections", func() tea.Msg { return showConnectionsMsg{} })
 	case "/crons", "/crons all":
 		if _, ok := m.backend.(backend.CronBackend); !ok {
 			m.messages = append(m.messages, chatMessage{
@@ -260,22 +273,22 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			filterAgentID = ""
 			filterLabel = "all agents"
 		}
-		return true, func() tea.Msg {
+		return true, m.gateNavigation("Opening crons", func() tea.Msg {
 			return showCronsMsg{filterAgentID: filterAgentID, filterLabel: filterLabel}
-		}
+		})
 	case "/sessions":
 		agentID := m.agentID
 		agentName := m.agentName
 		modelID := m.modelID
 		sessionKey := m.sessionKey
-		return true, func() tea.Msg {
+		return true, m.gateNavigation("Opening sessions", func() tea.Msg {
 			return showSessionsMsg{
 				agentID:   agentID,
 				agentName: agentName,
 				modelID:   modelID,
 				mainKey:   sessionKey,
 			}
-		}
+		})
 	case "/help", "/commands":
 		helpText := "/quit, /exit — quit lucinate\n/agents — return to agent picker\n/agent <name> — switch agent directly\n/cancel — cancel the current response (also: Esc)\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/connections — switch gateway connection\n/crons — list and manage cron jobs (use /crons all for global)\n/models — open model picker (filter as you type)\n/model <name> — switch model directly\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/status — show gateway health and agent status\n/skills — list available agent skills\n/think — show current thinking level\n/think <level> — set thinking level (off/minimal/low/medium/high)\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
 		if len(m.skills) > 0 {
@@ -334,6 +347,19 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return m.handleAgentCommand(text)
 	}
 
+	// /routine <name> activates a routine; bare /routine is an error.
+	if command == "/routine" || strings.HasPrefix(command, "/routine ") {
+		return m.handleRoutineCommand(text)
+	}
+
+	// /routines opens the routines management view. While an active
+	// routine is running, opening the manager would strand the in-flight
+	// gateway events (routinesModel.Update doesn't consume them) so the
+	// nav is gated.
+	if command == "/routines" {
+		return true, m.gateNavigation("Opening the routines manager", func() tea.Msg { return showRoutinesMsg{} })
+	}
+
 	// /model with optional argument.
 	if command == "/model" || strings.HasPrefix(command, "/model ") {
 		return m.handleModelCommand(text)
@@ -377,12 +403,12 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 func (m *chatModel) handleAgentCommand(text string) (bool, tea.Cmd) {
 	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
 	if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" {
-		return true, func() tea.Msg { return goBackMsg{} }
+		return true, m.gateNavigation("Switching agents", func() tea.Msg { return goBackMsg{} })
 	}
 
 	query := strings.ToLower(strings.TrimSpace(parts[1]))
 	b := m.backend
-	return true, func() tea.Msg {
+	switchCmd := func() tea.Msg {
 		ctx := context.Background()
 		result, err := b.ListAgents(ctx)
 		if err != nil {
@@ -420,6 +446,7 @@ func (m *chatModel) handleAgentCommand(text string) (bool, tea.Cmd) {
 			err:        err,
 		}
 	}
+	return true, m.gateNavigation("Switching agents", switchCmd)
 }
 
 // handleModelCommand handles `/model <name>`. Bare `/model` is an error —
@@ -614,6 +641,99 @@ func formatDuration(ms int64) string {
 	h := int(d.Hours())
 	m := int(d.Minutes()) % 60
 	return fmt.Sprintf("%dh%dm", h, m)
+}
+
+// handleRoutineCommand handles `/routine` and `/routine <name>`. Bare
+// `/routine` renders an error pointing at /routines. When a routine is
+// already active the call is gated so the user has to confirm cancelling
+// the current routine before the new one starts — only one routine
+// runs per session.
+func (m *chatModel) handleRoutineCommand(text string) (bool, tea.Cmd) {
+	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
+	if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" {
+		m.messages = append(m.messages, chatMessage{
+			role:   "system",
+			errMsg: "/routine requires a name — use /routines to manage them",
+		})
+		m.updateViewport()
+		return true, nil
+	}
+	name := strings.TrimSpace(parts[1])
+	if m.activeRoutine != nil {
+		label := fmt.Sprintf("Starting routine %q", name)
+		return true, m.gateNavigation(label, func() tea.Msg {
+			return startRoutineMsg{name: name}
+		})
+	}
+	cmd := m.startRoutine(name)
+	m.updateViewport()
+	return true, cmd
+}
+
+// findRoutineArgAt detects whether the cursor sits at the end of the
+// argument of `/routine <name>` on the current line. Mirrors
+// findAgentArgAt: routine names may contain non-space chars only, but we
+// allow any tail of the line so completion can refine.
+func findRoutineArgAt(value string, byteOffset int) (start int, prefix string, ok bool) {
+	if byteOffset < 0 || byteOffset > len(value) {
+		return 0, "", false
+	}
+	if byteOffset < len(value) && value[byteOffset] != '\n' {
+		return 0, "", false
+	}
+	lineStart := byteOffset
+	for lineStart > 0 && value[lineStart-1] != '\n' {
+		lineStart--
+	}
+	const cmd = "/routine "
+	if byteOffset-lineStart < len(cmd) {
+		return 0, "", false
+	}
+	if !strings.EqualFold(value[lineStart:lineStart+len(cmd)], cmd) {
+		return 0, "", false
+	}
+	argStart := lineStart + len(cmd)
+	return argStart, value[argStart:byteOffset], true
+}
+
+// completeRoutineName returns the first routine name matching the prefix.
+func (m *chatModel) completeRoutineName(prefix string) string {
+	lower := strings.ToLower(prefix)
+	for _, n := range m.routineNames {
+		if strings.HasPrefix(strings.ToLower(n), lower) {
+			return n
+		}
+	}
+	return ""
+}
+
+// routineNameHint returns the completion hint for `/routine <name>`.
+func (m *chatModel) routineNameHint(value string, cursorByte int) (token, suffix string) {
+	_, prefix, ok := findRoutineArgAt(value, cursorByte)
+	if !ok {
+		return "", ""
+	}
+	match := m.completeRoutineName(prefix)
+	if match == "" || strings.EqualFold(match, prefix) {
+		return "", ""
+	}
+	return prefix, match[len(prefix):]
+}
+
+// loadRoutineNames returns a tea.Cmd that scans the routines directory and
+// dispatches a chatRoutineNamesLoadedMsg with the discovered names.
+func loadRoutineNames() tea.Cmd {
+	return func() tea.Msg {
+		list, err := routines.List()
+		if err != nil {
+			return chatRoutineNamesLoadedMsg{}
+		}
+		names := make([]string, 0, len(list))
+		for _, r := range list {
+			names = append(names, r.Name)
+		}
+		return chatRoutineNamesLoadedMsg{names: names}
+	}
 }
 
 // handleThinkCommand handles `/think` and `/think <level>`.

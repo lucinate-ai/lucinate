@@ -23,6 +23,7 @@ const (
 	viewConfig
 	viewCrons
 	viewModelPicker
+	viewRoutines
 )
 
 // BackendFactory builds an unconnected backend.Backend for a stored
@@ -114,6 +115,7 @@ type AppModel struct {
 	configModel      configModel
 	cronsModel       cronsModel
 	modelPicker      modelPickerModel
+	routinesModel    routinesModel
 	backend          backend.Backend
 	activeConn       *config.Connection // the connection backend belongs to; rendered in status bars
 	store            *config.Connections
@@ -268,6 +270,8 @@ func (m AppModel) Actions() []Action {
 		return m.cronsModel.Actions()
 	case viewModelPicker:
 		return m.modelPicker.Actions()
+	case viewRoutines:
+		return m.routinesModel.Actions()
 	}
 	return nil
 }
@@ -305,6 +309,10 @@ func (m AppModel) TriggerAction(id string) (AppModel, tea.Cmd) {
 	case viewModelPicker:
 		var cmd tea.Cmd
 		m.modelPicker, cmd = m.modelPicker.TriggerAction(id)
+		return m, cmd
+	case viewRoutines:
+		var cmd tea.Cmd
+		m.routinesModel, cmd = m.routinesModel.TriggerAction(id)
 		return m, cmd
 	}
 	return m, nil
@@ -456,6 +464,8 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.cronsModel.setSize(msg.Width, msg.Height)
 		case viewModelPicker:
 			m.modelPicker.setSize(msg.Width, msg.Height)
+		case viewRoutines:
+			m.routinesModel.setSize(msg.Width, msg.Height)
 		}
 		return m, nil
 
@@ -580,6 +590,30 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			return m, notify
 		}
 		return m, nil
+
+	case showRoutinesMsg:
+		m.routinesModel = newRoutinesModel(m.hideActionHints, m.disableExitKeys)
+		m.routinesModel.setSize(m.width, m.height)
+		m.state = viewRoutines
+		return m, m.routinesModel.Init()
+
+	case goBackFromRoutinesMsg:
+		m.state = viewChat
+		return m, nil
+
+	case routinesChangedMsg:
+		// Re-scan routine names so the chat's /routine <TAB> completion
+		// reflects edits made in the manager.
+		return m, loadRoutineNames()
+
+	case chatRoutineNamesLoadedMsg:
+		// Forward to the chat model regardless of which view is active —
+		// loadRoutineNames is dispatched from the routines manager too,
+		// and the chatModel needs to see the result so its autocompletion
+		// is current when the user navigates back.
+		var cmd tea.Cmd
+		m.chatModel, cmd = m.chatModel.Update(msg)
+		return m, cmd
 
 	case showCronsMsg:
 		cron, ok := m.backend.(backend.CronBackend)
@@ -799,6 +833,11 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		var cmd tea.Cmd
 		m.modelPicker, cmd = m.modelPicker.Update(msg)
 		return m, cmd
+
+	case viewRoutines:
+		var cmd tea.Cmd
+		m.routinesModel, cmd = m.routinesModel.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -995,6 +1034,8 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView(m.cronsModel.View())
 	case viewModelPicker:
 		v = tea.NewView(m.modelPicker.View())
+	case viewRoutines:
+		v = tea.NewView(m.routinesModel.View())
 	default:
 		v = tea.NewView("")
 	}

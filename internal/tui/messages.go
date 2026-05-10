@@ -154,6 +154,32 @@ type chatAgentNamesLoadedMsg struct {
 	names []string
 }
 
+// chatRoutineNamesLoadedMsg delivers routine names to the chat model for
+// `/routine <TAB>` completion.
+type chatRoutineNamesLoadedMsg struct {
+	names []string
+}
+
+// startRoutineMsg requests the chat model to begin a routine. Issued
+// from the routine-cancel-and-replace path: when the user confirms a
+// `/routine X` while another routine is running, the gate first
+// cancels the active routine and then dispatches this msg, which
+// invokes startRoutine on a now-idle controller.
+type startRoutineMsg struct {
+	name string
+}
+
+// showRoutinesMsg signals the AppModel to switch to the routines manager.
+type showRoutinesMsg struct{}
+
+// goBackFromRoutinesMsg signals the AppModel to return to the chat view
+// from the routines manager.
+type goBackFromRoutinesMsg struct{}
+
+// routinesChangedMsg is dispatched after CRUD inside the routines manager
+// so the chat model can re-scan routine names for autocompletion.
+type routinesChangedMsg struct{}
+
 // skillsDiscoveredMsg is returned when skill discovery completes.
 type skillsDiscoveredMsg struct {
 	skills []agentSkill

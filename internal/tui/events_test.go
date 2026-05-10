@@ -173,6 +173,57 @@ func TestHandleEvent_DeltaIgnoredAfterFinalised(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_StaleDeltaAfterFinalIgnored guards against the
+// duplicate-delta-after-final the openclaw gateway has been observed
+// emitting: a `final` event finalises the assistant turn, then a
+// duplicate `delta` event with the full content arrives carrying the
+// same runID. Without filtering, that stale delta would land on the
+// next routine step's placeholder and corrupt its content + flip
+// awaitingDelta=false, opening a path for the next empty `final` to
+// spuriously finalise an empty assistant turn.
+func TestHandleEvent_StaleDeltaAfterFinalIgnored(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.messages = []chatMessage{
+		{role: "user", content: "step 1"},
+		{role: "assistant", content: "3, 9", streaming: true},
+	}
+
+	// Final for run1 finalises the assistant turn.
+	finalMsg := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"3, 9"}]}`)
+	m.handleEvent(makeChatEvent("final", "run1", 5, finalMsg))
+
+	if m.prevFinalisedRunID != "run1" {
+		t.Fatalf("prevFinalisedRunID = %q, want run1", m.prevFinalisedRunID)
+	}
+
+	// Simulate routine auto-advance: append a fresh placeholder for the
+	// next step. The stale duplicate delta would normally land here.
+	m.messages = append(m.messages,
+		chatMessage{role: "user", content: "step 2"},
+		chatMessage{role: "assistant", streaming: true, awaitingDelta: true},
+	)
+
+	// Stale duplicate delta arrives bearing run1's id.
+	m.handleEvent(makeChatEvent("delta", "run1", 5, json.RawMessage(`"3, 9"`)))
+
+	last := m.messages[len(m.messages)-1]
+	if last.content != "" {
+		t.Errorf("step 2 placeholder content = %q, want empty (stale delta should have been ignored)", last.content)
+	}
+	if !last.awaitingDelta {
+		t.Error("expected awaitingDelta to remain true; stale delta flipped it")
+	}
+
+	// Empty final for run2 must not finalise: awaitingDelta is still true.
+	emptyFinal := json.RawMessage(``)
+	m.handleEvent(makeChatEvent("final", "run2", 1, emptyFinal))
+
+	if !m.messages[len(m.messages)-1].streaming {
+		t.Error("step 2 should still be streaming; empty final must not finalise when no deltas have arrived")
+	}
+}
+
 func TestHandleEvent_FinalMarksStreamingDone(t *testing.T) {
 	m := newTestChatModel()
 	m.sending = true

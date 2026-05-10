@@ -622,12 +622,11 @@ func TestSlashCommand_Cancel_WhileIdle(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd from /cancel when not sending")
 	}
-	if len(m.messages) != initialCount+1 {
-		t.Fatalf("expected %d messages, got %d", initialCount+1, len(m.messages))
+	if len(m.messages) != initialCount {
+		t.Fatalf("expected message count unchanged (%d), got %d", initialCount, len(m.messages))
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.role != "system" || last.content != "Nothing to cancel." {
-		t.Errorf("unexpected message: role=%q content=%q", last.role, last.content)
+	if len(m.notifications) != 1 || m.notifications[0].text != "Nothing to cancel." {
+		t.Errorf("expected single 'Nothing to cancel.' notification, got %+v", m.notifications)
 	}
 }
 
@@ -643,9 +642,8 @@ func TestSlashCommand_Cancel_NoRunID(t *testing.T) {
 	if cmd != nil {
 		t.Error("expected nil cmd when sending but no runID")
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.content != "Nothing to cancel." {
-		t.Errorf("expected 'Nothing to cancel.', got %q", last.content)
+	if len(m.notifications) != 1 || m.notifications[0].text != "Nothing to cancel." {
+		t.Errorf("expected 'Nothing to cancel.' notification, got %+v", m.notifications)
 	}
 }
 

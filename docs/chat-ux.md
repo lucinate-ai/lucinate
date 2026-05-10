@@ -4,14 +4,15 @@
 
 | Key | Action |
 |---|---|
-| Enter | Send message |
+| Enter | Send message — or, on empty input with an active routine, advance the routine ([routines.md](routines.md)) |
 | Alt+Enter | Insert newline |
+| Alt+M | Cycle the active routine's mode (auto ↔ manual) — no-op when no routine is active |
 | Ctrl+W | Delete word backward |
 | Up arrow (empty input) | Recall last sent message for editing |
 | Tab | Open slash menu, extend to longest common prefix, then cycle |
 | Shift+Tab | Cycle backward through slash-menu candidates |
 | Page Up / Page Down | Scroll message history |
-| Esc | Cancel in-progress response |
+| Esc | Cancel in-progress response — or, with an active routine, end the routine and (if streaming) cancel the turn |
 
 Alt+Enter is configured via `ta.KeyMap.InsertNewline.SetKeys("alt+enter")` in `chat.go`. Shift+Enter is not supported — `ReportAllKeysAsEscapeCodes` is disabled to preserve shifted punctuation input.
 
@@ -68,6 +69,26 @@ A matching one-line system message is also added to the chat scrollback on disco
 A second header badge — `↑ vX.Y.Z`, rendered in the same warn style as `⚠ disconnected` — appears when the daily startup update check finds a newer release. The check is owned by `internal/update`: a single `GET https://lucinate.ai/latest.json` with a 5-second timeout, fired once per day from `AppModel.Init()`. Anything goes wrong (offline, captive portal, malformed manifest, non-stable build) and `update.Check` returns `nil, nil` — no badge, no error.
 
 The badge is suppressed once the user has seen it: `prefs.LatestSeenVersion` records the manifest version on every successful check, and the badge only appears when the manifest moves *past* that version. Toggle the whole thing off via the `Check for updates on startup` row in `/config`, or set `LUCINATE_DISABLE_UPDATE_CHECK=1` for an unconditional opt-out (useful in CI). The manifest URL itself can be overridden via `LUCINATE_UPDATE_MANIFEST_URL` for local testing.
+
+## Notifications
+
+Ephemeral state messages — confirmation prompts, cancel acks, routine state changes ([routines.md](routines.md)) — render as one or more rows above the input box, between the conversation viewport (or completion menu) and the routine status row when present. Each row is width-padded and styled with `statusStyle` (or `errorStyle` for is-error rows).
+
+The store is `chatModel.notifications []notification` (`internal/tui/notifications.go`). Notifications live outside `m.messages`, so they survive `historyRefreshMsg` and never reach the gateway. They are cleared at the top of the Enter handler whenever the user submits a non-empty input, and on the empty-Enter routine-advance path — the assumption is that any state worth showing in a notification has been read or no longer applies once the user takes their next action.
+
+`m.notify(text)`, `m.notifyError(text)`, and `m.clearNotifications()` are the only entry points; each calls `applyLayout()` so the conversation viewport reflows when notifications appear or disappear. Empty text is dropped silently so callers can `notify(maybeFmt(...))` without a guard.
+
+This replaced the older pattern of appending `chatMessage{role:"system"}` rows for transient state. Persistent client-side rows (the inline `! cmd` / `!! cmd` shell-execution scrollback, gateway connect/disconnect notes, the `/help` / `/stats` / `/skills` info dumps) still go in `m.messages` because their value is in being scrollable history, not in a one-shot read.
+
+## Routine status row
+
+When `m.activeRoutine != nil`, a single styled row renders immediately above the input box:
+
+```
+routine: demo — AUTO — sent: 5/10 — next: <40-char preview>
+```
+
+`AUTO`/`MANUAL` reflects the controller's mode; `(paused)` is appended when `paused` is set. The row is sourced by `routineStatusLine()` and styled by `routineStatusStyle` in `routines_chat.go`. `applyLayout()` subtracts one from the viewport height when a routine is active, mirroring the notification-row accounting. See [routines.md](routines.md) for the full controller surface.
 
 ## Tool call cards
 

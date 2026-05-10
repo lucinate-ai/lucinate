@@ -190,7 +190,36 @@ func (m *chatModel) completionAtCursor() (completionContext, bool) {
 			candidates: m.matchingAgentNames(prefix),
 		}, true
 	}
+	if start, prefix, ok := findRoutineArgAt(value, cursorByte); ok {
+		return completionContext{
+			start:      start,
+			cursorByte: cursorByte,
+			prefix:     prefix,
+			candidates: m.matchingRoutineNames(prefix),
+		}, true
+	}
 	return completionContext{}, false
+}
+
+// matchingRoutineNames returns every routine name whose lowercased form
+// has prefix as a prefix. Empty prefix matches every loaded routine.
+func (m *chatModel) matchingRoutineNames(prefix string) []string {
+	if len(m.routineNames) == 0 {
+		return nil
+	}
+	if prefix == "" {
+		out := make([]string, len(m.routineNames))
+		copy(out, m.routineNames)
+		return out
+	}
+	lower := strings.ToLower(prefix)
+	var out []string
+	for _, n := range m.routineNames {
+		if strings.HasPrefix(strings.ToLower(n), lower) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // handleCompletionTab implements the Tab semantics for the active
@@ -333,6 +362,10 @@ func (m chatModel) renderCompletionMenu() (string, int) {
 // footprint on top of that baseline whenever menu state changes.
 func (m *chatModel) applyLayout() {
 	h := m.baseViewportHeight - m.menuRowsToRender()
+	if m.activeRoutine != nil {
+		h--
+	}
+	h -= len(m.notifications)
 	if h < 1 {
 		h = 1
 	}
