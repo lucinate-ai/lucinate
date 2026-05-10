@@ -14,6 +14,7 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 | [agents.md](agents.md) | Agent picker, auto-selection, agent creation |
 | [sessions.md](sessions.md) | Session lifecycle, session browser, compact/reset, message queueing |
 | [crons.md](crons.md) | Gateway cron browser: list/detail/form substates, capability gating, raw-patch edit semantics |
+| [routines.md](routines.md) | Local prompt routines: STEPS.md format, controller lifecycle, auto-advance hook, directives, manager view |
 | [commands.md](commands.md) | Slash command dispatch, all built-in commands, tab completion, confirmation pattern |
 | [one-shot.md](one-shot.md) | One-shot CLI mode: `lucinate send` lifecycle, default session rule, detach semantics, embedding |
 | [chat-launch.md](chat-launch.md) | Pre-navigated TUI launch: `lucinate chat` override plumbing, consumption points, stale-clearing rules |

@@ -27,6 +27,8 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/model <name>` | Switch model — see below |
 | `/models` | Open the model picker (filter as you type) |
 | `/reset` | Delete the session and start fresh — see [sessions.md](sessions.md#compact-and-reset) |
+| `/routine <name>` | Activate a stored routine in the current session — see [routines.md](routines.md) |
+| `/routines` | Open the routines manager (list/view/edit/delete) — see [routines.md](routines.md) |
 | `/sessions` | Open the session browser — see [sessions.md](sessions.md#session-browser) |
 | `/skills` | List discovered skills — see [skills.md](skills.md) |
 | `/stats` | Show a token usage and cost table for the current session — **OpenClaw only** |
@@ -81,6 +83,10 @@ The chat model fetches the agent list once on init via `loadAgentNames()` and st
 
 ## Confirmation pattern
 
-Destructive commands (`/compact`, `/reset`) use a two-step confirmation. On first invocation a `pendingConfirmation` struct is stored on the model containing the prompt string, an optional `runningStatus` line, and an action closure. The prompt is displayed as a system message. On the next Enter keypress, if the input is `y` or `yes` the closure is executed; anything else cancels. This prevents accidental data loss.
+Destructive commands (`/compact`, `/reset`) use a two-step confirmation. On first invocation a `pendingConfirmation` struct is stored on the model containing the prompt string, an optional `runningStatus` line, and an action closure. The prompt is rendered as an ephemeral notification above the input — see [chat-ux.md → Notifications](chat-ux.md#notifications). On the next Enter keypress, if the input is `y` or `yes` the closure is executed; anything else cancels. This prevents accidental data loss.
 
-When `runningStatus` is set, the confirmation handler also appends a pending system row (`pending: true`) carrying that status text. The renderer animates the same braille spinner used for in-flight assistant turns next to the row, and `hasStreamingMessage` keeps `spinnerTickCmd` firing until the action returns. The result handler (`sessionCompactedMsg`, `sessionClearedMsg`) calls `replacePendingSystem` to swap the placeholder for the outcome line in place — no stale "Compacting session…" stuck above the result.
+When `runningStatus` is set, the confirmation handler also appends a pending system row (`pending: true`) carrying that status text to the chat scrollback. The renderer animates the same braille spinner used for in-flight assistant turns next to the row, and `hasStreamingMessage` keeps `spinnerTickCmd` firing until the action returns. The result handler (`sessionCompactedMsg`, `sessionClearedMsg`) calls `replacePendingSystem` to swap the placeholder for the outcome line in place — no stale "Compacting session…" stuck above the result.
+
+## Routine-active navigation gate
+
+Slash commands that strand or replace the chat model — `/agents`, `/agent <name>`, `/sessions`, `/crons`, `/crons all`, `/connections`, `/routine <name>`, `/routines` — route through `gateNavigation()` (`internal/tui/routines_chat.go`) when a routine is active. A `pendingNavConfirm` is set, the prompt is rendered as a notification, and the Enter handler resolves it: `y` cancels any in-flight turn, ends the routine cleanly (closing the log file), and dispatches the navigation; `n` or Esc dismisses the prompt and the routine continues. The state is independent of the generic `pendingConfirmation` so the two flows don't compete. See [routines.md → Slash commands and gating](routines.md#slash-commands-and-gating) for the full rationale.
