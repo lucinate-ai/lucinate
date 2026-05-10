@@ -34,14 +34,26 @@ func (m chatModel) loadHistory() tea.Cmd {
 	}
 }
 
-func (m chatModel) refreshHistory() tea.Cmd {
+// refreshHistoryAt issues a server-history fetch and tags the result
+// with the boundary captured at issue time. The merge in the
+// historyRefreshMsg handler keeps every existing row whose gen exceeds
+// boundary (the live tail) and replaces the rest with the fetched
+// state — making it safe for callers to refresh while the next turn
+// is already streaming, a tool card is mid-execution, or a pending
+// system row is awaiting outcome.
+//
+// Callers in the chat-event final/error/aborted paths pass the gen
+// they captured *before* bumping (i.e. the just-finalised turn's gen),
+// so that turn and everything older gets replaced by canonical state.
+// Callers on the queue-drained path pass m.gen-1 for the same reason.
+func (m chatModel) refreshHistoryAt(boundary uint64) tea.Cmd {
 	sessionKey := m.sessionKey
 	b := m.backend
 	renderer := m.renderer
 	limit := m.historyLimit
 	return func() tea.Msg {
 		msgs, err := fetchHistory(b, sessionKey, renderer, limit)
-		return historyRefreshMsg{messages: msgs, err: err}
+		return historyRefreshMsg{messages: msgs, boundary: boundary, err: err}
 	}
 }
 

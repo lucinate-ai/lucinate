@@ -114,7 +114,7 @@ func (m *chatModel) applyConnState(next ConnStateMsg) {
 			m.removeThinkingPlaceholder()
 			m.sending = false
 			m.runID = ""
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:    "system",
 				content: "Lost gateway connection — attempting to reconnect…",
 			})
@@ -122,7 +122,7 @@ func (m *chatModel) applyConnState(next ConnStateMsg) {
 		}
 	case client.StatusConnected:
 		if prev.Status == client.StatusDisconnected || prev.Status == client.StatusReconnecting {
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:    "system",
 				content: "Reconnected to gateway.",
 			})
@@ -133,7 +133,7 @@ func (m *chatModel) applyConnState(next ConnStateMsg) {
 		if next.Err != nil {
 			errLine = fmt.Sprintf("Reconnect failed (%v). Quit (Ctrl+C) and restart to re-authenticate.", next.Err)
 		}
-		m.messages = append(m.messages, chatMessage{role: "system", errMsg: errLine})
+		m.appendMessage(chatMessage{role: "system", errMsg: errLine})
 		m.updateViewport()
 	}
 }
@@ -159,6 +159,7 @@ type chatModel struct {
 	sending            bool
 	runID              string // active run ID for cancellation
 	finalisedRuns      finalisedRunSet // bounded LRU of run IDs we have already finalised; chat events still bearing one of these IDs are stale duplicates emitted by the gateway after final and must not corrupt the next run's placeholder
+	gen                uint64 // generation counter stamped onto every newly-appended chatMessage; bumped after each turn finalises so the just-finalised turn can be replaced by a server-canonical refresh while the next turn's live state survives the merge
 	pendingMessages    []string
 	width              int
 	height             int
@@ -216,6 +217,68 @@ func (m *chatModel) hasStreamingMessage() bool {
 	return false
 }
 
+// appendMessage stamps the current gen counter onto msg and appends it
+// to m.messages. Returns a pointer into the slice so callers that need
+// to mutate the just-appended row (e.g. delta-streaming) can do so
+// without a second slice walk; callers that don't may safely ignore
+// the return.
+//
+// All "live" appends — user turns, streaming placeholders, tool cards,
+// system rows, error rows — must go through this helper rather than
+// raw append, so the merge in historyRefreshMsg can correctly
+// distinguish "history-side" rows (replaced by server canonical state)
+// from the "live tail" (preserved across the merge).
+func (m *chatModel) appendMessage(msg chatMessage) *chatMessage {
+	msg.gen = m.gen
+	m.messages = append(m.messages, msg)
+	return &m.messages[len(m.messages)-1]
+}
+
+// bumpGen captures the current generation and advances the counter.
+// Called from the chat-event final/error/aborted paths after a turn
+// has been successfully finalised, so the just-finalised turn (and
+// everything before it) is on the "history-side" of the next
+// refresh's boundary, while subsequent appends — drained queue,
+// auto-advanced routine step, recovery system rows — fall on the
+// "live tail" side and survive the merge.
+//
+// Returns the captured (pre-increment) value so callers can pass it
+// straight into refreshHistoryAt.
+func (m *chatModel) bumpGen() uint64 {
+	boundary := m.gen
+	m.gen++
+	return boundary
+}
+
+// mergeHistoryRefresh replaces the history-side of m.messages with
+// server-canonical history while preserving the live tail (rows whose
+// gen exceeds the boundary captured at refresh-issue time). Concretely:
+// fetched server messages come first, every existing row with
+// gen > boundary is appended afterwards in original order.
+//
+// Used by the historyRefreshMsg handler. Pulled into a helper because
+// the merge logic is non-trivial enough to warrant a unit test that
+// doesn't have to thread through the full bubbletea Update path.
+func (m *chatModel) mergeHistoryRefresh(server []chatMessage, boundary uint64) {
+	// Walk once, partitioning. Pre-size the live slice from a count
+	// pass to avoid repeated growth — long live tails (e.g. an active
+	// routine with a tool card mid-execution) would otherwise reallocate.
+	liveCount := 0
+	for i := range m.messages {
+		if m.messages[i].gen > boundary {
+			liveCount++
+		}
+	}
+	merged := make([]chatMessage, 0, len(server)+liveCount)
+	merged = append(merged, server...)
+	for i := range m.messages {
+		if m.messages[i].gen > boundary {
+			merged = append(merged, m.messages[i])
+		}
+	}
+	m.messages = merged
+}
+
 // removeThinkingPlaceholder removes the streaming assistant placeholder added
 // when a message is sent, before any gateway delta has arrived.
 func (m *chatModel) removeThinkingPlaceholder() {
@@ -233,14 +296,19 @@ func (m *chatModel) removeThinkingPlaceholder() {
 // pending row is found (the prompt was cancelled, or some prior
 // handler already cleared it), the replacement is appended instead so
 // the user still sees the result.
+//
+// In-place swaps inherit the existing row's gen so the merge boundary
+// stays consistent; the fall-through append goes through appendMessage
+// for the same reason.
 func (m *chatModel) replacePendingSystem(replacement chatMessage) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		if m.messages[i].role == "system" && m.messages[i].pending {
+			replacement.gen = m.messages[i].gen
 			m.messages[i] = replacement
 			return
 		}
 	}
-	m.messages = append(m.messages, replacement)
+	m.appendMessage(replacement)
 }
 
 // ensureSpinnerTicking starts the spinner animation if one is not already scheduled.
@@ -320,6 +388,10 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 		hideInput:       hideInput,
 		terminalFocused: true,
 		pendingMessages: pending,
+		// Start at gen=1 so the zero value on chatMessage.gen reads as
+		// "older than any live turn" — server-history imports keep that
+		// default and are always replaceable on subsequent refreshes.
+		gen: 1,
 	}
 }
 
@@ -475,12 +547,15 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		m.historyLoading = false
 		switch {
 		case msg.err != nil:
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:   "system",
 				errMsg: fmt.Sprintf("Could not load conversation history: %v", msg.err),
 			})
 		case len(msg.messages) > 0:
 			lastTs := lastTimestampMs(msg.messages)
+			// Server-imported rows keep gen=0 (the chatMessage zero
+			// value) so any subsequent refresh treats them as
+			// history-side and replaces them cleanly.
 			hist := append(msg.messages, chatMessage{role: "separator", timestampMs: lastTs})
 			m.messages = append(hist, m.messages...)
 		}
@@ -496,16 +571,16 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		return m, nil
 
 	case agentSwitchFailedMsg:
-		m.messages = append(m.messages, chatMessage{role: "system", errMsg: msg.err.Error()})
+		m.appendMessage(chatMessage{role: "system", errMsg: msg.err.Error()})
 		m.updateViewport()
 		return m, nil
 
 	case modelSwitchedMsg:
 		if msg.err != nil {
-			m.messages = append(m.messages, chatMessage{role: "system", errMsg: msg.err.Error()})
+			m.appendMessage(chatMessage{role: "system", errMsg: msg.err.Error()})
 		} else {
 			m.modelID = msg.modelID
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:    "system",
 				content: fmt.Sprintf("Switched to %s", msg.modelID),
 			})
@@ -527,9 +602,9 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 
 	case gatewayStatusMsg:
 		if msg.err != nil {
-			m.messages = append(m.messages, chatMessage{role: "system", errMsg: msg.err.Error()})
+			m.appendMessage(chatMessage{role: "system", errMsg: msg.err.Error()})
 		} else {
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:    "system",
 				content: formatGatewayStatus(msg.health, msg.uptimeMs),
 			})
@@ -539,14 +614,14 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 
 	case thinkingChangedMsg:
 		if msg.err != nil {
-			m.messages = append(m.messages, chatMessage{role: "system", errMsg: msg.err.Error()})
+			m.appendMessage(chatMessage{role: "system", errMsg: msg.err.Error()})
 		} else {
 			m.thinkingLevel = msg.level
 			display := msg.level
 			if display == "" || display == "off" {
 				display = "off"
 			}
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:    "system",
 				content: fmt.Sprintf("Thinking level set to %s", display),
 			})
@@ -569,7 +644,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		} else {
 			m.sessionKey = msg.newSessionKey
 			m.messages = nil
-			m.messages = append(m.messages, chatMessage{role: "system", content: "Session cleared. Starting fresh."})
+			m.appendMessage(chatMessage{role: "system", content: "Session cleared. Starting fresh."})
 		}
 		m.updateViewport()
 		return m, nil
@@ -596,7 +671,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	case skillsDiscoveredMsg:
 		m.skills = msg.skills
 		if len(m.skills) > 0 {
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:    "system",
 				content: fmt.Sprintf("%d agent skill(s) loaded — type /skills to list", len(m.skills)),
 			})
@@ -606,7 +681,13 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 
 	case historyRefreshMsg:
 		if msg.err == nil && len(msg.messages) > 0 {
-			m.messages = msg.messages
+			// Merge: replace history-side rows with server-canonical
+			// state, preserve the live tail (rows whose gen exceeds
+			// the boundary captured at refresh-issue time). This makes
+			// it safe to refresh mid-routine, mid-queue-drain, and
+			// while a tool card is in flight — scenarios where the old
+			// wholesale-replace would have wiped live state.
+			m.mergeHistoryRefresh(msg.messages, msg.boundary)
 			m.updateViewport()
 		}
 		// History refresh fires after each completed turn — pull a
@@ -745,7 +826,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 					m.notify("Confirmed.")
 					var spinnerCmd tea.Cmd
 					if confirm.runningStatus != "" {
-						m.messages = append(m.messages, chatMessage{
+						m.appendMessage(chatMessage{
 							role:    "system",
 							content: confirm.runningStatus,
 							pending: true,
@@ -784,8 +865,8 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				if command == "" {
 					return m, nil
 				}
-				m.messages = append(m.messages, chatMessage{role: "system", content: fmt.Sprintf("!! %s", command)})
-				m.messages = append(m.messages, chatMessage{role: "system", content: "running on gateway..."})
+				m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("!! %s", command)})
+				m.appendMessage(chatMessage{role: "system", content: "running on gateway..."})
 				m.sending = true
 				m.updateViewport()
 				cmds = append(cmds, m.execCommand(command))
@@ -797,8 +878,8 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				if command == "" {
 					return m, nil
 				}
-				m.messages = append(m.messages, chatMessage{role: "system", content: fmt.Sprintf("$ %s", command)})
-				m.messages = append(m.messages, chatMessage{role: "system", content: "running..."})
+				m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("$ %s", command)})
+				m.appendMessage(chatMessage{role: "system", content: "running..."})
 				m.sending = true
 				m.updateViewport()
 				cmds = append(cmds, localExecCommand(command))
@@ -811,8 +892,8 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 					sent = expanded
 				}
 			}
-			m.messages = append(m.messages, chatMessage{role: "user", content: text})
-			m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
+			m.appendMessage(chatMessage{role: "user", content: text})
+			m.appendMessage(chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
 			m.sending = true
 			if ar := m.activeRoutine; ar != nil && ar.logger != nil {
 				ar.logger.WriteUser(text)
@@ -864,7 +945,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		if msg.err != nil {
 			logEvent("SEND_ERROR: %v", msg.err)
 			m.removeThinkingPlaceholder()
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:   "assistant",
 				errMsg: msg.err.Error(),
 			})
@@ -1014,8 +1095,12 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 	if len(m.pendingMessages) == 0 {
 		m.sending = false
 		if refresh {
-			// Queue fully drained — refresh history now that all messages have been sent.
-			return tea.Batch(m.refreshHistory(), m.loadStats())
+			// Queue fully drained — refresh history with a boundary
+			// of m.gen-1 so the just-finalised turn (and everything
+			// older) is replaced by server canonical state, while any
+			// rows that arrive between issue and result (typically
+			// none on this path, but possible) survive the merge.
+			return tea.Batch(m.refreshHistoryAt(m.gen-1), m.loadStats())
 		}
 		return nil
 	}
@@ -1029,8 +1114,8 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 			m.sending = false
 			return nil
 		}
-		m.messages = append(m.messages, chatMessage{role: "system", content: fmt.Sprintf("!! %s", command)})
-		m.messages = append(m.messages, chatMessage{role: "system", content: "running on gateway..."})
+		m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("!! %s", command)})
+		m.appendMessage(chatMessage{role: "system", content: "running on gateway..."})
 		m.updateViewport()
 		return m.execCommand(command)
 	}
@@ -1041,8 +1126,8 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 			m.sending = false
 			return nil
 		}
-		m.messages = append(m.messages, chatMessage{role: "system", content: fmt.Sprintf("$ %s", command)})
-		m.messages = append(m.messages, chatMessage{role: "system", content: "running..."})
+		m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("$ %s", command)})
+		m.appendMessage(chatMessage{role: "system", content: "running..."})
 		m.updateViewport()
 		return localExecCommand(command)
 	}
@@ -1053,8 +1138,8 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 			sent = expanded
 		}
 	}
-	m.messages = append(m.messages, chatMessage{role: "user", content: text})
-	m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
+	m.appendMessage(chatMessage{role: "user", content: text})
+	m.appendMessage(chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
 	if ar := m.activeRoutine; ar != nil && ar.logger != nil {
 		ar.logger.WriteUser(text)
 	}

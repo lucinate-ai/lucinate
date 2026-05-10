@@ -44,6 +44,9 @@ func makeChatEventWithError(state, runID, errMsg string) protocol.Event {
 }
 
 // newTestChatModel creates a minimal chatModel suitable for unit tests.
+// gen starts at 1 to mirror production (newChatModel) so test rows
+// appended via appendMessage end up on the live side of any boundary
+// computed in tests.
 func newTestChatModel() *chatModel {
 	vp := viewport.New()
 	return &chatModel{
@@ -52,6 +55,7 @@ func newTestChatModel() *chatModel {
 		agentName: "test",
 		width:     80,
 		height:    30,
+		gen:       1,
 	}
 }
 
@@ -307,6 +311,116 @@ func TestFinalisedRunSet_IgnoresEmpty(t *testing.T) {
 	}
 	if got := s.last(); got != "" {
 		t.Errorf("last() with empty inputs = %q, want \"\"", got)
+	}
+}
+
+// TestMergeHistoryRefresh_PreservesLiveTail pins the central merge
+// invariant: rows whose gen exceeds the boundary survive a refresh,
+// rows at or below it are replaced by server canonical state. This is
+// the safety net that lets Layer 3 issue refreshes mid-routine without
+// wiping the next step's placeholder.
+func TestMergeHistoryRefresh_PreservesLiveTail(t *testing.T) {
+	m := newTestChatModel()
+	m.gen = 5
+	// Existing local state spans two turns: gen=4 (just finalised) and
+	// gen=5 (next routine step's placeholder + an in-flight tool card).
+	m.messages = []chatMessage{
+		{role: "user", content: "step 1", gen: 4},
+		{role: "assistant", content: "answer 1", gen: 4},
+		{role: "user", content: "step 2", gen: 5},
+		{role: "tool", toolName: "bash", toolState: "running", gen: 5},
+		{role: "assistant", streaming: true, awaitingDelta: true, gen: 5},
+	}
+	server := []chatMessage{
+		{role: "user", content: "step 1"},          // server-canonical (gen=0)
+		{role: "assistant", content: "answer 1 (canonical)"},
+	}
+	m.mergeHistoryRefresh(server, 4)
+
+	if len(m.messages) != len(server)+3 {
+		t.Fatalf("merged len = %d, want %d", len(m.messages), len(server)+3)
+	}
+	if m.messages[0].content != "step 1" || m.messages[1].content != "answer 1 (canonical)" {
+		t.Errorf("server prefix not placed first: %+v", m.messages[:2])
+	}
+	tail := m.messages[2:]
+	if tail[0].content != "step 2" || tail[0].gen != 5 {
+		t.Errorf("live tail step-2 user lost: %+v", tail[0])
+	}
+	if tail[1].role != "tool" || tail[1].toolState != "running" {
+		t.Errorf("live tail tool card lost: %+v", tail[1])
+	}
+	if tail[2].role != "assistant" || !tail[2].awaitingDelta {
+		t.Errorf("live tail placeholder lost: %+v", tail[2])
+	}
+}
+
+// TestMergeHistoryRefresh_NoLiveTail pins the empty-tail case: if every
+// row sits at or below the boundary (the queue-fully-drained scenario),
+// the merge is equivalent to wholesale replacement.
+func TestMergeHistoryRefresh_NoLiveTail(t *testing.T) {
+	m := newTestChatModel()
+	m.gen = 3
+	m.messages = []chatMessage{
+		{role: "user", content: "old", gen: 1},
+		{role: "assistant", content: "older", gen: 2},
+	}
+	server := []chatMessage{
+		{role: "user", content: "fresh"},
+		{role: "assistant", content: "fresher"},
+	}
+	m.mergeHistoryRefresh(server, 2)
+
+	if len(m.messages) != 2 {
+		t.Fatalf("merged len = %d, want 2 (live tail empty)", len(m.messages))
+	}
+	if m.messages[0].content != "fresh" || m.messages[1].content != "fresher" {
+		t.Errorf("expected wholesale replacement, got %+v", m.messages)
+	}
+}
+
+// TestHandleEvent_FinalBumpsGen pins that a successful final is what
+// advances the generation counter. An "empty ack" final (no streaming
+// placeholder to finalise) must NOT bump — otherwise the boundary
+// would drift forward without a real turn completing, and a later
+// refresh would treat genuine live state as history-side.
+func TestHandleEvent_FinalBumpsGen(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	m.messages = []chatMessage{
+		{role: "user", content: "hi", gen: 1},
+		{role: "assistant", content: "ack", streaming: true, gen: 1},
+	}
+	startGen := m.gen
+
+	finalMsg := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"ack"}]}`)
+	m.handleEvent(makeChatEvent("final", "run1", 1, finalMsg))
+
+	if m.gen != startGen+1 {
+		t.Errorf("successful final must bump gen: got %d, want %d", m.gen, startGen+1)
+	}
+}
+
+// TestHandleEvent_FinalEmptyAckDoesNotBumpGen is the negative case:
+// the gateway sometimes emits an early empty `final` ack before the
+// real response has been finalised. That must not advance the gen,
+// because no turn has actually completed.
+func TestHandleEvent_FinalEmptyAckDoesNotBumpGen(t *testing.T) {
+	m := newTestChatModel()
+	m.sending = true
+	// Placeholder still awaitingDelta — the gateway ack arrives before
+	// any content has streamed.
+	m.messages = []chatMessage{
+		{role: "user", content: "hi", gen: 1},
+		{role: "assistant", streaming: true, awaitingDelta: true, gen: 1},
+	}
+	startGen := m.gen
+
+	emptyFinal := json.RawMessage(`{"role":"assistant","content":[]}`)
+	m.handleEvent(makeChatEvent("final", "run1", 1, emptyFinal))
+
+	if m.gen != startGen {
+		t.Errorf("empty ack must NOT bump gen: got %d, started at %d", m.gen, startGen)
 	}
 }
 

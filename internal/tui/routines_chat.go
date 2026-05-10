@@ -84,8 +84,8 @@ func (m *chatModel) sendNextRoutineStep() tea.Cmd {
 			sent = expanded
 		}
 	}
-	m.messages = append(m.messages, chatMessage{role: "user", content: text})
-	m.messages = append(m.messages, chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
+	m.appendMessage(chatMessage{role: "user", content: text})
+	m.appendMessage(chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
 	m.sending = true
 	if ar.logger != nil {
 		ar.logger.WriteUser(text)

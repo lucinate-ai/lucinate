@@ -102,6 +102,25 @@ When restored history is non-empty, a dimmed separator row is rendered above the
 
 See [sessions.md](sessions.md#lifecycle) for how history loading fits into the session lifecycle.
 
+## Mid-turn history resync
+
+After a turn finalises, the chat view fetches `chat.history` from the gateway and merges it into `m.messages`. The merge is *not* a wholesale replacement — that would wipe live state (the next routine step's placeholder, an in-flight tool card, a system row the user just took an action on).
+
+The mechanism is a generation counter:
+
+- `chatModel.gen` is a monotonically increasing `uint64` (starts at 1).
+- Every `appendMessage(...)` stamps the current `m.gen` onto the row.
+- A successful `final` (or `error`/`aborted`) calls `bumpGen()`, which captures the current value as the "boundary" and then advances the counter. The boundary is what the just-issued `refreshHistoryAt(boundary)` carries.
+- When the resulting `historyRefreshMsg` lands, `mergeHistoryRefresh(server, boundary)` keeps every existing row with `gen > boundary` (the live tail — appended by the post-bump `drainQueue` / `maybeAdvanceRoutine` / recovery path) and prepends the server-fetched canonical state.
+
+Practical consequences:
+
+- Rows imported from `chat.history` carry `gen=0` (the chatMessage zero value), so any subsequent refresh treats them as history-side and replaces them cleanly.
+- Tool cards from the *just-finalised* turn are lost on refresh — the gateway's history view doesn't model them. Tool cards for the *current* (next) turn survive because they're tagged with the new gen at append time.
+- Empty `final` acks (the gateway ping that arrives before any real content) intentionally do NOT bump the gen, because no turn has actually completed.
+
+Tests pin the contract: `TestMergeHistoryRefresh_PreservesLiveTail`, `TestMergeHistoryRefresh_NoLiveTail`, `TestHandleEvent_FinalBumpsGen`, `TestHandleEvent_FinalEmptyAckDoesNotBumpGen`.
+
 ## Connect timeout
 
 Each (re)connect attempt has a per-attempt deadline applied to the WebSocket / HTTP handshake. The default is 15 seconds; the range is 5–300 seconds via `/config` ("Connect timeout"). The configured value is loaded by `app.DefaultBackendFactory` (`app/factory.go`) for every backend dispatch, so the same setting governs the initial connect and the supervisor's reconnect attempts. Bump it when targeting a slow local LLM that cold-starts on first request.

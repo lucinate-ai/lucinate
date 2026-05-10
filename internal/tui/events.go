@@ -264,7 +264,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 				return nil
 			}
 		}
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:      "assistant",
 			content:   deltaText,
 			streaming: true,
@@ -294,6 +294,13 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 			logEvent("  FINAL ignored (no streaming assistant message)")
 			return nil
 		}
+		// Capture the merge boundary *before* bumping so the just-
+		// finalised turn is on the history-side of any refresh issued
+		// from here on; subsequent appends (drained queue, auto-
+		// advanced routine step, recovery system rows) get the new gen
+		// and survive the merge.
+		boundary := m.bumpGen()
+		_ = boundary // wired up by Layer 3; Layer 2 keeps the old gating.
 		// Routine bookkeeping: log assistant content, parse /routine: directives.
 		// Done before drainQueue so a directive (stop/pause/mode) is honoured
 		// before the next routine step would otherwise auto-fire.
@@ -320,7 +327,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 			cmds = append(cmds, cmd)
 			return tea.Batch(cmds...)
 		}
-		cmds = append(cmds, m.refreshHistory(), m.loadStats())
+		cmds = append(cmds, m.refreshHistoryAt(boundary), m.loadStats())
 		return tea.Batch(cmds...)
 
 	case "error":
@@ -340,6 +347,11 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		if !finalised {
 			return nil
 		}
+		// Bump so any subsequent refresh treats the errored turn as
+		// history-side. The error row itself was stamped with the
+		// pre-bump gen (still streaming when we mutated it in place),
+		// so it's on the history-side of the boundary too.
+		m.bumpGen()
 		// Pause the routine so a transient error doesn't auto-loop the next
 		// step. The user can press Enter to retry / continue, or Esc to end.
 		if m.activeRoutine != nil {
@@ -364,6 +376,9 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		if !finalised {
 			return nil
 		}
+		// Same rationale as the error branch — keep the boundary
+		// monotonic so cancelled turns don't pollute the next merge.
+		m.bumpGen()
 		if m.activeRoutine != nil {
 			m.activeRoutine.paused = true
 		}
@@ -439,7 +454,7 @@ func (m *chatModel) handleAgentEvent(ev protocol.Event) tea.Cmd {
 		if name == "" {
 			name = "tool"
 		}
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:         "tool",
 			toolName:     name,
 			toolCallID:   td.ToolCallID,

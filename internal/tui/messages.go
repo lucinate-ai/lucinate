@@ -21,6 +21,15 @@ type chatMessage struct {
 	rendered      bool  // true if content has been glamour-rendered (contains ANSI codes)
 	timestampMs   int64 // unix millis; only used by "separator" rows to label resume time
 
+	// gen is the chatModel.gen counter at the moment this row was
+	// appended. It partitions the message list into a "history-side"
+	// portion (rows whose gen ≤ the refresh boundary, replaced from
+	// server canonical state) and a "live tail" (rows whose gen >
+	// boundary, preserved across the merge). Rows imported from server
+	// history (via fetchHistory) leave this as the zero value, which
+	// reads as "older than any live turn" — i.e. always replaceable.
+	gen uint64
+
 	// Tool fields populated only when role == "tool".
 	toolName     string
 	toolCallID   string
@@ -51,9 +60,16 @@ type historyLoadedMsg struct {
 	err      error
 }
 
-// historyRefreshMsg replaces all messages with fresh history after a response completes.
+// historyRefreshMsg merges server-canonical history into the message
+// list after a response completes. boundary is the chatModel.gen value
+// captured at the moment the refresh was issued; the merge keeps every
+// existing row with gen > boundary (the live tail — placeholder for the
+// next turn, in-flight tool cards, system rows the user is actively
+// looking at) and replaces everything ≤ boundary with the fetched
+// server history. The two halves are then concatenated, server first.
 type historyRefreshMsg struct {
 	messages []chatMessage
+	boundary uint64
 	err      error
 }
 

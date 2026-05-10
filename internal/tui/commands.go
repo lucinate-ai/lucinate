@@ -203,7 +203,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	case "/compact":
 		compact, ok := m.backend.(backend.CompactBackend)
 		if !ok {
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:   "system",
 				errMsg: "/compact is not available on this connection",
 			})
@@ -221,7 +221,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 				}
 			},
 		}
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:    "system",
 			content: m.pendingConfirm.prompt,
 		})
@@ -248,7 +248,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 				}
 			},
 		}
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:    "system",
 			content: m.pendingConfirm.prompt,
 		})
@@ -260,7 +260,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return true, m.gateNavigation("Switching connections", func() tea.Msg { return showConnectionsMsg{} })
 	case "/crons", "/crons all":
 		if _, ok := m.backend.(backend.CronBackend); !ok {
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:   "system",
 				errMsg: "/crons is not available on this connection",
 			})
@@ -294,7 +294,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		if len(m.skills) > 0 {
 			helpText += fmt.Sprintf("\n\n%d agent skill(s) available — type /skills to list", len(m.skills))
 		}
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:    "system",
 			content: helpText,
 		})
@@ -302,17 +302,17 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return true, nil
 	case "/stats":
 		if m.stats == nil {
-			m.messages = append(m.messages, chatMessage{role: "system", content: "Stats not yet loaded..."})
+			m.appendMessage(chatMessage{role: "system", content: "Stats not yet loaded..."})
 			m.updateViewport()
 			return true, m.loadStats()
 		}
-		m.messages = append(m.messages, chatMessage{role: "system", content: m.formatStatsTable()})
+		m.appendMessage(chatMessage{role: "system", content: m.formatStatsTable()})
 		m.updateViewport()
 		return true, nil
 	case "/status":
 		status, ok := m.backend.(backend.StatusBackend)
 		if !ok {
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:   "system",
 				errMsg: "/status is not available on this connection",
 			})
@@ -327,13 +327,13 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 
 	case "/skills":
 		if len(m.skills) == 0 {
-			m.messages = append(m.messages, chatMessage{role: "system", content: "No agent skills found.\nPlace skills in <cwd>/.agents/skills/<name>/SKILL.md or ~/.agents/skills/<name>/SKILL.md"})
+			m.appendMessage(chatMessage{role: "system", content: "No agent skills found.\nPlace skills in <cwd>/.agents/skills/<name>/SKILL.md or ~/.agents/skills/<name>/SKILL.md"})
 		} else {
 			var lines []string
 			for _, s := range m.skills {
 				lines = append(lines, fmt.Sprintf("  /%s — %s", s.Name, s.Description))
 			}
-			m.messages = append(m.messages, chatMessage{
+			m.appendMessage(chatMessage{
 				role:    "system",
 				content: "Available skills:\n" + strings.Join(lines, "\n"),
 			})
@@ -386,7 +386,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			}
 		}
 
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:   "system",
 			errMsg: fmt.Sprintf("unknown command: %s (try /help)", firstToken),
 		})
@@ -454,7 +454,7 @@ func (m *chatModel) handleAgentCommand(text string) (bool, tea.Cmd) {
 func (m *chatModel) handleModelCommand(text string) (bool, tea.Cmd) {
 	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
 	if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" {
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:   "system",
 			errMsg: "/model requires a name — use /models to open the picker",
 		})
@@ -651,7 +651,7 @@ func formatDuration(ms int64) string {
 func (m *chatModel) handleRoutineCommand(text string) (bool, tea.Cmd) {
 	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
 	if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" {
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:   "system",
 			errMsg: "/routine requires a name — use /routines to manage them",
 		})
@@ -745,7 +745,7 @@ func (m *chatModel) handleThinkCommand(text string) (bool, tea.Cmd) {
 		if level == "" {
 			level = "off (gateway default)"
 		}
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:    "system",
 			content: fmt.Sprintf("Thinking level: %s\nAvailable levels: %s", level, strings.Join(thinkingLevels, ", ")),
 		})
@@ -762,7 +762,7 @@ func (m *chatModel) handleThinkCommand(text string) (bool, tea.Cmd) {
 		}
 	}
 	if !valid {
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:   "system",
 			errMsg: fmt.Sprintf("unknown thinking level %q — valid levels: %s", level, strings.Join(thinkingLevels, ", ")),
 		})
@@ -772,7 +772,7 @@ func (m *chatModel) handleThinkCommand(text string) (bool, tea.Cmd) {
 
 	thinking, ok := m.backend.(backend.ThinkingBackend)
 	if !ok {
-		m.messages = append(m.messages, chatMessage{
+		m.appendMessage(chatMessage{
 			role:   "system",
 			errMsg: "/think is not available on this connection",
 		})
