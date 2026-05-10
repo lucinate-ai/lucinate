@@ -188,6 +188,7 @@ type chatModel struct {
 	terminalFocused    bool   // tracks tea.FocusMsg/BlurMsg so the completion bell only rings when the user is looking elsewhere
 	updateLatest       string // populated by AppModel when the startup check finds a newer release; rendered as a header badge
 	activeRoutine      *activeRoutine
+	recorder           *transcriptRecorder // non-nil while /record on is active; closed and cleared on /record off, session switch, or quit
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -309,6 +310,39 @@ func (m *chatModel) replacePendingSystem(replacement chatMessage) {
 		}
 	}
 	m.appendMessage(replacement)
+}
+
+// recordCanonical forwards a canonical-history slice to the active
+// recorder, if one is attached. No-op when /record is off. Errors
+// from the underlying file write are surfaced as a one-shot system
+// note and the recorder is closed — repeated failures on the same
+// file would just spam the chat view.
+func (m *chatModel) recordCanonical(msgs []chatMessage) {
+	if m.recorder == nil || len(msgs) == 0 {
+		return
+	}
+	if err := m.recorder.writeNew(msgs); err != nil {
+		path := m.recorder.path
+		_ = m.recorder.close()
+		m.recorder = nil
+		m.appendMessage(chatMessage{
+			role:   "system",
+			errMsg: fmt.Sprintf("Recording stopped: write to %s failed: %v", path, err),
+		})
+	}
+}
+
+// stopRecording closes the active recorder if one is attached. Used
+// by /record off and by the chat-model teardown path so a recording
+// doesn't outlive its session.
+func (m *chatModel) stopRecording() (path string, stopped bool) {
+	if m.recorder == nil {
+		return "", false
+	}
+	path = m.recorder.path
+	_ = m.recorder.close()
+	m.recorder = nil
+	return path, true
 }
 
 // ensureSpinnerTicking starts the spinner animation if one is not already scheduled.
@@ -558,6 +592,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			// history-side and replaces them cleanly.
 			hist := append(msg.messages, chatMessage{role: "separator", timestampMs: lastTs})
 			m.messages = append(hist, m.messages...)
+			m.recordCanonical(msg.messages)
 		}
 		m.updateViewport()
 		// If a caller pre-seeded pendingMessages (e.g. `lucinate chat`
@@ -688,6 +723,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			// while a tool card is in flight — scenarios where the old
 			// wholesale-replace would have wiped live state.
 			m.mergeHistoryRefresh(msg.messages, msg.boundary)
+			m.recordCanonical(msg.messages)
 			m.updateViewport()
 		}
 		// History refresh fires after each completed turn — pull a

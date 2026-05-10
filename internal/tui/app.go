@@ -595,6 +595,12 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		m.routinesModel = newRoutinesModel(m.hideActionHints, m.disableExitKeys)
 		m.routinesModel.setSize(m.width, m.height)
 		m.state = viewRoutines
+		if len(msg.prefillSteps) > 0 {
+			// Skip the routines list and drop straight into the
+			// create form. The list still loads in the background so
+			// the user can cancel back to a populated picker.
+			m.routinesModel.openCreateFormWithSteps(msg.prefillSteps)
+		}
 		return m, m.routinesModel.Init()
 
 	case goBackFromRoutinesMsg:
@@ -654,6 +660,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		if agentID == "" {
 			agentID = m.sessionsModel.agentID
 		}
+		_, _ = m.chatModel.stopRecording()
 		m.chatModel = newChatModel(m.backend, msg.sessionKey, agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), "", m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
@@ -664,6 +671,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		// rebuild the transcript from the run log instead — that's the
 		// same data the run-history previews on the cron-detail page
 		// already use.
+		_, _ = m.chatModel.stopRecording()
 		m.chatModel = newChatModel(m.backend, "", msg.job.AgentID, msg.agentName, "", m.prefs, true, connectionLabel(m.activeConn), "", m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.chatModel.messages = buildCronTranscriptMessages(cronPayloadText(msg.job), msg.runs, m.chatModel.renderer)
@@ -683,6 +691,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.sessionsModel.loading = false
 			return m, nil
 		}
+		_, _ = m.chatModel.stopRecording()
 		m.chatModel = newChatModel(m.backend, msg.sessionKey, m.sessionsModel.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), "", m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat
@@ -718,6 +727,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		// for the agent they just opened.
 		m.selectModel.selecting = false
 		m.selectModel.selectingName = ""
+		_, _ = m.chatModel.stopRecording()
 		m.chatModel = newChatModel(m.backend, msg.sessionKey, msg.agentID, msg.agentName, msg.modelID, m.prefs, m.hideInput, connectionLabel(m.activeConn), initialMsg, m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.state = viewChat

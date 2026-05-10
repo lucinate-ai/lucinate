@@ -19,6 +19,7 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 | [one-shot.md](one-shot.md) | One-shot CLI mode: `lucinate send` lifecycle, default session rule, detach semantics, embedding |
 | [chat-launch.md](chat-launch.md) | Pre-navigated TUI launch: `lucinate chat` override plumbing, consumption points, stale-clearing rules |
 | [shell-execution.md](shell-execution.md) | `!` local exec and `!!` remote exec with two-phase approval |
+| [export-and-recording.md](export-and-recording.md) | `/record` and `/export` transcripts: canonical-history tap, dedup, file layout, lifecycle |
 | [skills.md](skills.md) | Skill file format, discovery, catalog injection, activation |
 | [chat-ux.md](chat-ux.md) | Input key bindings, streaming animation, thinking levels, header bar, history depth |
 | [message-rendering.md](message-rendering.md) | Message roles, `System:` prefix convention, history cleanup, markdown rendering |

@@ -23,9 +23,15 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/crons` | Open the cron browser filtered to the current agent — see [crons.md](crons.md) — **OpenClaw only** |
 | `/crons all` | Open the cron browser unfiltered (jobs across all agents) — **OpenClaw only** |
 | `/exit`, `/quit` | Exit via `tea.Quit` |
+| `/export` | Write the current session's canonical history to a transcript file — see below |
+| `/export all` | Same as `/export` |
+| `/export routine` | Convert the session's user prompts into routine steps and open the form prepopulated — see below |
 | `/help`, `/commands` | Print static help text; appends skill count if any are loaded |
 | `/model <name>` | Switch model — see below |
 | `/models` | Open the model picker (filter as you type) |
+| `/record` | Show whether transcript capture is on, and where it's writing |
+| `/record on` | Begin streaming canonical conversation messages to a transcript file — see below |
+| `/record off` | Stop the active recording and report the file path |
 | `/reset` | Delete the session and start fresh — see [sessions.md](sessions.md#compact-and-reset) |
 | `/routine <name>` | Activate a stored routine in the current session — see [routines.md](routines.md) |
 | `/routines` | Open the routines manager (list/view/edit/delete) — see [routines.md](routines.md) |
@@ -49,6 +55,12 @@ Backend-only commands render a "not available on this connection" system message
 ### /stats
 
 Stats are loaded asynchronously via `client.SessionUsage()` on chat init and after each message exchange. `/stats` formats `m.stats` through `formatStatsTable()` in `internal/tui/render.go`, which produces a text table of input/output/cache tokens and cost breakdown.
+
+### /record and /export
+
+Both commands persist the session's canonical chat history to a Markdown file under `<dataDir>/transcripts/`. `/record on` streams new turns as they finalise; `/export [all]` dumps the current state in one shot; `/export routine` skips the file write and opens the routines manager prefilled with the session's user prompts.
+
+The canonical-history tap, dedup signature, file layout, and lifecycle are documented in [export-and-recording.md](export-and-recording.md).
 
 ## Tab completion
 

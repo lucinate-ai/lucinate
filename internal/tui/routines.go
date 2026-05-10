@@ -155,6 +155,16 @@ func newRoutinesModel(hideHints bool, disableExitKeys bool) routinesModel {
 	}
 }
 
+// openCreateFormWithSteps switches the manager directly into the
+// create-routine form with the supplied step bodies pre-populated.
+// Used by the `/export routine` flow so a session's user prompts can
+// be turned into a routine without retyping.
+func (m *routinesModel) openCreateFormWithSteps(steps []string) {
+	m.form = newRoutineFormWithSteps(steps)
+	m.subset = routinesSubForm
+	m.sizeFormBody()
+}
+
 func (m routinesModel) Init() tea.Cmd { return loadRoutinesList() }
 
 func (m *routinesModel) setSize(w, h int) {
@@ -650,6 +660,23 @@ func newRoutineForm(editingID string, existing routines.Routine) routineForm {
 		steps:     steps,
 		focused:   fieldName,
 	}
+}
+
+// newRoutineFormWithSteps builds a fresh create-mode form with the
+// supplied step bodies pre-populated. Header fields stay empty so
+// the user picks the routine's name and mode before saving.
+func newRoutineFormWithSteps(stepBodies []string) routineForm {
+	form := newRoutineForm("", routines.Routine{})
+	if len(stepBodies) == 0 {
+		return form
+	}
+	steps := make([]textarea.Model, 0, len(stepBodies))
+	for _, body := range stepBodies {
+		steps = append(steps, newStepTextarea(body))
+	}
+	form.steps = steps
+	form.focused = fieldName
+	return form
 }
 
 // newStepTextarea constructs a textarea pre-configured for routine
