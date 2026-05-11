@@ -161,6 +161,8 @@ type chatModel struct {
 	finalisedRuns      finalisedRunSet // bounded LRU of run IDs we have already finalised; chat events still bearing one of these IDs are stale duplicates emitted by the gateway after final and must not corrupt the next run's placeholder
 	gen                uint64 // generation counter stamped onto every newly-appended chatMessage; bumped after each turn finalises so the just-finalised turn can be replaced by a server-canonical refresh while the next turn's live state survives the merge
 	pendingMessages    []string
+	historyBrowseIndex int    // bash-style up-arrow recall position; -1 when not browsing, 0 = most recent user message, N = N user messages back
+	historyBrowseValue string // textarea contents last placed by history navigation; lets repeated up/down keep walking until the user edits
 	width              int
 	height             int
 	renderer           *glamour.TermRenderer
@@ -233,6 +235,57 @@ func (m *chatModel) appendMessage(msg chatMessage) *chatMessage {
 	msg.gen = m.gen
 	m.messages = append(m.messages, msg)
 	return &m.messages[len(m.messages)-1]
+}
+
+// userMessageAt returns the content of the user-role message at the given
+// reverse-chronological index — 0 is the most recent submission, 1 is the
+// one before it, and so on. ok is false when index exceeds the number of
+// user messages on record. Powers the bash-style up/down recall in the
+// chat input.
+func (m *chatModel) userMessageAt(index int) (string, bool) {
+	if index < 0 {
+		return "", false
+	}
+	seen := 0
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].role != "user" {
+			continue
+		}
+		if seen == index {
+			return m.messages[i].content, true
+		}
+		seen++
+	}
+	return "", false
+}
+
+// recallUserMessageAt loads the user message at the given reverse-chronological
+// index into the textarea and remembers the browse position so a follow-up
+// up/down press can keep walking. Returns true when a message was loaded.
+func (m *chatModel) recallUserMessageAt(index int) bool {
+	val, ok := m.userMessageAt(index)
+	if !ok {
+		return false
+	}
+	setTextareaToValueWithCursor(&m.textarea, val, len(val))
+	m.historyBrowseIndex = index
+	m.historyBrowseValue = m.textarea.Value()
+	return true
+}
+
+// inHistoryBrowse reports whether the textarea still holds the exact value
+// the last history recall placed in it. As soon as the user edits the recalled
+// text, browsing ends and up/down revert to ordinary cursor movement.
+func (m *chatModel) inHistoryBrowse() bool {
+	return m.historyBrowseIndex >= 0 && m.textarea.Value() == m.historyBrowseValue
+}
+
+// exitHistoryBrowse forgets the current browse position. Called whenever the
+// textarea is consumed (submit, slash-command, queued, cancelled) so the next
+// up press starts a fresh walk from the most recent message.
+func (m *chatModel) exitHistoryBrowse() {
+	m.historyBrowseIndex = -1
+	m.historyBrowseValue = ""
 }
 
 // bumpGen captures the current generation and advances the counter.
@@ -421,7 +474,8 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 		historyLoading:  true,
 		hideInput:       hideInput,
 		terminalFocused: true,
-		pendingMessages: pending,
+		pendingMessages:    pending,
+		historyBrowseIndex: -1,
 		// Start at gen=1 so the zero value on chatMessage.gen reads as
 		// "older than any live turn" — server-history imports keep that
 		// default and are always replaceable on subsequent refreshes.
@@ -791,9 +845,51 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.textarea.Reset()
 				m.textarea.SetValue(text)
 				m.textarea.CursorEnd()
+				m.exitHistoryBrowse()
 				m.refreshCompletionMenu()
 				m.updateViewport()
 				return m, nil
+			}
+			// Bash-style history recall: walk back through previously submitted
+			// user messages when the input is empty (start a fresh walk) or the
+			// textarea still holds the last value we placed there (continue
+			// walking). When neither applies the keystroke falls through so the
+			// textarea can move the cursor within multi-line content.
+			if m.textarea.Value() == "" {
+				if m.recallUserMessageAt(0) {
+					m.refreshCompletionMenu()
+					m.updateViewport()
+					return m, nil
+				}
+			} else if m.inHistoryBrowse() {
+				if m.recallUserMessageAt(m.historyBrowseIndex + 1) {
+					m.refreshCompletionMenu()
+					m.updateViewport()
+					return m, nil
+				}
+				// Already at the oldest user message — stay put rather than
+				// fall through, otherwise the textarea would move the cursor
+				// to the start of the recalled line and the next up press
+				// would no longer match historyBrowseValue.
+				return m, nil
+			}
+		case "down":
+			// Bash-style history walk forward. Only meaningful while browsing;
+			// otherwise the keystroke falls through so the textarea can move
+			// the cursor within multi-line content.
+			if m.inHistoryBrowse() {
+				if m.historyBrowseIndex == 0 {
+					m.textarea.Reset()
+					m.exitHistoryBrowse()
+					m.refreshCompletionMenu()
+					m.updateViewport()
+					return m, nil
+				}
+				if m.recallUserMessageAt(m.historyBrowseIndex - 1) {
+					m.refreshCompletionMenu()
+					m.updateViewport()
+					return m, nil
+				}
 			}
 		case "enter":
 			text := strings.TrimSpace(m.textarea.Value())
@@ -1034,8 +1130,11 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	case tea.KeyPressMsg:
 		km := msg.(tea.KeyPressMsg)
 		switch km.Code {
-		case tea.KeyPgUp, tea.KeyPgDown, tea.KeyUp, tea.KeyDown:
-			// Allow scrolling keys through.
+		case tea.KeyPgUp, tea.KeyPgDown:
+			// Allow scrolling keys through. Up/Down are reserved for
+			// pending-message recall and bash-style history walking;
+			// scrolling the conversation viewport with them would compete
+			// with that and dump the user out of their history walk.
 		default:
 			passToViewport = false
 		}

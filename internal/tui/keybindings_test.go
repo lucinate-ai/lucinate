@@ -70,7 +70,7 @@ func TestUpKey_RecallsLastQueuedMessage(t *testing.T) {
 	}
 }
 
-func TestUpKey_NoQueuedMessagesLeavesInputEmpty(t *testing.T) {
+func TestUpKey_NoQueuedAndNoHistoryLeavesInputEmpty(t *testing.T) {
 	m := newChatModel(nil, "main", "", "test", "", config.DefaultPreferences(), false, "", "", false)
 	m.viewport = viewport.New()
 	m.width = 80
@@ -80,7 +80,128 @@ func TestUpKey_NoQueuedMessagesLeavesInputEmpty(t *testing.T) {
 	m, _ = m.Update(up)
 
 	if got := m.textarea.Value(); got != "" {
-		t.Errorf("textarea should remain empty, got %q", got)
+		t.Errorf("textarea should remain empty with no queue and no history, got %q", got)
+	}
+}
+
+func TestUpKey_NoQueuedRecallsLastUserMessage(t *testing.T) {
+	m := newChatModel(nil, "main", "", "test", "", config.DefaultPreferences(), false, "", "", false)
+	m.viewport = viewport.New()
+	m.width = 80
+	m.height = 30
+	m.messages = []chatMessage{
+		{role: "user", content: "first"},
+		{role: "assistant", content: "reply 1"},
+		{role: "user", content: "second"},
+		{role: "assistant", content: "reply 2"},
+		{role: "user", content: "third"},
+		{role: "assistant", content: "reply 3"},
+	}
+
+	up := tea.KeyPressMsg{Code: tea.KeyUp}
+
+	m, _ = m.Update(up)
+	if got, want := m.textarea.Value(), "third"; got != want {
+		t.Fatalf("first up: got %q, want %q", got, want)
+	}
+
+	m, _ = m.Update(up)
+	if got, want := m.textarea.Value(), "second"; got != want {
+		t.Fatalf("second up: got %q, want %q", got, want)
+	}
+
+	m, _ = m.Update(up)
+	if got, want := m.textarea.Value(), "first"; got != want {
+		t.Fatalf("third up: got %q, want %q", got, want)
+	}
+
+	// At oldest — further up is a no-op (still shows the oldest message).
+	m, _ = m.Update(up)
+	if got, want := m.textarea.Value(), "first"; got != want {
+		t.Errorf("fourth up: got %q, want %q", got, want)
+	}
+}
+
+func TestDownKey_WalksForwardThroughHistory(t *testing.T) {
+	m := newChatModel(nil, "main", "", "test", "", config.DefaultPreferences(), false, "", "", false)
+	m.viewport = viewport.New()
+	m.width = 80
+	m.height = 30
+	m.messages = []chatMessage{
+		{role: "user", content: "first"},
+		{role: "user", content: "second"},
+		{role: "user", content: "third"},
+	}
+
+	up := tea.KeyPressMsg{Code: tea.KeyUp}
+	down := tea.KeyPressMsg{Code: tea.KeyDown}
+
+	// Walk all the way back.
+	m, _ = m.Update(up)
+	m, _ = m.Update(up)
+	m, _ = m.Update(up)
+	if got, want := m.textarea.Value(), "first"; got != want {
+		t.Fatalf("walked back: got %q, want %q", got, want)
+	}
+
+	// Then forward.
+	m, _ = m.Update(down)
+	if got, want := m.textarea.Value(), "second"; got != want {
+		t.Fatalf("first down: got %q, want %q", got, want)
+	}
+
+	m, _ = m.Update(down)
+	if got, want := m.textarea.Value(), "third"; got != want {
+		t.Fatalf("second down: got %q, want %q", got, want)
+	}
+
+	// One more down from the latest clears the textarea (bash-style).
+	m, _ = m.Update(down)
+	if got := m.textarea.Value(); got != "" {
+		t.Errorf("down past latest should clear, got %q", got)
+	}
+}
+
+func TestUpKey_PendingTakesPriorityOverHistory(t *testing.T) {
+	m := newChatModel(nil, "main", "", "test", "", config.DefaultPreferences(), false, "", "", false)
+	m.viewport = viewport.New()
+	m.width = 80
+	m.height = 30
+	m.messages = []chatMessage{{role: "user", content: "old"}}
+	m.pendingMessages = []string{"queued"}
+
+	up := tea.KeyPressMsg{Code: tea.KeyUp}
+	m, _ = m.Update(up)
+
+	if got, want := m.textarea.Value(), "queued"; got != want {
+		t.Errorf("textarea: got %q, want %q (pending should win over history)", got, want)
+	}
+	if len(m.pendingMessages) != 0 {
+		t.Errorf("pendingMessages should be empty after pop, got %v", m.pendingMessages)
+	}
+}
+
+func TestUpKey_DoesNotScrollViewport(t *testing.T) {
+	m := newChatModel(nil, "main", "", "test", "", config.DefaultPreferences(), false, "", "", false)
+	m.viewport = viewport.New()
+	m.width = 80
+	m.height = 30
+	m.viewport.SetWidth(80)
+	m.viewport.SetHeight(5)
+	for i := 0; i < 30; i++ {
+		m.messages = append(m.messages, chatMessage{role: "assistant", content: "filler line"})
+	}
+	m.updateViewport()
+
+	if !m.viewport.AtBottom() {
+		t.Fatalf("precondition: viewport should start at bottom")
+	}
+
+	up := tea.KeyPressMsg{Code: tea.KeyUp}
+	m, _ = m.Update(up)
+
+	if !m.viewport.AtBottom() {
+		t.Errorf("up arrow must not scroll the conversation viewport (YOffset=%d)", m.viewport.YOffset())
 	}
 }
 
