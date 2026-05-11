@@ -24,3 +24,4 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 | [chat-ux.md](chat-ux.md) | Input key bindings, streaming animation, thinking levels, header bar, history depth |
 | [message-rendering.md](message-rendering.md) | Message roles, `System:` prefix convention, history cleanup, markdown rendering |
 | [key-conventions.md](key-conventions.md) | Cross-view keyboard conventions: action keys, confirms, navigation, form keys, reserved keys |
+| [logging.md](logging.md) | `internal/logging` design: `LUCINATE_LOG_*` env vars, destination rule, TUI-safety constraints |

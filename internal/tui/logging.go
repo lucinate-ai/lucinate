@@ -1,21 +1,20 @@
 package tui
 
 import (
-	"log"
-	"os"
+	"fmt"
+	"log/slog"
 )
 
-var debugLog *log.Logger
-
-func init() {
-	f, err := os.OpenFile("/tmp/lucinate-events.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err == nil {
-		debugLog = log.New(f, "", log.LstdFlags|log.Lmicroseconds)
-	}
-}
-
+// logEvent records a TUI lifecycle event at debug level on the
+// process-wide slog.Default logger configured by internal/logging.
+//
+// Call sites pass a printf-style format and args; that pattern predates
+// the move to slog and is preserved here so they don't have to migrate
+// in lockstep. New code should prefer slog.Debug directly with
+// structured key=value attrs.
 func logEvent(format string, args ...any) {
-	if debugLog != nil {
-		debugLog.Printf(format, args...)
+	if !slog.Default().Enabled(nil, slog.LevelDebug) {
+		return
 	}
+	slog.Debug(fmt.Sprintf(format, args...))
 }

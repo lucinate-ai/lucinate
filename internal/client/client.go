@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -170,7 +170,7 @@ func (c *Client) dial(ctx context.Context) error {
 	}
 	if issued != "" {
 		if err := c.store.SaveDeviceToken(issued); err != nil {
-			log.Printf("warning: failed to save device token: %v", err)
+			slog.Warn("failed to save device token", "err", err)
 		}
 	}
 
@@ -315,7 +315,7 @@ func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error 
 		Content: identity,
 	}); err != nil {
 		// Non-fatal: agent is created but identity file may need manual setup.
-		log.Printf("warning: failed to seed IDENTITY.md: %v", err)
+		slog.Warn("failed to seed IDENTITY.md", "err", err)
 	}
 
 	return nil

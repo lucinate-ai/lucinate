@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/lucinate-ai/lucinate/app"
+	"github.com/lucinate-ai/lucinate/internal/logging"
 	"github.com/lucinate-ai/lucinate/internal/version"
 )
 
@@ -28,6 +29,11 @@ var errUsage = errors.New("usage")
 // version, error lines); the TUI itself talks directly to the
 // terminal regardless of these writers.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if err := logging.Init(logging.Options{TUI: isTUIInvocation(args)}); err != nil {
+		fmt.Fprintf(stderr, "lucinate: %v\n", err)
+		return 1
+	}
+
 	// Top-level help: routed before subcommand dispatch so `help`
 	// doesn't fall through to flag parsing and silently launch the TUI.
 	if len(args) > 0 {
@@ -88,6 +94,19 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// isTUIInvocation reports whether the args will lead to the TUI taking
+// over the terminal. It controls where the logger writes by default:
+// TUI invocations route to a side file, everything else to stderr.
+func isTUIInvocation(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	if args[0] == "chat" {
+		return true
+	}
+	return false
 }
 
 // finish maps a subcommand runner's error to an exit code, treating
