@@ -217,12 +217,20 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	}
 
 	if ev.EventName != protocol.EventChat {
+		logEvent("  UNHANDLED_EVENT name=%s payload_len=%d", ev.EventName, len(ev.Payload))
 		return nil
 	}
 
 	var chatEv protocol.ChatEvent
 	if err := json.Unmarshal(ev.Payload, &chatEv); err != nil {
 		logEvent("PARSE_ERROR: %v payload=%s", err, string(ev.Payload))
+		// A malformed chat event for an in-flight turn is functionally a
+		// hang — clear sending and tell the user, so the spinner stops.
+		if m.sending {
+			m.runID = ""
+			m.notifyError(fmt.Sprintf("gateway sent malformed chat event: %v", err))
+			return m.drainQueue()
+		}
 		return nil
 	}
 
@@ -345,20 +353,29 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	case "error":
 		logEvent("  ERROR: %s", chatEv.ErrorMessage)
 		m.runID = ""
-		finalised := false
+		m.finalisedRuns.add(chatEv.RunID)
+		attached := false
 		if len(m.messages) > 0 {
 			last := &m.messages[len(m.messages)-1]
 			if last.role == "assistant" && last.streaming {
 				last.streaming = false
 				last.errMsg = chatEv.ErrorMessage
-				finalised = true
-				m.finalisedRuns.add(chatEv.RunID)
+				attached = true
 			}
 		}
-		m.updateViewport()
-		if !finalised {
-			return nil
+		if !attached {
+			// No streaming row to surface the error on (the placeholder
+			// was already finalised, or never appeared). Without this
+			// fallback the spinner would tick forever and the user
+			// would never see the gateway's error.
+			msg := chatEv.ErrorMessage
+			if msg == "" {
+				msg = "gateway returned an error"
+			}
+			m.notifyError(msg)
+			logEvent("  ERROR not attached (runID=%s) — surfaced via notification", chatEv.RunID)
 		}
+		m.updateViewport()
 		// Bump so any subsequent refresh treats the errored turn as
 		// history-side. The error row itself was stamped with the
 		// pre-bump gen (still streaming when we mutated it in place),
@@ -374,20 +391,21 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	case "aborted":
 		logEvent("  ABORTED")
 		m.runID = ""
-		finalised := false
+		m.finalisedRuns.add(chatEv.RunID)
+		attached := false
 		if len(m.messages) > 0 {
 			last := &m.messages[len(m.messages)-1]
 			if last.role == "assistant" && last.streaming {
 				last.streaming = false
 				last.content += "\n[aborted]"
-				finalised = true
-				m.finalisedRuns.add(chatEv.RunID)
+				attached = true
 			}
 		}
-		m.updateViewport()
-		if !finalised {
-			return nil
+		if !attached {
+			m.notify("Run aborted.")
+			logEvent("  ABORTED not attached (runID=%s) — surfaced via notification", chatEv.RunID)
 		}
+		m.updateViewport()
 		// Same rationale as the error branch — keep the boundary
 		// monotonic so cancelled turns don't pollute the next merge.
 		m.bumpGen()
@@ -395,6 +413,9 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 			m.activeRoutine.paused = true
 		}
 		return m.drainQueue()
+
+	default:
+		logEvent("  UNKNOWN_STATE state=%s runID=%s", chatEv.State, chatEv.RunID)
 	}
 	return nil
 }

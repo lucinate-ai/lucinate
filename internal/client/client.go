@@ -233,7 +233,10 @@ func (c *Client) buildOptions() ([]gateway.Option, error) {
 			select {
 			case c.events <- ev:
 			default:
-				// drop event if channel is full
+				// Drop the event if the channel is full. The TUI consumer
+				// is too slow or stuck; without this log a dropped error
+				// event would silently hang the next turn.
+				log.Printf("warning: gateway event channel full, dropped event name=%s payload_len=%d", ev.EventName, len(ev.Payload))
 			}
 		}),
 		gateway.WithIdentity(id, deviceToken),
