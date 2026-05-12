@@ -91,6 +91,7 @@ func (m *chatModel) sendNextRoutineStep() tea.Cmd {
 		ar.logger.WriteUser(text)
 	}
 	m.updateViewport()
+	m.viewport.GotoBottom()
 	return tea.Batch(m.sendMessage(sent), m.ensureSpinnerTicking())
 }
 
