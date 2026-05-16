@@ -31,6 +31,24 @@ assembler recognises it as a session-level system block (retained server-side ac
 `stripSystemLines` on the client side hides it from the visible transcript on history refresh.
 Drop the prefix and it would either be treated as user input or leak into the visible transcript.
 
+## Gateway plugin tools need no lucinate-specific adapter
+
+OpenClaw owns plugin installation, credentials, and tool allow-lists. Lucinate remains
+tool-agnostic: the gateway's normal tool events feed the existing transient tool-activity strip,
+so a new gateway plugin does not require a client-side integration.
+
+For example, an operator can install [TweetClaw](https://github.com/Xquik-dev/tweetclaw) and opt
+its catalog and action tools into the gateway's existing tool profile:
+
+```sh
+openclaw plugins install clawhub:@xquik/tweetclaw
+openclaw config set tools.alsoAllow '["explore", "tweetclaw"]'
+```
+
+The read-only `explore` tool discovers the current route before a live call. The optional
+`tweetclaw` tool executes approved X operations. Both follow the same OpenClaw event path as other
+gateway tools, so their progress appears in lucinate without plugin-specific rendering code.
+
 ## `DeleteFiles: &flag` is always populated — the implicit default must never apply
 
 `DeleteAgent` forwards to `Client.DeleteAgent(ctx, agentID, deleteFiles)`, which sends
