@@ -10,7 +10,7 @@ The TUI owns the terminal. Anything written to stdout or stderr while a frame is
 
 `internal/logging` keeps the side-file default for TUI invocations but gates everything behind a level and a configurable destination, so the same `slog.Warn` call can:
 
-- land in `/tmp/lucinate-events.log` during a TUI session,
+- land in `<os-tempdir>/lucinate-events.log` during a TUI session (resolved via `os.TempDir()` so the path is sensible on every platform),
 - stream to stderr during `lucinate send` so the operator sees it inline,
 - or land in a JSON file the user pointed at, for piping into `jq`.
 
@@ -25,7 +25,7 @@ The handler is plain `slog.NewTextHandler` / `slog.NewJSONHandler` — no custom
 | `LUCINATE_LOG_FILE` set | `Options.TUI` | Destination |
 |---|---|---|
 | yes | either | the named file, opened `O_TRUNC` (current session only) |
-| no  | true   | `/tmp/lucinate-events.log`, opened `O_TRUNC` |
+| no  | true   | `DefaultTUIFile()` (`<os.TempDir()>/lucinate-events.log`), opened `O_TRUNC` |
 | no  | false  | `os.Stderr` |
 
 Truncate-on-start matches the pre-slog behaviour and keeps the file scoped to the current session — handy when you're tailing it while reproducing a bug. If you want to keep history across runs, point `LUCINATE_LOG_FILE` at a path you'll archive yourself.

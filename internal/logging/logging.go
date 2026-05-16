@@ -3,9 +3,10 @@
 //
 // Defaults are tuned for a TUI: when the application takes over the
 // terminal, log output never goes to stdout/stderr (which would corrupt
-// the rendered frame); instead it lands in a side file
-// (/tmp/lucinate-events.log by default). Non-TUI subcommands log to
-// stderr. Both can be redirected with LUCINATE_LOG_FILE.
+// the rendered frame); instead it lands in a side file inside the OS
+// temp dir (e.g. /tmp/lucinate-events.log on Linux, %TEMP% on Windows).
+// Non-TUI subcommands log to stderr. Both can be redirected with
+// LUCINATE_LOG_FILE.
 //
 // Recognised env vars:
 //
@@ -19,6 +20,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -27,11 +29,19 @@ const (
 	EnvFile   = "LUCINATE_LOG_FILE"
 	EnvFormat = "LUCINATE_LOG_FORMAT"
 
-	// DefaultTUIFile is the destination used when the TUI is active and
-	// no explicit LUCINATE_LOG_FILE is set. Truncated on each start so
-	// the file always reflects the current session.
-	DefaultTUIFile = "/tmp/lucinate-events.log"
+	// defaultTUIFileName is joined onto os.TempDir to produce the
+	// default destination when the TUI is active and no explicit
+	// LUCINATE_LOG_FILE is set.
+	defaultTUIFileName = "lucinate-events.log"
 )
+
+// DefaultTUIFile returns the destination used when the TUI is active and
+// no explicit LUCINATE_LOG_FILE is set. Resolved against the OS temp
+// directory so it stays sensible across platforms. Truncated on each
+// start so the file always reflects the current session.
+func DefaultTUIFile() string {
+	return filepath.Join(os.TempDir(), defaultTUIFileName)
+}
 
 // Options influence the default destination when LUCINATE_LOG_FILE is
 // unset.
@@ -114,7 +124,7 @@ func openDestination(path string, tui bool) (io.Writer, *os.File, error) {
 		if !tui {
 			return os.Stderr, nil, nil
 		}
-		path = DefaultTUIFile
+		path = DefaultTUIFile()
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {

@@ -320,11 +320,11 @@ Other knobs:
 LUCINATE_DISABLE_UPDATE_CHECK=1          # opt out of the daily update check, regardless of the toggle in /config
 
 LUCINATE_LOG_LEVEL=warn                  # debug | info | warn (default) | error
-LUCINATE_LOG_FILE=/tmp/lucinate.log      # path to log file. TUI defaults to /tmp/lucinate-events.log; non-TUI subcommands default to stderr
+LUCINATE_LOG_FILE=/path/to/lucinate.log  # path to log file. TUI defaults to <os-tempdir>/lucinate-events.log; non-TUI subcommands default to stderr
 LUCINATE_LOG_FORMAT=text                 # text (default) | json
 ```
 
-The TUI never writes diagnostics to your terminal — they would corrupt the rendered frame — so by default log output goes to a side file (`/tmp/lucinate-events.log`). Bump `LUCINATE_LOG_LEVEL=debug` and tail it when something looks off. See [docs/logging.md](docs/logging.md) for the full design.
+The TUI never writes diagnostics to your terminal — they would corrupt the rendered frame — so by default log output goes to a side file in the OS temp dir (`lucinate-events.log`). Bump `LUCINATE_LOG_LEVEL=debug` and tail it when something looks off. See [docs/logging.md](docs/logging.md) for the full design.
 
 ## Built on
 
