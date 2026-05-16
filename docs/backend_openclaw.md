@@ -19,6 +19,32 @@ See [connections.md](connections.md) for the cross-backend connection lifecycle 
 | `AuthRecovery`    | `AuthRecoveryDeviceToken` — see below     |
 | `AgentWorkspace`  | Workspace field on the create-agent form  |
 
+## Plugin tool example
+
+OpenClaw plugin tools run on the gateway, and lucinate renders their
+tool events as inline tool call cards. That means plugin installation,
+credentials, and tool allow-lists stay in OpenClaw config, while
+lucinate only needs an approved OpenClaw connection.
+
+For example, a gateway operator can install
+[TweetClaw](https://github.com/Xquik-dev/tweetclaw) for X/Twitter
+automation:
+
+```sh
+openclaw plugins install @xquik/tweetclaw
+openclaw config set tools.alsoAllow '["explore", "tweetclaw"]'
+```
+
+`explore` lets the agent inspect TweetClaw's endpoint catalog without a
+live API call. `tweetclaw` performs the live Xquik-backed action and
+appears in lucinate as a tool card while it searches tweets, searches
+tweet replies, exports followers, looks up users, monitors tweets,
+creates webhooks, sends direct messages, posts tweets, or posts tweet
+replies.
+
+References: [npm package](https://www.npmjs.com/package/@xquik/tweetclaw)
+and [ClawHub listing](https://clawhub.ai/plugins/@xquik/tweetclaw).
+
 ## Connect and auth
 
 `Connect`, `Close`, `Events`, and `Supervise` are pass-throughs to the underlying client. The TUI's connecting view routes auth failures into modal sub-states:
