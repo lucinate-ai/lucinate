@@ -1352,9 +1352,10 @@ func (m chatModel) View() string {
 	if badge := connectionBadge(m.connState); badge != "" {
 		left += " · " + badge
 	}
+	headerColor := m.prefs.HeaderColorFor(m.agentID)
 	warnBadgeStyle := headerBadgeWarnStyle
-	if m.prefs.HeaderColor != "" {
-		warnBadgeStyle = warnBadgeStyle.Background(lipgloss.Color(m.prefs.HeaderColor))
+	if headerColor != "" {
+		warnBadgeStyle = warnBadgeStyle.Background(lipgloss.Color(headerColor))
 	}
 	if m.updateLatest != "" {
 		left += " · " + warnBadgeStyle.Render("↑ "+m.updateLatest)
@@ -1387,8 +1388,8 @@ func (m chatModel) View() string {
 		}
 	}
 	hdrStyle := headerStyle
-	if m.prefs.HeaderColor != "" {
-		hdrStyle = hdrStyle.Background(lipgloss.Color(m.prefs.HeaderColor))
+	if headerColor != "" {
+		hdrStyle = hdrStyle.Background(lipgloss.Color(headerColor))
 	}
 	header := hdrStyle.
 		Width(m.width).

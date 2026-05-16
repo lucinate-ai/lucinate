@@ -198,18 +198,53 @@ func TestNormalizeHexColor(t *testing.T) {
 	}
 }
 
-func TestSaveAndLoadPreferences_HeaderColor(t *testing.T) {
+func TestSaveAndLoadPreferences_HeaderColors(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
 	p := DefaultPreferences()
-	p.HeaderColor = "#4FC3F7"
+	p.SetHeaderColor("agent-one", "#4FC3F7")
+	p.SetHeaderColor("agent-two", "#FF6B6B")
 	if err := SavePreferences(p); err != nil {
 		t.Fatalf("SavePreferences: %v", err)
 	}
 	loaded := LoadPreferences()
-	if loaded.HeaderColor != "#4FC3F7" {
-		t.Errorf("expected HeaderColor %q after round-trip, got %q", "#4FC3F7", loaded.HeaderColor)
+	if got := loaded.HeaderColorFor("agent-one"); got != "#4FC3F7" {
+		t.Errorf("HeaderColorFor(agent-one) = %q, want %q", got, "#4FC3F7")
+	}
+	if got := loaded.HeaderColorFor("agent-two"); got != "#FF6B6B" {
+		t.Errorf("HeaderColorFor(agent-two) = %q, want %q", got, "#FF6B6B")
+	}
+	if got := loaded.HeaderColorFor("agent-missing"); got != "" {
+		t.Errorf("HeaderColorFor(missing) = %q, want empty", got)
+	}
+}
+
+func TestSetHeaderColor_ClearRemovesEntry(t *testing.T) {
+	p := DefaultPreferences()
+	p.SetHeaderColor("agent-one", "#112233")
+	p.SetHeaderColor("agent-two", "#445566")
+	p.SetHeaderColor("agent-one", "")
+	if _, ok := p.Agents["agent-one"]; ok {
+		t.Error("expected agent-one entry to be removed after clearing")
+	}
+	if got := p.HeaderColorFor("agent-two"); got != "#445566" {
+		t.Errorf("HeaderColorFor(agent-two) = %q, want %q", got, "#445566")
+	}
+	p.SetHeaderColor("agent-two", "")
+	if p.Agents != nil {
+		t.Errorf("expected Agents map to be nil after clearing the last entry, got %v", p.Agents)
+	}
+}
+
+func TestSetHeaderColor_EmptyAgentIDIsNoop(t *testing.T) {
+	p := DefaultPreferences()
+	p.SetHeaderColor("", "#112233")
+	if p.Agents != nil {
+		t.Errorf("expected Agents to stay nil for empty agentID, got %v", p.Agents)
+	}
+	if got := p.HeaderColorFor(""); got != "" {
+		t.Errorf("HeaderColorFor(\"\") = %q, want empty", got)
 	}
 }
 

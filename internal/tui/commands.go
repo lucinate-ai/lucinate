@@ -877,29 +877,39 @@ func (m *chatModel) handleHeaderCommand(text string) (bool, tea.Cmd) {
 	if len(parts) == 2 {
 		arg = strings.TrimSpace(parts[1])
 	}
+	agentID := m.agentID
+	agentLabel := m.agentName
+	if agentLabel == "" {
+		agentLabel = agentID
+	}
+	if agentID == "" {
+		m.appendMessage(chatMessage{role: "system", errMsg: "/header: no active agent — colour overrides are scoped per agent"})
+		m.updateViewport()
+		return true, nil
+	}
 	if arg == "" {
-		current := m.prefs.HeaderColor
+		current := m.prefs.HeaderColorFor(agentID)
 		if current == "" {
-			m.appendMessage(chatMessage{role: "system", content: "Header colour: default. Use /header <hex> (e.g. /header #4FC3F7) to customise."})
+			m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Header colour for %s: default. Use /header <hex> (e.g. /header #4FC3F7) to customise.", agentLabel)})
 		} else {
-			m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Header colour: %s. Use /header reset to restore the default.", current)})
+			m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Header colour for %s: %s. Use /header reset to restore the default.", agentLabel, current)})
 		}
 		m.updateViewport()
 		return true, nil
 	}
 
 	prefs := m.prefs
-	if strings.EqualFold(arg, "reset") || strings.EqualFold(arg, "default") || strings.EqualFold(arg, "off") {
-		prefs.HeaderColor = ""
-	} else {
+	newColor := ""
+	if !(strings.EqualFold(arg, "reset") || strings.EqualFold(arg, "default") || strings.EqualFold(arg, "off")) {
 		hex, err := config.NormalizeHexColor(arg)
 		if err != nil {
 			m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("/header: %v — expected a hex colour like #4FC3F7 or #F0C", err)})
 			m.updateViewport()
 			return true, nil
 		}
-		prefs.HeaderColor = hex
+		newColor = hex
 	}
+	prefs.SetHeaderColor(agentID, newColor)
 
 	if err := config.SavePreferences(prefs); err != nil {
 		m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("/header: could not save preference: %v", err)})
@@ -907,10 +917,10 @@ func (m *chatModel) handleHeaderCommand(text string) (bool, tea.Cmd) {
 		return true, nil
 	}
 	m.prefs = prefs
-	if prefs.HeaderColor == "" {
-		m.appendMessage(chatMessage{role: "system", content: "Header colour restored to default."})
+	if newColor == "" {
+		m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Header colour for %s restored to default.", agentLabel)})
 	} else {
-		m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Header colour set to %s.", prefs.HeaderColor)})
+		m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("Header colour for %s set to %s.", agentLabel, newColor)})
 	}
 	m.updateViewport()
 	return true, func() tea.Msg { return prefsUpdatedMsg{prefs: prefs} }

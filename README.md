@@ -32,7 +32,7 @@ No file browsers, no task boards, no dashboards. Just chat.
 - **Live token/cost stats** in the header bar (OpenClaw)
 - **Thinking level control** via `/think` — tune reasoning depth per session (OpenClaw)
 - **Cron browser** — list, edit, run, create, and duplicate scheduled jobs without leaving the terminal (OpenClaw)
-- **Customisable header colour** — set the chat header background to any hex colour with `/header <hex>`; persisted across runs
+- **Per-agent header colour** — set the chat header background to any hex colour with `/header <hex>` and the override sticks to that agent, persisted across runs
 
 ## Install
 
@@ -158,7 +158,7 @@ Type these in the chat input. As soon as you type `/`, a menu shows every matchi
 | `/config` | Open preferences |
 | `/connections` | Switch backend connection |
 | `/crons` | List and manage gateway cron jobs (default: filter by current agent; `/crons all` shows global) — OpenClaw only |
-| `/header <hex>` | Set the chat header background to a hex colour (e.g. `#4FC3F7`); persisted across runs. Bare `/header` reports the current value, `/header reset` restores the default. |
+| `/header <hex>` | Set the chat header background for the current agent to a hex colour (e.g. `#4FC3F7`); the override sticks to that agent and persists across runs. Bare `/header` reports the current agent's value, `/header reset` restores the default. |
 | `/models` | Open the model picker (filter as you type) |
 | `/model <name>` | Switch model (fuzzy match) |
 | `/reset` | Delete session and start fresh (with confirmation) |

@@ -53,7 +53,7 @@ Two independent loads feed the right-hand side:
 
 The renderer caps the percentage at 999% so a runaway numerator never widens the header past three digits.
 
-The header background defaults to the accent purple but can be overridden with `/header <hex>` — see [commands.md → /header](commands.md#header). The chosen colour is stored in `prefs.HeaderColor` and applied to both `headerStyle` and the warn-badge background each render.
+The header background defaults to the accent purple but can be overridden per agent with `/header <hex>` — see [commands.md → /header](commands.md#header). The override is stored against the agent ID under `prefs.Agents[agentID].HeaderColor`; the renderer calls `prefs.HeaderColorFor(m.agentID)` each frame and applies the colour to both `headerStyle` and the warn-badge background. Switching to another agent picks up that agent's own colour (or the default).
 
 The connection-status badge is rendered in the error colour and only appears when the gateway connection is degraded:
 
