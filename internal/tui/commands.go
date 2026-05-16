@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -527,7 +528,7 @@ func (m *chatModel) execCommand(command string) tea.Cmd {
 		if result.Decision != nil {
 			decision = *result.Decision
 		}
-		logEvent("EXEC request id=%s status=%q decision=%q", result.ID, result.Status, decision)
+		slog.Debug("exec request", "id", result.ID, "status", result.Status, "decision", decision)
 
 		if decision == "deny" {
 			return execSubmittedMsg{err: fmt.Errorf("command execution denied by gateway")}
@@ -543,9 +544,9 @@ func (m *chatModel) execCommand(command string) tea.Cmd {
 				if !strings.Contains(err.Error(), "unknown or expired") {
 					return execSubmittedMsg{err: fmt.Errorf("approval failed: %w", err)}
 				}
-				logEvent("EXEC approval already resolved id=%s", result.ID)
+				slog.Debug("exec approval already resolved", "id", result.ID)
 			} else {
-				logEvent("EXEC auto-approved id=%s", result.ID)
+				slog.Debug("exec auto-approved", "id", result.ID)
 			}
 		}
 

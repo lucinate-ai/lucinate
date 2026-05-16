@@ -38,7 +38,7 @@ Standard `log/slog` levels: `debug`, `info`, `warn` (the default), `error`. Pars
 
 The default of `warn` means a bare `lucinate` run produces no log noise at all unless something genuinely worth flagging happens. That preserves the previous "silent unless you opted into the debug file" behaviour while still giving the operator a knob to turn up.
 
-`internal/tui/logging.go` keeps a thin `logEvent(format, args...)` wrapper around `slog.Debug` so the ~35 existing TUI lifecycle call sites didn't have to migrate to structured attrs in lockstep. New code should call `slog.Debug` (or `slog.Info`/`Warn`/`Error`) directly with `key, value` attrs instead.
+TUI lifecycle call sites in `internal/tui/{events,sessions,chat,commands}.go` use `slog.Debug` directly with `key, value` attrs. Earlier revisions kept a `logEvent(format, args...)` shim around the printf-style calls; that shim is gone and new code should follow the same pattern.
 
 ## Re-init and tests
 

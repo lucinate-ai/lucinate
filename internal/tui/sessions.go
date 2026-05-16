@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -190,7 +191,7 @@ func (m sessionsModel) loadSessions() tea.Cmd {
 		if err != nil {
 			return sessionsLoadedMsg{err: err}
 		}
-		logEvent("SESSIONS_LIST raw=%s", string(raw))
+		slog.Debug("sessions list", "raw", string(raw))
 		var resp sessionsListResponse
 		if err := json.Unmarshal(raw, &resp); err != nil {
 			return sessionsLoadedMsg{err: err}
@@ -199,7 +200,7 @@ func (m sessionsModel) loadSessions() tea.Cmd {
 		for _, rawEntry := range resp.Sessions {
 			var entry sessionListEntry
 			if err := json.Unmarshal(rawEntry, &entry); err != nil {
-				logEvent("SESSIONS_LIST entry parse error: %v", err)
+				slog.Debug("sessions list entry parse error", "err", err)
 				continue
 			}
 			title := cleanDerivedTitle(entry.DerivedTitle)

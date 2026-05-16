@@ -110,7 +110,7 @@ The OpenClaw gateway has been observed emitting a duplicate `delta` event with t
 
 ```go
 if m.finalisedRuns.contains(chatEv.RunID) {
-    logEvent("  STALE event for finalised run %s — ignored", chatEv.RunID)
+    slog.Debug("stale event ignored for finalised run", "run_id", chatEv.RunID)
     return nil
 }
 ```

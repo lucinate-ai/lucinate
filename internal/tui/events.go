@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -140,12 +141,12 @@ func extractEventSessionKey(payload []byte) string {
 }
 
 func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
-	logEvent("RAW_EVENT name=%s payload_len=%d", ev.EventName, len(ev.Payload))
+	slog.Debug("raw event", "name", ev.EventName, "payload_len", len(ev.Payload))
 
 	// Drop events scoped to a different session before any handler runs.
 	// Events without a sessionKey (or with an empty one) fall through.
 	if key := extractEventSessionKey(ev.Payload); key != "" && key != m.sessionKey {
-		logEvent("  IGNORED (session %q != ours %q)", key, m.sessionKey)
+		slog.Debug("event ignored: session mismatch", "key", key, "ours", m.sessionKey)
 		return nil
 	}
 
@@ -154,10 +155,10 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	case protocol.EventExecFinished:
 		var finished protocol.ExecFinished
 		if err := json.Unmarshal(ev.Payload, &finished); err != nil {
-			logEvent("EXEC_FINISH parse error: %v", err)
+			slog.Debug("exec_finished parse error", "err", err)
 			return nil
 		}
-		logEvent("EXEC_FINISHED session=%s cmd=%s exit=%v output_len=%d", finished.SessionKey, finished.Command, finished.ExitCode, len(finished.Output))
+		slog.Debug("exec finished", "session", finished.SessionKey, "cmd", finished.Command, "exit", finished.ExitCode, "output_len", len(finished.Output))
 		if len(m.messages) > 0 {
 			last := &m.messages[len(m.messages)-1]
 			if last.role == "system" && last.content == "running on gateway..." {
@@ -177,10 +178,10 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	case "exec.approval.resolved":
 		var resolved protocol.ExecApprovalResolvedEvent
 		if err := json.Unmarshal(ev.Payload, &resolved); err != nil {
-			logEvent("EXEC_RESOLVED parse error: %v", err)
+			slog.Debug("exec.approval.resolved parse error", "err", err)
 			return nil
 		}
-		logEvent("EXEC_RESOLVED id=%s decision=%s", resolved.ID, resolved.Decision)
+		slog.Debug("exec approval resolved", "id", resolved.ID, "decision", resolved.Decision)
 		if resolved.Decision == "deny" {
 			if len(m.messages) > 0 {
 				last := &m.messages[len(m.messages)-1]
@@ -198,10 +199,10 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	case protocol.EventExecDenied:
 		var denied protocol.ExecDenied
 		if err := json.Unmarshal(ev.Payload, &denied); err != nil {
-			logEvent("EXEC_DENIED parse error: %v", err)
+			slog.Debug("exec_denied parse error", "err", err)
 			return nil
 		}
-		logEvent("EXEC_DENIED session=%s reason=%s", denied.SessionKey, denied.Reason)
+		slog.Debug("exec denied", "session", denied.SessionKey, "reason", denied.Reason)
 		if len(m.messages) > 0 {
 			last := &m.messages[len(m.messages)-1]
 			if last.role == "system" && last.content == "running on gateway..." {
@@ -222,11 +223,11 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 
 	var chatEv protocol.ChatEvent
 	if err := json.Unmarshal(ev.Payload, &chatEv); err != nil {
-		logEvent("PARSE_ERROR: %v payload=%s", err, string(ev.Payload))
+		slog.Debug("chat event parse error", "err", err, "payload", string(ev.Payload))
 		return nil
 	}
 
-	logEvent("EVENT state=%s runID=%s seq=%d msgLen=%d sessionKey=%s", chatEv.State, chatEv.RunID, chatEv.Seq, len(chatEv.Message), chatEv.SessionKey)
+	slog.Debug("chat event", "state", chatEv.State, "run_id", chatEv.RunID, "seq", chatEv.Seq, "msg_len", len(chatEv.Message), "session_key", chatEv.SessionKey)
 
 	// Drop stale events from any run we have already finalised. The
 	// gateway occasionally emits a duplicate `delta` (carrying the full
@@ -238,14 +239,14 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	// arrive while run N is streaming, not just the immediately prior
 	// run.
 	if m.finalisedRuns.contains(chatEv.RunID) {
-		logEvent("  STALE event for finalised run %s — ignored", chatEv.RunID)
+		slog.Debug("stale event ignored for finalised run", "run_id", chatEv.RunID)
 		return nil
 	}
 
 	switch chatEv.State {
 	case "delta":
 		deltaText := extractTextFromMessage(chatEv.Message)
-		logEvent("  DELTA text=%q", deltaText)
+		slog.Debug("delta", "text", deltaText)
 		if deltaText == "" {
 			return nil
 		}
@@ -260,7 +261,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 				return nil
 			}
 			if last.role == "assistant" && !last.streaming {
-				logEvent("  DELTA ignored (already finalised)")
+				slog.Debug("delta ignored: already finalised")
 				return nil
 			}
 		}
@@ -273,7 +274,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		return m.ensureSpinnerTicking()
 
 	case "final":
-		logEvent("  FINAL msgContent=%s", string(chatEv.Message))
+		slog.Debug("final", "msg_content", string(chatEv.Message))
 		m.runID = ""
 		finalised := false
 		assistantContent := ""
@@ -285,13 +286,13 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 				finalised = true
 				assistantContent = last.content
 				m.finalisedRuns.add(chatEv.RunID)
-				logEvent("  FINALISED — refreshing history thinking_len=%d", len(last.thinking))
+				slog.Debug("finalised, refreshing history", "thinking_len", len(last.thinking))
 			}
 		}
 		m.updateViewport()
 		if !finalised {
 			// Empty ack from gateway — the real response hasn't arrived yet.
-			logEvent("  FINAL ignored (no streaming assistant message)")
+			slog.Debug("final ignored: no streaming assistant message")
 			return nil
 		}
 		// Capture the merge boundary *before* bumping so the just-
@@ -343,7 +344,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		return tea.Batch(cmds...)
 
 	case "error":
-		logEvent("  ERROR: %s", chatEv.ErrorMessage)
+		slog.Debug("chat error", "message", chatEv.ErrorMessage)
 		m.runID = ""
 		finalised := false
 		if len(m.messages) > 0 {
@@ -372,7 +373,7 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		return m.drainQueue()
 
 	case "aborted":
-		logEvent("  ABORTED")
+		slog.Debug("chat aborted")
 		m.runID = ""
 		finalised := false
 		if len(m.messages) > 0 {
@@ -421,7 +422,7 @@ func bellCmd() tea.Cmd {
 func (m *chatModel) handleAgentEvent(ev protocol.Event) tea.Cmd {
 	var agentEv protocol.AgentEvent
 	if err := json.Unmarshal(ev.Payload, &agentEv); err != nil {
-		logEvent("AGENT parse error: %v", err)
+		slog.Debug("agent event parse error", "err", err)
 		return nil
 	}
 	if agentEv.Stream != "tool" {
@@ -432,18 +433,18 @@ func (m *chatModel) handleAgentEvent(ev protocol.Event) tea.Cmd {
 	// typed view.
 	rawData, err := json.Marshal(agentEv.Data)
 	if err != nil {
-		logEvent("TOOL marshal data error: %v", err)
+		slog.Debug("tool event marshal error", "err", err)
 		return nil
 	}
 	var td toolEventData
 	if err := json.Unmarshal(rawData, &td); err != nil {
-		logEvent("TOOL parse error: %v", err)
+		slog.Debug("tool event parse error", "err", err)
 		return nil
 	}
 	if td.ToolCallID == "" {
 		return nil
 	}
-	logEvent("TOOL phase=%s name=%s id=%s isErr=%v", td.Phase, td.Name, td.ToolCallID, td.IsError)
+	slog.Debug("tool event", "phase", td.Phase, "name", td.Name, "id", td.ToolCallID, "is_err", td.IsError)
 
 	switch td.Phase {
 	case "start":
