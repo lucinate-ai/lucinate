@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/a3tai/openclaw-go/protocol"
@@ -233,6 +234,22 @@ type cronForm struct {
 	saving      bool
 	err         error
 	unsupported string // non-empty when the existing job's kind cannot be edited; rendered as a banner
+
+	// body wraps the scrollable middle of the form so a short terminal
+	// doesn't drop the bottom fields (delivery target, enabled) and the
+	// help line off the screen. The title above and the footer (error +
+	// help) below stay pinned; only the body scrolls.
+	body viewport.Model
+
+	// fieldLineStarts holds the starting line index in the body content
+	// for each focusable field, in cronFormField order. Recomputed
+	// every render so ensureFocusVisible can scroll the focused field
+	// into view as the user tabs through.
+	fieldLineStarts []int
+
+	// bodyLines is the total line count of the most recently rendered
+	// body content; used to bound viewport scroll calculations.
+	bodyLines int
 }
 
 // cronsModel is the cron browser view.
@@ -322,7 +339,7 @@ func (m *cronsModel) setSize(w, h int) {
 	m.height = h
 	m.list.SetSize(w, h-2)
 	if m.subset == cronSubForm {
-		m.sizePayloadTextarea()
+		m.sizeFormBody()
 	}
 }
 
@@ -700,7 +717,7 @@ func (m cronsModel) TriggerAction(id string) (cronsModel, tea.Cmd) {
 		return m, nil
 	case "new":
 		m.form = newCreateForm()
-		m.sizePayloadTextarea()
+		m.sizeFormBody()
 		m.subset = cronSubForm
 		return m, m.form.name.Focus()
 	case "duplicate":
@@ -814,7 +831,7 @@ func (m cronsModel) actionEdit() (cronsModel, tea.Cmd) {
 		form.unsupported = err
 	}
 	m.form = form
-	m.sizePayloadTextarea()
+	m.sizeFormBody()
 	m.subset = cronSubForm
 	return m, m.form.name.Focus()
 }
@@ -834,20 +851,41 @@ func (m cronsModel) actionDuplicate() (cronsModel, tea.Cmd) {
 		form.unsupported = banner
 	}
 	m.form = form
-	m.sizePayloadTextarea()
+	m.sizeFormBody()
 	m.subset = cronSubForm
 	return m, m.form.name.Focus()
 }
 
-// sizePayloadTextarea applies the current view width to the payload
-// textarea. Called whenever the form is (re)constructed because each
-// new form has a fresh textarea.Model with default sizing.
-func (m *cronsModel) sizePayloadTextarea() {
+// sizeFormBody applies the current view dimensions to the payload
+// textarea and the body viewport that wraps the form. Called whenever
+// the form is (re)constructed (because each new form has a fresh
+// textarea.Model with default sizing) and on terminal resize.
+//
+// The viewport's visible height is whatever the terminal leaves after
+// the pinned title and footer (help / error / saving line). It's
+// floored at a small minimum so at least one field is visible even on
+// pathologically short terminals.
+func (m *cronsModel) sizeFormBody() {
+	const titleLines = 3  // leading blank + header line + trailing blank
+	const footerLines = 3 // blank + error/help line + trailing margin
+	const minBodyHeight = 5
+
 	w := m.width - 6
 	if w < 20 {
 		w = 20
 	}
 	m.form.payloadText.SetWidth(w)
+
+	bodyH := m.height - titleLines - footerLines
+	if bodyH < minBodyHeight {
+		bodyH = minBodyHeight
+	}
+	bodyW := m.width
+	if bodyW < 1 {
+		bodyW = 1
+	}
+	m.form.body.SetWidth(bodyW)
+	m.form.body.SetHeight(bodyH)
 }
 
 func (m cronsModel) actionDelete() (cronsModel, tea.Cmd) {
@@ -942,6 +980,7 @@ func newCreateForm() cronForm {
 	f.payloadText.Placeholder = "Read /home/pete/projects/cron-jobs/example.md and follow the instructions."
 	f.deliveryTarget = textinput.New()
 	f.deliveryTarget.CharLimit = 256
+	f.body = viewport.New()
 	return f
 }
 
@@ -1133,6 +1172,47 @@ func (f *cronForm) advanceFocus(dir int) {
 		next = 0
 	}
 	f.focused = cronFormField(next)
+}
+
+// ensureFocusVisible nudges the body viewport's YOffset so the
+// currently focused field's content is fully on-screen. Without this,
+// the focused field can scroll out of view while still receiving
+// keystrokes on short terminals.
+func (f *cronForm) ensureFocusVisible() {
+	if len(f.fieldLineStarts) == 0 || f.bodyLines == 0 {
+		return
+	}
+	idx := int(f.focused)
+	if idx < 0 || idx >= len(f.fieldLineStarts) {
+		return
+	}
+	start := f.fieldLineStarts[idx]
+	end := f.bodyLines - 1
+	if idx+1 < len(f.fieldLineStarts) {
+		end = f.fieldLineStarts[idx+1] - 1
+	}
+	height := f.body.Height()
+	if height <= 0 {
+		return
+	}
+	offset := f.body.YOffset()
+	switch {
+	case start < offset:
+		offset = start
+	case end >= offset+height:
+		offset = end - height + 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	maxOffset := f.bodyLines - height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	f.body.SetYOffset(offset)
 }
 
 // refocus reapplies bubbletea focus to the active text input (and
@@ -1431,19 +1511,25 @@ func (m cronsModel) viewDetail() string {
 }
 
 func (m cronsModel) viewForm() string {
-	var b strings.Builder
-	b.WriteString("\n")
 	title := " New cron job "
 	if m.form.mode == "edit" {
 		title = " Edit cron job "
 	}
-	b.WriteString(headerStyle.Render(title))
-	b.WriteString("\n\n")
+	titleLine := "\n" + headerStyle.Render(title) + "\n"
 
+	// Build the scrollable body. Track the line at which each focusable
+	// field begins so ensureFocusVisible can scroll the focused field
+	// into view as the user tabs through. The unsupported banner (when
+	// set) stays inside the body — it is part of the form's content,
+	// not a global pin.
+	var body strings.Builder
+	lineCount := 0
 	if m.form.unsupported != "" {
 		wrapped := wordWrap("  "+m.form.unsupported, m.width)
-		b.WriteString(errorStyle.Render(indentMultiline(wrapped, "  ")))
-		b.WriteString("\n\n")
+		rendered := errorStyle.Render(indentMultiline(wrapped, "  "))
+		body.WriteString(rendered)
+		body.WriteString("\n\n")
+		lineCount += strings.Count(rendered, "\n") + 2
 	}
 
 	rows := []struct {
@@ -1464,28 +1550,44 @@ func (m cronsModel) viewForm() string {
 		{deliveryTargetLabel(m.form.deliveryMode), formDeliveryTarget, m.form.deliveryTarget.View()},
 		{"Enabled", formEnabled, checkboxView(m.form.enabled)},
 	}
+	starts := make([]int, 0, len(rows))
 	for _, r := range rows {
+		starts = append(starts, lineCount)
 		marker := "  "
 		if r.field == m.form.focused {
 			marker = lipgloss.NewStyle().Foreground(accent).Bold(true).Render("> ")
 		}
-		b.WriteString(marker + r.label + "\n")
-		b.WriteString("    " + r.view + "\n\n")
+		body.WriteString(marker + r.label + "\n")
+		body.WriteString("    " + r.view + "\n\n")
+		lineCount += 1 + strings.Count(r.view, "\n") + 2
 	}
 
+	// Footer (pinned): error line + either saving status or help line.
+	var footer strings.Builder
 	if m.form.err != nil {
-		b.WriteString(renderErrorLine(m.form.err.Error(), m.width))
-		b.WriteString("\n\n")
+		footer.WriteString(renderErrorLine(m.form.err.Error(), m.width))
+		footer.WriteString("\n")
 	}
 	if m.form.saving {
-		b.WriteString(statusStyle.Render("  Saving..."))
-		b.WriteString("\n")
+		footer.WriteString(statusStyle.Render("  Saving..."))
 	} else {
 		hint := "  Tab/Shift+Tab: navigate | Space: toggle | Enter: save (newline in payload) | Ctrl+S: save anywhere | Esc: cancel"
-		b.WriteString(helpStyle.Render(hint))
-		b.WriteString("\n")
+		footer.WriteString(helpStyle.Render(hint))
 	}
-	return b.String()
+
+	// Fall back to inline rendering when the parent hasn't sized us
+	// yet (unit tests, or the first frame before WindowSizeMsg). The
+	// viewport with zero dimensions would otherwise swallow the body.
+	if m.height <= 0 {
+		return titleLine + body.String() + footer.String()
+	}
+
+	m.form.fieldLineStarts = starts
+	m.form.bodyLines = lineCount
+	m.form.body.SetContent(body.String())
+	m.form.ensureFocusVisible()
+
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, m.form.body.View(), footer.String())
 }
 
 func (m cronsModel) viewConfirm() string {

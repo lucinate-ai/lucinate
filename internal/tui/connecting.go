@@ -5,7 +5,9 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
@@ -41,6 +43,12 @@ type connectingModel struct {
 
 	width  int
 	height int
+
+	// body wraps the scrollable middle of each modal so the pinned
+	// title at the top and pinned help line at the bottom always stay
+	// visible on short terminals. Shared across the three modal
+	// substates because only one is active at a time.
+	body viewport.Model
 }
 
 func newConnectingModel(conn *config.Connection, hideHints bool) connectingModel {
@@ -48,6 +56,7 @@ func newConnectingModel(conn *config.Connection, hideHints bool) connectingModel
 		connection: conn,
 		subState:   subStateDialing,
 		hideHints:  hideHints,
+		body:       viewport.New(),
 	}
 }
 
@@ -79,6 +88,7 @@ func (m *connectingModel) enterAuthModal(conn *config.Connection, b backend.Back
 	case authRecoveryNotPaired:
 		m.subState = subStatePairingRequired
 	}
+	m.body.SetYOffset(0)
 }
 
 func (m connectingModel) Init() tea.Cmd {
@@ -246,6 +256,55 @@ func (m connectingModel) wantsInput() bool {
 func (m *connectingModel) setSize(w, h int) {
 	m.width = w
 	m.height = h
+	m.sizeModalBody()
+}
+
+// sizeModalBody sizes the body viewport used by the three auth modals
+// so the title and help/footer line stay pinned and the body scrolls
+// when the terminal is too short to fit the full text.
+func (m *connectingModel) sizeModalBody() {
+	const titleLines = 3
+	const footerLines = 2
+	const minBodyHeight = 5
+
+	bodyH := m.height - titleLines - footerLines
+	if bodyH < minBodyHeight {
+		bodyH = minBodyHeight
+	}
+	bodyW := m.width
+	if bodyW < 1 {
+		bodyW = 1
+	}
+	m.body.SetWidth(bodyW)
+	m.body.SetHeight(bodyH)
+}
+
+// scrollBodyTo nudges the body viewport so the line range [start, end]
+// stays within view; used by viewAuthToken to keep the token textinput
+// reachable on short terminals.
+func (m *connectingModel) scrollBodyTo(start, end, totalLines int) {
+	height := m.body.Height()
+	if height <= 0 || totalLines == 0 {
+		return
+	}
+	offset := m.body.YOffset()
+	switch {
+	case start < offset:
+		offset = start
+	case end >= offset+height:
+		offset = end - height + 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	maxOffset := totalLines - height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	m.body.SetYOffset(offset)
 }
 
 func (m connectingModel) View() string {
@@ -265,57 +324,94 @@ func (m connectingModel) View() string {
 }
 
 func (m connectingModel) viewAuthMismatch() string {
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(headerStyle.Render(" Auth recovery "))
-	b.WriteString("\n\n")
-	if m.authErr != nil {
-		b.WriteString(errorStyle.Render(fmt.Sprintf("  %v", m.authErr)))
-		b.WriteString("\n\n")
+	titleLine := "\n" + headerStyle.Render(" Auth recovery ") + "\n"
+
+	var body strings.Builder
+	lineCount := 0
+	writeLine := func(s string) {
+		body.WriteString(s)
+		body.WriteString("\n")
+		lineCount += strings.Count(s, "\n") + 1
 	}
-	b.WriteString("  The stored device token was rejected by the gateway.\n\n")
-	b.WriteString("  1) Clear stored token and retry  (recommended)\n")
-	b.WriteString("  2) Reset full identity and retry\n")
-	b.WriteString("  Esc) Cancel\n")
-	return b.String()
+	if m.authErr != nil {
+		writeLine(errorStyle.Render(fmt.Sprintf("  %v", m.authErr)))
+		writeLine("")
+	}
+	writeLine("  The stored device token was rejected by the gateway.")
+	writeLine("")
+	writeLine("  1) Clear stored token and retry  (recommended)")
+	writeLine("  2) Reset full identity and retry")
+	writeLine("  Esc) Cancel")
+
+	if m.height <= 0 {
+		return titleLine + body.String()
+	}
+	m.body.SetContent(body.String())
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, m.body.View())
 }
 
 func (m connectingModel) viewPairingRequired() string {
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(headerStyle.Render(" Pairing required "))
-	b.WriteString("\n\n")
+	titleLine := "\n" + headerStyle.Render(" Pairing required ") + "\n"
+
+	var body strings.Builder
+	lineCount := 0
+	writeLine := func(s string) {
+		body.WriteString(s)
+		body.WriteString("\n")
+		lineCount += strings.Count(s, "\n") + 1
+	}
 	if m.authErr != nil {
 		wrapped := wordWrap(m.authErr.Error(), max(m.width-2, 20))
-		b.WriteString("  ")
-		b.WriteString(errorStyle.Render(indentMultiline(wrapped, "  ")))
-		b.WriteString("\n\n")
+		writeLine("  " + errorStyle.Render(indentMultiline(wrapped, "  ")))
+		writeLine("")
 	}
-	b.WriteString("  This device hasn't been paired with the gateway yet.\n")
-	b.WriteString("  An administrator must approve it before you can connect.\n\n")
-	b.WriteString("  On the gateway host, run:\n\n")
-	b.WriteString("    openclaw devices approve --latest\n\n")
-	b.WriteString("  This previews the pending request and prints the exact\n")
-	b.WriteString("  approve command. Run that command, then press Enter to retry.\n\n")
-	b.WriteString(helpStyle.Render("  Enter: retry | Esc: cancel"))
-	b.WriteString("\n")
-	return b.String()
+	writeLine("  This device hasn't been paired with the gateway yet.")
+	writeLine("  An administrator must approve it before you can connect.")
+	writeLine("")
+	writeLine("  On the gateway host, run:")
+	writeLine("")
+	writeLine("    openclaw devices approve --latest")
+	writeLine("")
+	writeLine("  This previews the pending request and prints the exact")
+	writeLine("  approve command. Run that command, then press Enter to retry.")
+
+	footer := helpStyle.Render("  Enter: retry | Esc: cancel")
+
+	if m.height <= 0 {
+		return titleLine + body.String() + "\n" + footer
+	}
+	m.body.SetContent(body.String())
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, m.body.View(), footer)
 }
 
 func (m connectingModel) viewAuthToken() string {
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(headerStyle.Render(" Auth token required "))
-	b.WriteString("\n\n")
-	if m.authErr != nil {
-		b.WriteString(errorStyle.Render(fmt.Sprintf("  %v", m.authErr)))
-		b.WriteString("\n\n")
+	titleLine := "\n" + headerStyle.Render(" Auth token required ") + "\n"
+
+	var body strings.Builder
+	lineCount := 0
+	writeLine := func(s string) {
+		body.WriteString(s)
+		body.WriteString("\n")
+		lineCount += strings.Count(s, "\n") + 1
 	}
-	b.WriteString("  This gateway requires a pre-shared auth token.\n")
-	b.WriteString("  Ask your gateway operator if you don't have one.\n\n")
-	b.WriteString("  Token:\n")
-	b.WriteString("  " + m.tokenInput.View() + "\n\n")
-	b.WriteString(helpStyle.Render("  Enter: submit | Esc: cancel"))
-	b.WriteString("\n")
-	return b.String()
+	if m.authErr != nil {
+		writeLine(errorStyle.Render(fmt.Sprintf("  %v", m.authErr)))
+		writeLine("")
+	}
+	writeLine("  This gateway requires a pre-shared auth token.")
+	writeLine("  Ask your gateway operator if you don't have one.")
+	writeLine("")
+	writeLine("  Token:")
+	tokenStart := lineCount
+	writeLine("  " + m.tokenInput.View())
+	tokenEnd := lineCount - 1
+
+	footer := helpStyle.Render("  Enter: submit | Esc: cancel")
+
+	if m.height <= 0 {
+		return titleLine + body.String() + "\n" + footer
+	}
+	m.body.SetContent(body.String())
+	m.scrollBodyTo(tokenStart, tokenEnd, lineCount)
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, m.body.View(), footer)
 }

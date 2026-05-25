@@ -9,6 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/a3tai/openclaw-go/protocol"
@@ -147,6 +148,18 @@ type selectModel struct {
 	// DeleteFiles=true — i.e. the destructive option is the default,
 	// but the user still has to type the agent name to fire it.
 	keepFiles bool
+
+	// Terminal dimensions, mirrored from setSize so the create/confirm
+	// substates can compute their viewport sizes.
+	width  int
+	height int
+
+	// body wraps the scrollable middle of whichever substate form is
+	// active so a short terminal doesn't drop the textinput, help line,
+	// or error feedback off the bottom of the screen. Shared between the
+	// create and confirm-delete substates because only one is active at
+	// a time.
+	body viewport.Model
 }
 
 // agentsLoadedMsg is sent when agents are fetched from the gateway.
@@ -206,6 +219,7 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 		allowAgentManagement: allowAgentMgmt,
 		activeConn:           activeConn,
 		autoPickName:         autoPickName,
+		body:                 viewport.New(),
 	}
 }
 
@@ -285,6 +299,7 @@ func (m *selectModel) initCreateForm() tea.Cmd {
 		m.workInput.CharLimit = 256
 	}
 
+	m.body.SetYOffset(0)
 	return cmd
 }
 
@@ -309,6 +324,7 @@ func (m *selectModel) initConfirmDelete(item agentItem) tea.Cmd {
 	m.confirmInput = textinput.New()
 	m.confirmInput.CharLimit = 64
 	m.confirmInput.Placeholder = display
+	m.body.SetYOffset(0)
 	return m.confirmInput.Focus()
 }
 
@@ -780,44 +796,68 @@ func (m selectModel) renderHints() string {
 }
 
 func (m selectModel) viewCreateForm() string {
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(headerStyle.Render(" Create new agent "))
-	b.WriteString("\n\n")
+	titleLine := "\n" + headerStyle.Render(" Create new agent ") + "\n"
 
-	b.WriteString("  Name (e.g. my-agent):\n")
-	b.WriteString("  " + m.nameInput.View() + "\n")
-	if m.nameValidMsg != "" && m.nameInput.Value() != "" {
-		b.WriteString("  " + errorStyle.Render(m.nameValidMsg) + "\n")
+	// Track per-field line ranges so the focused field stays visible
+	// when the terminal is too short to render the whole form.
+	var body strings.Builder
+	lineCount := 0
+	writeLine := func(s string) {
+		body.WriteString(s)
+		body.WriteString("\n")
+		lineCount += strings.Count(s, "\n") + 1
 	}
-	b.WriteString("\n")
 
+	writeLine("  Name (e.g. my-agent):")
+	nameStart := lineCount
+	writeLine("  " + m.nameInput.View())
+	nameEnd := lineCount - 1
+	if m.nameValidMsg != "" && m.nameInput.Value() != "" {
+		writeLine("  " + errorStyle.Render(m.nameValidMsg))
+		nameEnd = lineCount - 1
+	}
+	writeLine("")
+
+	wsStart, wsEnd := 0, 0
 	if m.useWorkspace {
-		b.WriteString("  Workspace:\n")
-		b.WriteString("  " + m.workInput.View() + "\n")
-		b.WriteString("\n")
+		writeLine("  Workspace:")
+		wsStart = lineCount
+		writeLine("  " + m.workInput.View())
+		wsEnd = lineCount - 1
+		writeLine("")
 	} else {
 		// Local-agent backends (OpenAI-compat) seed the agent's
 		// IDENTITY.md / SOUL.md with defaults at create time. The
 		// user can edit those files on disk afterwards — the path
 		// is shown so they know where to find them.
-		b.WriteString(helpStyle.Render("  Identity and Soul markdown will be seeded with defaults under\n  ~/.lucinate/agents/<connection>/<agent>/ — edit them to customise."))
-		b.WriteString("\n\n")
+		writeLine(helpStyle.Render("  Identity and Soul markdown will be seeded with defaults under\n  ~/.lucinate/agents/<connection>/<agent>/ — edit them to customise."))
+		writeLine("")
 	}
 
+	var footer strings.Builder
 	if m.creating {
-		b.WriteString(statusStyle.Render("  Creating agent..."))
+		footer.WriteString(statusStyle.Render("  Creating agent..."))
 	} else if m.createErr != nil {
-		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.createErr)))
-		b.WriteString("\n")
-		b.WriteString(helpStyle.Render("  Enter: retry | Esc: cancel"))
+		footer.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.createErr)))
+		footer.WriteString("\n")
+		footer.WriteString(helpStyle.Render("  Enter: retry | Esc: cancel"))
 	} else if m.useWorkspace {
-		b.WriteString(helpStyle.Render("  Tab: switch fields | Enter: create | Esc: cancel"))
+		footer.WriteString(helpStyle.Render("  Tab: switch fields | Enter: create | Esc: cancel"))
 	} else {
-		b.WriteString(helpStyle.Render("  Enter: create | Esc: cancel"))
+		footer.WriteString(helpStyle.Render("  Enter: create | Esc: cancel"))
 	}
-	b.WriteString("\n")
-	return b.String()
+
+	if m.height <= 0 {
+		return titleLine + body.String() + footer.String()
+	}
+
+	m.body.SetContent(body.String())
+	focusStart, focusEnd := nameStart, nameEnd
+	if m.focusedField == 1 && m.useWorkspace {
+		focusStart, focusEnd = wsStart, wsEnd
+	}
+	m.scrollBodyTo(focusStart, focusEnd, lineCount)
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, m.body.View(), footer.String())
 }
 
 // viewConfirmDelete renders the loud delete-confirmation view. The
@@ -825,60 +865,80 @@ func (m selectModel) viewCreateForm() string {
 // about to lose the agent's identity, soul, transcript, and (unless
 // they toggle Keep files) the underlying file content.
 func (m selectModel) viewConfirmDelete() string {
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(headerStyle.Render(" Delete agent "))
-	b.WriteString("\n\n")
+	titleLine := "\n" + headerStyle.Render(" Delete agent ") + "\n"
+
+	// Build the scrollable body and track the line at which the
+	// confirmation textinput starts so the viewport can scroll to keep
+	// it visible on short terminals — the textinput is the only
+	// interactive element here and must always be reachable.
+	var body strings.Builder
+	lineCount := 0
+	writeLine := func(s string) {
+		body.WriteString(s)
+		body.WriteString("\n")
+		lineCount += strings.Count(s, "\n") + 1
+	}
 
 	heading := fmt.Sprintf("  Delete %q?", m.pendingDeleteName)
-	b.WriteString(errorStyle.Render(heading))
-	b.WriteString("\n")
-	b.WriteString(errorStyle.Render("  ⚠  This is permanent and cannot be undone."))
-	b.WriteString("\n\n")
+	writeLine(errorStyle.Render(heading))
+	writeLine(errorStyle.Render("  ⚠  This is permanent and cannot be undone."))
+	writeLine("")
 
-	b.WriteString("  This will remove:\n")
-	b.WriteString("    • The agent's metadata and listing\n")
-	b.WriteString("    • The full conversation transcript\n")
+	writeLine("  This will remove:")
+	writeLine("    • The agent's metadata and listing")
+	writeLine("    • The full conversation transcript")
 	if m.useWorkspace {
-		b.WriteString("    • Gateway bindings for this agent\n")
+		writeLine("    • Gateway bindings for this agent")
 	}
-	b.WriteString("\n")
+	writeLine("")
 
 	currentFilesMode := "Delete files"
 	if m.keepFiles {
 		currentFilesMode = "Keep files"
 	}
-	b.WriteString("  Files mode: " + toggleView(currentFilesMode, "Delete files", "Keep files"))
-	b.WriteString(helpStyle.Render("   (tab to toggle)"))
-	b.WriteString("\n")
-	b.WriteString("    " + helpStyle.Render(m.filesModeDescription()))
-	b.WriteString("\n\n")
+	writeLine("  Files mode: " + toggleView(currentFilesMode, "Delete files", "Keep files") + helpStyle.Render("   (tab to toggle)"))
+	writeLine("    " + helpStyle.Render(m.filesModeDescription()))
+	writeLine("")
 
-	b.WriteString("  Back up anything you want to keep first:\n")
-	b.WriteString("    " + helpStyle.Render(m.backupHint()))
-	b.WriteString("\n\n")
+	writeLine("  Back up anything you want to keep first:")
+	writeLine("    " + helpStyle.Render(m.backupHint()))
+	writeLine("")
 
-	b.WriteString(fmt.Sprintf("  Type the agent name (%q) to confirm:\n", m.pendingDeleteName))
-	b.WriteString("  " + m.confirmInput.View() + "\n")
+	writeLine(fmt.Sprintf("  Type the agent name (%q) to confirm:", m.pendingDeleteName))
+	inputStart := lineCount
+	writeLine("  " + m.confirmInput.View())
+	inputEnd := lineCount - 1
 	if v := strings.TrimSpace(m.confirmInput.Value()); v != "" && !m.nameMatches() {
-		b.WriteString("  " + errorStyle.Render("Name doesn't match") + "\n")
+		writeLine("  " + errorStyle.Render("Name doesn't match"))
+		inputEnd = lineCount - 1
 	}
-	b.WriteString("\n")
 
+	var footer strings.Builder
 	switch {
 	case m.deleting:
-		b.WriteString(statusStyle.Render("  Deleting..."))
+		footer.WriteString(statusStyle.Render("  Deleting..."))
 	case m.deleteErr != nil:
-		b.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.deleteErr)))
-		b.WriteString("\n")
-		b.WriteString(helpStyle.Render("  enter: retry (when name matches)  ·  esc: cancel"))
+		footer.WriteString(errorStyle.Render(fmt.Sprintf("  Error: %v", m.deleteErr)))
+		footer.WriteString("\n")
+		footer.WriteString(helpStyle.Render("  enter: retry (when name matches)  ·  esc: cancel"))
 	case m.nameMatches():
-		b.WriteString(helpStyle.Render("  enter: delete  ·  tab: toggle files mode  ·  esc: cancel"))
+		footer.WriteString(helpStyle.Render("  enter: delete  ·  tab: toggle files mode  ·  esc: cancel"))
 	default:
-		b.WriteString(helpStyle.Render("  type the name above, then enter to delete  ·  tab: toggle files mode  ·  esc: cancel"))
+		footer.WriteString(helpStyle.Render("  type the name above, then enter to delete  ·  tab: toggle files mode  ·  esc: cancel"))
 	}
-	b.WriteString("\n")
-	return b.String()
+
+	// When the parent hasn't called setSize yet (e.g. unit tests, or
+	// the very first frame before WindowSizeMsg arrives) the viewport
+	// has zero dimensions and would swallow the body content. Fall
+	// back to rendering the body inline so the rendered string still
+	// reflects what the user will see.
+	if m.height <= 0 {
+		return titleLine + body.String() + footer.String()
+	}
+
+	m.body.SetContent(body.String())
+	m.scrollBodyTo(inputStart, inputEnd, lineCount)
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, m.body.View(), footer.String())
 }
 
 // filesModeDescription explains what the current Keep/Delete files
@@ -922,5 +982,60 @@ func (m selectModel) selectedAgent() (agentItem, bool) {
 }
 
 func (m *selectModel) setSize(w, h int) {
+	m.width = w
+	m.height = h
 	m.list.SetSize(w, h-2)
+	m.sizeFormBody()
+}
+
+// sizeFormBody sizes the body viewport used by both the create-agent
+// and confirm-delete substates. The visible body height is whatever
+// the terminal leaves after the title (3 lines: leading blank + header
+// + trailing blank) and footer (3 lines: blank + help/error + trailing
+// margin), floored so at least one row is visible on pathological
+// heights.
+func (m *selectModel) sizeFormBody() {
+	const titleLines = 3
+	const footerLines = 3
+	const minBodyHeight = 5
+
+	bodyH := m.height - titleLines - footerLines
+	if bodyH < minBodyHeight {
+		bodyH = minBodyHeight
+	}
+	bodyW := m.width
+	if bodyW < 1 {
+		bodyW = 1
+	}
+	m.body.SetWidth(bodyW)
+	m.body.SetHeight(bodyH)
+}
+
+// scrollBodyTo nudges the body viewport so the line range [start, end]
+// (inclusive) within the current body content is fully visible. Used
+// by viewCreateForm / viewConfirmDelete to keep the focused textinput
+// on-screen.
+func (m *selectModel) scrollBodyTo(start, end, totalLines int) {
+	height := m.body.Height()
+	if height <= 0 || totalLines == 0 {
+		return
+	}
+	offset := m.body.YOffset()
+	switch {
+	case start < offset:
+		offset = start
+	case end >= offset+height:
+		offset = end - height + 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	maxOffset := totalLines - height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	m.body.SetYOffset(offset)
 }

@@ -7,6 +7,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
@@ -106,6 +107,11 @@ type connectionsModel struct {
 
 	width  int
 	height int
+
+	// body wraps the scrollable middle of the edit/new form so the
+	// type radio, textinputs, error line, and help footer all stay
+	// reachable on short terminals.
+	body viewport.Model
 }
 
 // formField identifies a focusable input on the connections form.
@@ -207,6 +213,7 @@ func newConnectionsModel(store *config.Connections, hideHints, disableExitKeys b
 		list:      l,
 		subState:  subStateConnList,
 		hideHints: hideHints,
+		body:      viewport.New(),
 	}
 }
 
@@ -379,6 +386,7 @@ func (m *connectionsModel) enterFormForNew() {
 	// while Bubbles textinputs aren't reached). Users who want to
 	// switch protocol can shift-tab back to the radio.
 	m.focusedField = m.indexOfField(formFieldName)
+	m.body.SetYOffset(0)
 }
 
 func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
@@ -402,6 +410,8 @@ func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
 	m.modelInput = textinput.New()
 	m.modelInput.SetValue(conn.DefaultModel)
 	m.modelInput.CharLimit = 128
+
+	m.body.SetYOffset(0)
 }
 
 // applyPresetDefaults updates the URL placeholder for the new
@@ -684,6 +694,55 @@ func (m *connectionsModel) setSize(w, h int) {
 	m.width = w
 	m.height = h
 	m.list.SetSize(w, h-3)
+	m.sizeFormBody()
+}
+
+// sizeFormBody sizes the body viewport that wraps the edit/new form
+// so the type radio, inputs, and pinned help line don't get clipped
+// on short terminals.
+func (m *connectionsModel) sizeFormBody() {
+	const titleLines = 3
+	const footerLines = 3
+	const minBodyHeight = 5
+
+	bodyH := m.height - titleLines - footerLines
+	if bodyH < minBodyHeight {
+		bodyH = minBodyHeight
+	}
+	bodyW := m.width
+	if bodyW < 1 {
+		bodyW = 1
+	}
+	m.body.SetWidth(bodyW)
+	m.body.SetHeight(bodyH)
+}
+
+// scrollBodyTo nudges the body viewport so the focused field's line
+// range [start, end] stays within view; mirrors the same helper used
+// in select.go and the routines/crons forms.
+func (m *connectionsModel) scrollBodyTo(start, end, totalLines int) {
+	height := m.body.Height()
+	if height <= 0 || totalLines == 0 {
+		return
+	}
+	offset := m.body.YOffset()
+	switch {
+	case start < offset:
+		offset = start
+	case end >= offset+height:
+		offset = end - height + 1
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	maxOffset := totalLines - height
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	m.body.SetYOffset(offset)
 }
 
 func (m connectionsModel) View() string {
@@ -731,20 +790,28 @@ func (m connectionsModel) viewList() string {
 }
 
 func (m connectionsModel) viewForm() string {
-	var b strings.Builder
 	title := " New connection "
 	if m.editingID != "" {
 		title = " Edit connection "
 	}
-	b.WriteString("\n")
-	b.WriteString(headerStyle.Render(title))
-	b.WriteString("\n\n")
+	titleLine := "\n" + headerStyle.Render(title) + "\n"
 
-	b.WriteString("  Type:")
-	if m.editingID == "" && m.currentField() == formFieldType {
-		b.WriteString(helpStyle.Render("  (↑ ↓)"))
+	// Build the scrollable body and track per-field line ranges so
+	// the focused field stays visible when the terminal is short.
+	var body strings.Builder
+	lineCount := 0
+	writeLine := func(s string) {
+		body.WriteString(s)
+		body.WriteString("\n")
+		lineCount += strings.Count(s, "\n") + 1
 	}
-	b.WriteString("\n")
+
+	typeStart := lineCount
+	typeHeader := "  Type:"
+	if m.editingID == "" && m.currentField() == formFieldType {
+		typeHeader += helpStyle.Render("  (↑ ↓)")
+	}
+	writeLine(typeHeader)
 	// On edit the type radio is read-only — only the active preset
 	// is rendered (and dimmed) since the others are unreachable.
 	// Render one preset per line so the list reflows cleanly on
@@ -762,44 +829,71 @@ func (m connectionsModel) viewForm() string {
 		row := marker + " " + label
 		switch {
 		case m.editingID == "" && m.currentField() == formFieldType && p == m.formPreset:
-			b.WriteString("  " + lipgloss.NewStyle().Bold(true).Foreground(accent).Render(row))
+			writeLine("  " + lipgloss.NewStyle().Bold(true).Foreground(accent).Render(row))
 		case m.editingID != "":
-			b.WriteString("  " + helpStyle.Render(row))
+			writeLine("  " + helpStyle.Render(row))
 		default:
-			b.WriteString("  " + row)
+			writeLine("  " + row)
 		}
-		b.WriteString("\n")
 	}
-	b.WriteString("\n")
+	typeEnd := lineCount - 1
+	writeLine("")
 
-	b.WriteString("  Name:\n")
-	b.WriteString("  " + m.nameInput.View() + "\n\n")
+	writeLine("  Name:")
+	nameStart := lineCount
+	writeLine("  " + m.nameInput.View())
+	nameEnd := lineCount - 1
+	writeLine("")
 
 	urlLabel := "Gateway URL:"
 	if m.formPreset.usesBaseURLAndModel() {
 		urlLabel = "Base URL:"
 	}
-	b.WriteString("  " + urlLabel + "\n")
-	b.WriteString("  " + m.urlInput.View() + "\n\n")
+	writeLine("  " + urlLabel)
+	urlStart := lineCount
+	writeLine("  " + m.urlInput.View())
+	urlEnd := lineCount - 1
+	writeLine("")
 
+	modelStart, modelEnd := 0, 0
 	if m.formPreset.usesBaseURLAndModel() {
 		modelLabel := "Default model (optional):"
 		if m.formPreset == presetHermes {
 			modelLabel = "Profile name:"
 		}
-		b.WriteString("  " + modelLabel + "\n")
-		b.WriteString("  " + m.modelInput.View() + "\n\n")
+		writeLine("  " + modelLabel)
+		modelStart = lineCount
+		writeLine("  " + m.modelInput.View())
+		modelEnd = lineCount - 1
+		writeLine("")
 	}
 
+	var footer strings.Builder
 	if m.formErr != "" {
-		b.WriteString(errorStyle.Render("  " + m.formErr))
-		b.WriteString("\n\n")
+		footer.WriteString(errorStyle.Render("  " + m.formErr))
+		footer.WriteString("\n")
 	}
 	if !m.hideHints {
-		b.WriteString(helpStyle.Render("  Tab: switch fields | Enter: save | Esc: cancel"))
-		b.WriteString("\n")
+		footer.WriteString(helpStyle.Render("  Tab: switch fields | Enter: save | Esc: cancel"))
 	}
-	return b.String()
+
+	if m.height <= 0 {
+		return titleLine + body.String() + footer.String()
+	}
+
+	focusStart, focusEnd := nameStart, nameEnd
+	switch m.currentField() {
+	case formFieldType:
+		focusStart, focusEnd = typeStart, typeEnd
+	case formFieldURL:
+		focusStart, focusEnd = urlStart, urlEnd
+	case formFieldModel:
+		focusStart, focusEnd = modelStart, modelEnd
+	}
+
+	m.body.SetContent(body.String())
+	m.scrollBodyTo(focusStart, focusEnd, lineCount)
+	return lipgloss.JoinVertical(lipgloss.Left, titleLine, m.body.View(), footer.String())
 }
 
 func (m connectionsModel) viewDeleteConfirm() string {
