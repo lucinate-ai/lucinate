@@ -39,6 +39,7 @@ No file browsers, no task boards, no dashboards. Just chat.
 With [Homebrew](https://brew.sh) (macOS / Linux):
 
 ```sh
+brew trust --formula lucinate-ai/tap/lucinate
 brew install lucinate-ai/tap/lucinate
 ```
 
