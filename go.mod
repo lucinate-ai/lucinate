@@ -15,7 +15,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/olekukonko/tablewriter v1.1.4
 	github.com/sahilm/fuzzy v0.1.2
-	golang.org/x/mod v0.36.0
+	golang.org/x/mod v0.37.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
