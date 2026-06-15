@@ -130,6 +130,14 @@ type AppModel struct {
 	brightCursor     bool
 	managed          bool
 
+	// mouseCapture toggles SGR mouse tracking. Off by default so a plain
+	// click-drag runs the terminal's native text selection (the fix for
+	// lucinate-ai/lucinate#14); the user opts in via /mouse on to get
+	// mouse-wheel scrolling of the chat history, accepting that native
+	// selection then needs a Shift/Option modifier. Owned here because the
+	// View() that emits the mode lives on AppModel.
+	mouseCapture bool
+
 	onInputFocusChanged func(bool)
 	lastWantsInput      bool
 	inputFocusReported  bool
@@ -474,6 +482,21 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		m.configModel = newConfigModel(m.prefs, m.hideActionHints)
 		m.configModel.setSize(m.width, m.height)
 		m.state = viewConfig
+		return m, nil
+
+	case mouseModeMsg:
+		switch msg.action {
+		case "on":
+			m.mouseCapture = true
+		case "off":
+			m.mouseCapture = false
+		case "toggle":
+			m.mouseCapture = !m.mouseCapture
+		}
+		// "status" reports without changing state. Feedback is a chat
+		// system row, so route it through the chat model (the /mouse
+		// command that raises this msg only fires from the chat view).
+		m.chatModel.reportMouseMode(m.mouseCapture)
 		return m, nil
 
 	case goBackFromConfigMsg:
@@ -1047,6 +1070,9 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView("")
 	}
 	v.AltScreen = true
+	if m.mouseCapture {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	v.KeyboardEnhancements.ReportEventTypes = true
 	v.ReportFocus = true
 	return v
