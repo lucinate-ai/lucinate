@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -46,6 +47,7 @@ type Client struct {
 	// user-configured deadline. Applies to both initial Connect and
 	// each Reconnect attempt.
 	connectTimeout time.Duration
+
 }
 
 // SetConnectTimeout sets the WebSocket connect/handshake deadline used
@@ -60,6 +62,82 @@ func (c *Client) SetConnectTimeout(d time.Duration) {
 		return
 	}
 	c.connectTimeout = d
+}
+
+// Bootstrap performs the setup-code node→operator handoff so a brand-new
+// device can be established without a manual pairing approval. It connects
+// once as a node presenting the bootstrap token (minted by `openclaw qr`),
+// which the gateway silently approves for the setup-code profile, then
+// persists the bounded operator device token returned in hello-ok. After
+// Bootstrap returns, an ordinary Connect authenticates with that token.
+//
+// It is a no-op-free one-shot: the temporary node connection is closed
+// before returning, and the persisted token is the operator credential, not
+// the node one.
+func (c *Client) Bootstrap(ctx context.Context, bootstrapToken string) error {
+	if strings.TrimSpace(bootstrapToken) == "" {
+		return fmt.Errorf("bootstrap: empty token")
+	}
+	id, err := c.store.LoadOrGenerate()
+	if err != nil {
+		return fmt.Errorf("bootstrap: identity: %w", err)
+	}
+
+	c.mu.RLock()
+	connectTimeout := c.connectTimeout
+	c.mu.RUnlock()
+
+	opts := []gateway.Option{
+		gateway.WithClientInfo(protocol.ClientInfo{
+			ID:       protocol.ClientIDNodeHost,
+			Version:  "0.1.0",
+			Platform: "go",
+			Mode:     protocol.ClientModeNode,
+		}),
+		gateway.WithRole(protocol.RoleNode),
+		// Node-role bootstrap carries no operator scopes; the gateway mints
+		// the bounded operator token (and its scopes) from the setup-code
+		// profile and returns it in the hello-ok handoff list.
+		gateway.WithScopes(),
+		gateway.WithBootstrapToken(bootstrapToken),
+		gateway.WithIdentity(id, ""),
+	}
+	if connectTimeout > 0 {
+		opts = append(opts, gateway.WithConnectTimeout(connectTimeout))
+	}
+
+	gw := gateway.NewClient(opts...)
+	if err := gw.Connect(ctx, c.cfg.WSURL); err != nil {
+		return fmt.Errorf("bootstrap connect: %w", err)
+	}
+	defer gw.Close()
+
+	token := operatorTokenFromHello(gw.Hello())
+	if token == "" {
+		return fmt.Errorf("bootstrap: gateway issued no operator token")
+	}
+	if err := c.store.SaveDeviceToken(token); err != nil {
+		return fmt.Errorf("bootstrap: save device token: %w", err)
+	}
+	return nil
+}
+
+// operatorTokenFromHello extracts the operator-role device token from a
+// bootstrap hello-ok, whether it arrived as the primary issued token or in
+// the per-role handoff list.
+func operatorTokenFromHello(hello *protocol.HelloOK) string {
+	if hello == nil || hello.Auth == nil {
+		return ""
+	}
+	if hello.Auth.Role == string(protocol.RoleOperator) && hello.Auth.DeviceToken != "" {
+		return hello.Auth.DeviceToken
+	}
+	for _, dt := range hello.Auth.DeviceTokens {
+		if dt.Role == string(protocol.RoleOperator) && dt.DeviceToken != "" {
+			return dt.DeviceToken
+		}
+	}
+	return ""
 }
 
 // New creates a new client from the given config, using the default
@@ -204,6 +282,37 @@ func (c *Client) dialOnce(ctx context.Context) (*gateway.Client, error) {
 	return gw, nil
 }
 
+// defaultOperatorScopes is the operator scope set requested unless overridden.
+var defaultOperatorScopes = []protocol.Scope{
+	protocol.ScopeOperatorRead,
+	protocol.ScopeOperatorWrite,
+	protocol.ScopeOperatorAdmin,
+	protocol.ScopeOperatorApprovals,
+}
+
+// operatorScopes returns the operator scopes to request on connect.
+// OPENCLAW_OPERATOR_SCOPES (comma-separated, e.g.
+// "operator.read,operator.write,operator.approvals") overrides the default —
+// needed when the device token is bounded to a subset, such as a setup-code
+// bootstrap credential that cannot carry operator.admin. Requesting scopes
+// beyond what the token grants is rejected as a scope mismatch.
+func operatorScopes() []protocol.Scope {
+	raw := strings.TrimSpace(os.Getenv("OPENCLAW_OPERATOR_SCOPES"))
+	if raw == "" {
+		return defaultOperatorScopes
+	}
+	var scopes []protocol.Scope
+	for _, s := range strings.Split(raw, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			scopes = append(scopes, protocol.Scope(s))
+		}
+	}
+	if len(scopes) == 0 {
+		return defaultOperatorScopes
+	}
+	return scopes
+}
+
 // buildOptions assembles the gateway SDK options for a connection attempt.
 // Called on every (re)connect so any newly-saved device token is picked up.
 func (c *Client) buildOptions() ([]gateway.Option, error) {
@@ -227,7 +336,7 @@ func (c *Client) buildOptions() ([]gateway.Option, error) {
 			Mode:     protocol.ClientModeCLI,
 		}),
 		gateway.WithRole(protocol.RoleOperator),
-		gateway.WithScopes(protocol.ScopeOperatorRead, protocol.ScopeOperatorWrite, protocol.ScopeOperatorAdmin, protocol.ScopeOperatorApprovals),
+		gateway.WithScopes(operatorScopes()...),
 		gateway.WithCaps(protocol.ClientCapToolEvents),
 		gateway.WithOnEvent(func(ev protocol.Event) {
 			select {

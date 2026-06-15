@@ -48,6 +48,16 @@ check_prereq() {
     command -v "$1" &>/dev/null || fail "$1 is not installed. $2"
 }
 
+# Decodes the bootstrapToken from a base64url-encoded `openclaw qr` setup
+# code, whose payload is JSON {url, bootstrapToken}.
+setup_code_token() {
+    local code="$1" b64 pad
+    b64="${code//-/+}"; b64="${b64//_//}"
+    pad=$(( (4 - ${#b64} % 4) % 4 ))
+    b64="${b64}$(printf '=%.0s' $(seq 1 "$pad"))"
+    printf '%s' "$b64" | base64 -d 2>/dev/null | jq -r '.bootstrapToken // empty'
+}
+
 # --- Prerequisites ---------------------------------------------------------
 
 info "Checking prerequisites"
@@ -105,20 +115,29 @@ OPENCLAW_UID="$(id -u)" OPENCLAW_GID="$(id -g)" \
     docker compose -f "$COMPOSE_FILE" up -d --wait 2>&1 | sed 's/^/    /'
 ok "Gateway is healthy"
 
-# --- Device pairing --------------------------------------------------------
+# --- Device pairing (setup-code bootstrap) ---------------------------------
+#
+# OpenClaw >= 2026.5.x binds operator scopes to a device's approved pairing
+# record, so the old "seed token -> connect -> approve -> rotate" dance no
+# longer works: an unpaired device cannot self-grant the pairing scope it
+# would need to approve itself. Instead we use the headless setup-code flow:
+# the gateway mints a short-lived bootstrap token, the client redeems it on
+# connect, and the gateway establishes + approves the device and issues a
+# durable device token. No manual approval step.
 #
 # Flow:
-#   1. Back up any existing device token.
-#   2. Seed the gateway token so the first connect authenticates.
-#   3. Connect once — this registers the device as pending (NOT_PAIRED).
-#   4. Approve the pending device via the gateway CLI.
-#   5. Rotate the device token to get a proper device credential.
-#   6. Save the rotated token locally.
-#   7. Verify the client can now connect with the device token.
+#   1. Back up any existing device token, then clear it so the first connect
+#      presents only the bootstrap token + device identity.
+#   2. Mint a setup code on the gateway host (openclaw qr) and decode its
+#      bootstrap token.
+#   3. Connect once with OPENCLAW_BOOTSTRAP_TOKEN — the gateway establishes
+#      the device and issues a device token, which the client persists.
+#   4. Verify the client can reconnect with the saved device token.
 
-info "Pairing device with test gateway"
+info "Pairing device with test gateway (setup-code bootstrap)"
 
-# Back up any existing device token so we don't clobber a production token.
+# Back up any existing device token so we don't clobber a production token,
+# and clear it so the bootstrap connect presents only the bootstrap token.
 mkdir -p "$IDENTITY_DIR"
 if [ -f "$IDENTITY_DIR/device-token" ]; then
     cp "$IDENTITY_DIR/device-token" "$BACKUP_FILE"
@@ -126,72 +145,38 @@ if [ -f "$IDENTITY_DIR/device-token" ]; then
     ok "Backed up existing device token"
 fi
 
-# Seed the gateway token as the device token. The gateway accepts this as
-# bearer auth on the first connect, which registers the device as pending.
-echo -n "$GATEWAY_TOKEN" > "$IDENTITY_DIR/device-token"
-ok "Seeded gateway token for initial authentication"
-
-# First connect: registers the device as pending. The gateway rejects it with
-# NOT_PAIRED — that is expected. A socket timeout is also possible if the
-# gateway is busy; retry until a pending device appears.
-info "Registering device with gateway"
-REQUEST_ID=""
-DEVICE_ID=""
-for attempt in 1 2 3; do
-    OPENCLAW_GATEWAY_URL="$GATEWAY_URL" go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /' || true
-    DEVICES_JSON="$(docker compose -f "$COMPOSE_FILE" exec -T gateway \
-        openclaw devices list --json \
-        --token "$GATEWAY_TOKEN" \
-        --url "$GATEWAY_WS_URL" 2>/dev/null)"
-    REQUEST_ID="$(echo "$DEVICES_JSON" | jq -r '.pending[0].requestId // empty')"
-    DEVICE_ID="$(echo "$DEVICES_JSON" | jq -r '.pending[0].deviceId // empty')"
-    if [ -n "$REQUEST_ID" ] && [ -n "$DEVICE_ID" ]; then
-        break
-    fi
-    if [ "$attempt" -lt 3 ]; then
-        warn "Attempt $attempt: no pending device found, retrying..."
-        sleep 2
-    fi
-done
-
-if [ -z "$REQUEST_ID" ] || [ -z "$DEVICE_ID" ]; then
-    fail "No pending device found after 3 attempts. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
+# Mint a setup code on the gateway host. `openclaw qr` writes the bootstrap
+# token to local gateway state (devices/bootstrap.json) — no WS auth needed,
+# which is what sidesteps the unpaired-device approval chicken-and-egg.
+info "Minting setup code"
+SETUP_CODE="$(docker compose -f "$COMPOSE_FILE" exec -T gateway \
+    openclaw qr --setup-code-only --url "$GATEWAY_WS_URL" 2>/dev/null | tr -d '\r\n')"
+if [ -z "$SETUP_CODE" ]; then
+    fail "Failed to mint setup code. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
 fi
-ok "Found pending device: $DEVICE_ID (requestId: $REQUEST_ID)"
+BOOTSTRAP_TOKEN="$(setup_code_token "$SETUP_CODE")"
+if [ -z "$BOOTSTRAP_TOKEN" ]; then
+    fail "Failed to decode bootstrap token from setup code."
+fi
+ok "Setup code minted"
 
-# Approve the pending device.
-info "Approving device"
-docker compose -f "$COMPOSE_FILE" exec -T gateway \
-    openclaw devices approve "$REQUEST_ID" \
-    --token "$GATEWAY_TOKEN" \
-    --url "$GATEWAY_WS_URL" 2>&1 | sed 's/^/    /'
-ok "Device approved"
-
-# Rotate the device token to get a proper device credential.
-info "Rotating device token"
-ROTATE_JSON="$(docker compose -f "$COMPOSE_FILE" exec -T gateway \
-    openclaw devices rotate \
-    --device "$DEVICE_ID" \
-    --role operator \
-    --scope operator.read \
-    --scope operator.write \
-    --scope operator.admin \
-    --scope operator.approvals \
-    --json \
-    --token "$GATEWAY_TOKEN" \
-    --url "$GATEWAY_WS_URL" 2>/dev/null)"
-
-DEVICE_TOKEN="$(echo "$ROTATE_JSON" | jq -r '.token // empty')"
-
-if [ -z "$DEVICE_TOKEN" ]; then
-    fail "Failed to rotate device token. rotate output: $ROTATE_JSON"
+# Connect with the bootstrap token. The gateway establishes + approves this
+# device and issues a durable device token, which the SDK persists locally.
+# The pair client uses a generous handshake timeout to absorb the gateway's
+# first-connect validator compilation after a cold start.
+info "Establishing device via bootstrap token"
+if OPENCLAW_GATEWAY_URL="$GATEWAY_URL" OPENCLAW_BOOTSTRAP_TOKEN="$BOOTSTRAP_TOKEN" \
+    go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /'; then
+    ok "Device established"
+else
+    fail "Bootstrap connect failed. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
 fi
 
-# Save the rotated token as the active device token.
-echo -n "$DEVICE_TOKEN" > "$IDENTITY_DIR/device-token"
-ok "Device token saved"
+if [ ! -s "$IDENTITY_DIR/device-token" ]; then
+    fail "No device token was issued during bootstrap. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
+fi
 
-# Verify connection with the new device token.
+# Verify the issued device token now authenticates on its own.
 info "Verifying connection"
 if OPENCLAW_GATEWAY_URL="$GATEWAY_URL" go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /'; then
     ok "Device paired and verified"
@@ -204,6 +189,10 @@ fi
 info "Writing test .env"
 cat > "$PROJECT_ROOT/.env" <<EOF
 OPENCLAW_GATEWAY_URL=$GATEWAY_URL
+# The setup-code bootstrap profile grants read/write/approvals but not admin,
+# so the device token is bounded to those scopes. Request the matching set;
+# asking for operator.admin would be rejected as a scope mismatch.
+OPENCLAW_OPERATOR_SCOPES=operator.read,operator.write,operator.approvals
 EOF
 ok "Wrote .env with OPENCLAW_GATEWAY_URL=$GATEWAY_URL"
 
