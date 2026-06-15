@@ -37,8 +37,23 @@ func run() error {
 	}
 	defer c.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// A freshly started gateway lazily compiles its protocol validators on
+	// the first WS connect, which can exceed the SDK's default 10s handshake
+	// deadline. Give the handshake generous headroom so the first connect
+	// after startup does not spuriously time out.
+	c.SetConnectTimeout(30 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	// When OPENCLAW_BOOTSTRAP_TOKEN is set (the setup-code flow), run the
+	// node→operator handoff first to establish the device and persist an
+	// operator device token; the Connect below then authenticates with it.
+	if bt := os.Getenv("OPENCLAW_BOOTSTRAP_TOKEN"); bt != "" {
+		if err := c.Bootstrap(ctx, bt); err != nil {
+			return fmt.Errorf("bootstrap: %w", err)
+		}
+	}
 
 	if err := c.Connect(ctx); err != nil {
 		return fmt.Errorf("connect: %w", err)

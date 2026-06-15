@@ -1,6 +1,6 @@
 services:
   gateway:
-    image: ghcr.io/openclaw/openclaw:latest
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
     user: "${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}"
     ports:
       - "18789:18789"
