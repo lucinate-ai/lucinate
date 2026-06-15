@@ -40,7 +40,6 @@ type AppOptions struct {
 	HideInputArea   bool
 	HideActionHints bool
 	DisableExitKeys bool
-	DisableMouse    bool
 
 	// BrightCursor pins the chat textarea cursor's on-frame to ANSI 15
 	// (bright white) instead of Bubbles' default ANSI 7. See
@@ -128,7 +127,6 @@ type AppModel struct {
 	hideInput        bool
 	hideActionHints  bool
 	disableExitKeys  bool
-	disableMouse     bool
 	brightCursor     bool
 	managed          bool
 
@@ -175,7 +173,6 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 		hideInput:             opts.HideInputArea,
 		hideActionHints:       opts.HideActionHints,
 		disableExitKeys:       opts.DisableExitKeys,
-		disableMouse:          opts.DisableMouse,
 		brightCursor:          opts.BrightCursor,
 		store:                 opts.Store,
 		backendFactory:        opts.BackendFactory,
@@ -1050,9 +1047,6 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView("")
 	}
 	v.AltScreen = true
-	if !m.disableMouse {
-		v.MouseMode = tea.MouseModeCellMotion
-	}
 	v.KeyboardEnhancements.ReportEventTypes = true
 	v.ReportFocus = true
 	return v
