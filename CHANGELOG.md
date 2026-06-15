@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.2] - 2026-06-16
+### Changed
+- chore(deps): bump charm.land/bubbletea/v2 from 2.0.6 to 2.0.7
+- chore(deps): bump charm.land/glamour/v2 from 2.0.0 to 2.0.1
+- chore(deps): bump github.com/sahilm/fuzzy from 0.1.2 to 0.1.3
+- chore(deps): bump golang.org/x/mod from 0.36.0 to 0.37.0
+- docs: add brew trust step to Homebrew installation instructions (#146)
+
+### Fixed
+- fix(tui): stop capturing mouse so terminal selection works (#14)
+
 ## [1.17.1] - 2026-05-25
 ### Fixed
 - fix(tui): stop forms clipping fields on short terminals
