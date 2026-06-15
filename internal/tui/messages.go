@@ -259,6 +259,15 @@ type newSessionCreatedMsg struct {
 // showConfigMsg signals the AppModel to switch to the config view.
 type showConfigMsg struct{}
 
+// mouseModeMsg asks the AppModel to change (or report) terminal mouse
+// capture. The CLI leaves capture off by default so click-drag runs the
+// terminal's native text selection; turning it on enables mouse-wheel
+// scrolling of the chat history at the cost of native selection. action is
+// one of "on", "off", "toggle", or "status" (report only, no change).
+type mouseModeMsg struct {
+	action string
+}
+
 // goBackFromConfigMsg signals the AppModel to return to the chat view from config.
 type goBackFromConfigMsg struct{}
 

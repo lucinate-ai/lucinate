@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/a3tai/openclaw-go/protocol"
 
@@ -311,6 +312,48 @@ func runCmd(t *testing.T, cmd tea.Cmd) {
 // frozen on the loading line forever. Without this, the user would be
 // staring at "Loading <agent>..." with no way to retry — selecting
 // would still gate every keystroke into a no-op.
+// TestAppModel_MouseMode_TogglesCaptureAndView verifies the /mouse
+// command path: a mouseModeMsg flips the authoritative mouseCapture flag,
+// View() emits MouseModeCellMotion only when capture is on, and the chat
+// model gets a feedback row. Capture must default off so click-drag runs
+// the terminal's native selection (lucinate-ai/lucinate#14).
+func TestAppModel_MouseMode_TogglesCaptureAndView(t *testing.T) {
+	m := AppModel{state: viewChat}
+	// hideInput skips the textarea render so View() doesn't touch the
+	// zero-valued composer; the mouse-mode gating under test is applied
+	// after the per-view switch and is independent of the chat body.
+	m.chatModel = chatModel{viewport: viewport.New(), hideInput: true}
+
+	if got := m.View(); got.MouseMode != tea.MouseModeNone {
+		t.Fatalf("default MouseMode = %v, want MouseModeNone (selection must work out of the box)", got.MouseMode)
+	}
+
+	on, _ := m.update(mouseModeMsg{action: "on"})
+	m = on
+	if !m.mouseCapture {
+		t.Fatal("expected mouseCapture true after /mouse on")
+	}
+	if got := m.View(); got.MouseMode != tea.MouseModeCellMotion {
+		t.Errorf("MouseMode after on = %v, want MouseModeCellMotion", got.MouseMode)
+	}
+
+	tog, _ := m.update(mouseModeMsg{action: "toggle"})
+	m = tog
+	if m.mouseCapture {
+		t.Fatal("expected mouseCapture false after toggle")
+	}
+	if got := m.View(); got.MouseMode != tea.MouseModeNone {
+		t.Errorf("MouseMode after toggle-off = %v, want MouseModeNone", got.MouseMode)
+	}
+
+	// "status" reports without changing state.
+	before := m.mouseCapture
+	st, _ := m.update(mouseModeMsg{action: "status"})
+	if st.mouseCapture != before {
+		t.Errorf("status changed capture: before=%v after=%v", before, st.mouseCapture)
+	}
+}
+
 func TestAppModel_SessionCreatedError_ClearsSelectingLock(t *testing.T) {
 	m := AppModel{state: viewSelect}
 	m.selectModel = newSelectModel(nil, false, false, nil, false, "")

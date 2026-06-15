@@ -52,10 +52,43 @@ type pendingNavConfirm struct {
 // hint surfaces the picker first, "/model" before "/models" likewise.
 // Tab now extends to the longest common prefix and the completion menu
 // shows every candidate, so the curated order no longer rules Tab.
-var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/export", "/help", "/header", "/model", "/models", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/skills", "/stats", "/status", "/think"}
+var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/export", "/help", "/header", "/model", "/models", "/mouse", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/skills", "/stats", "/status", "/think"}
 
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
+
+// helpBody is the static body of the /help and /commands output. Kept as a
+// raw string literal (one command per line) so the list stays readable and
+// easy to amend; the /skills hint is appended at render time when skills
+// are loaded.
+const helpBody = `/quit, /exit — quit lucinate
+/agents — return to agent picker
+/agent <name> — switch agent directly
+/cancel — cancel the current response (also: Esc)
+/clear — clear chat display
+/compact — compact session context
+/config — open preferences
+/connections — switch gateway connection
+/crons — list and manage cron jobs (use /crons all for global)
+/export — write the current session's canonical history to a transcript file (/export routine opens the routine form prefilled with the user prompts)
+/header — show current chat header colour
+/header <hex> — set chat header background to a hex colour (e.g. #112233 or #F0C)
+/header reset — restore the default header colour
+/models — open model picker (filter as you type)
+/model <name> — switch model directly
+/mouse on|off — toggle mouse capture (on = wheel scrolls history; off = native click-drag text selection)
+/record on|off — toggle live transcript capture for this session (bare /record shows state)
+/reset — delete session and start fresh
+/sessions — browse and restore previous sessions
+/stats — show session statistics
+/status — show gateway health and agent status
+/skills — list available agent skills
+/think — show current thinking level
+/think <level> — set thinking level (off/minimal/low/medium/high)
+/help — show this help
+
+!<command> — run command locally
+!!<command> — run command on gateway host`
 
 // findSlashTokenAt locates the slash-prefixed token whose end coincides with
 // the cursor at byteOffset in value. Returns ok=false when the cursor is not
@@ -294,7 +327,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			}
 		})
 	case "/help", "/commands":
-		helpText := "/quit, /exit — quit lucinate\n/agents — return to agent picker\n/agent <name> — switch agent directly\n/cancel — cancel the current response (also: Esc)\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/connections — switch gateway connection\n/crons — list and manage cron jobs (use /crons all for global)\n/export — write the current session's canonical history to a transcript file (/export routine opens the routine form prefilled with the user prompts)\n/header — show current chat header colour\n/header <hex> — set chat header background to a hex colour (e.g. #112233 or #F0C)\n/header reset — restore the default header colour\n/models — open model picker (filter as you type)\n/model <name> — switch model directly\n/record on|off — toggle live transcript capture for this session (bare /record shows state)\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/status — show gateway health and agent status\n/skills — list available agent skills\n/think — show current thinking level\n/think <level> — set thinking level (off/minimal/low/medium/high)\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
+		helpText := helpBody
 		if len(m.skills) > 0 {
 			helpText += fmt.Sprintf("\n\n%d agent skill(s) available — type /skills to list", len(m.skills))
 		}
@@ -384,6 +417,12 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	// reports state; /header <hex> sets it; /header reset clears it.
 	if command == "/header" || strings.HasPrefix(command, "/header ") {
 		return m.handleHeaderCommand(text)
+	}
+
+	// /mouse toggles terminal mouse capture. Bare /mouse reports state;
+	// /mouse on|off|toggle changes it.
+	if command == "/mouse" || strings.HasPrefix(command, "/mouse ") {
+		return m.handleMouseCommand(text)
 	}
 
 	// /export dumps the current canonical history to a transcript file
@@ -924,6 +963,45 @@ func (m *chatModel) handleHeaderCommand(text string) (bool, tea.Cmd) {
 	}
 	m.updateViewport()
 	return true, func() tea.Msg { return prefsUpdatedMsg{prefs: prefs} }
+}
+
+// handleMouseCommand handles `/mouse`, `/mouse on`, `/mouse off`, and
+// `/mouse toggle`. The actual state lives on AppModel (its View emits the
+// mode), so the command only validates the argument and raises a
+// mouseModeMsg; AppModel applies it and calls reportMouseMode to append
+// the system feedback row.
+func (m *chatModel) handleMouseCommand(text string) (bool, tea.Cmd) {
+	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
+	arg := ""
+	if len(parts) == 2 {
+		arg = strings.ToLower(strings.TrimSpace(parts[1]))
+	}
+	action := ""
+	switch arg {
+	case "":
+		action = "status"
+	case "on", "off", "toggle":
+		action = arg
+	default:
+		m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("unknown /mouse argument %q — use /mouse on, /mouse off, /mouse toggle, or /mouse", arg)})
+		m.updateViewport()
+		return true, nil
+	}
+	return true, func() tea.Msg { return mouseModeMsg{action: action} }
+}
+
+// reportMouseMode appends a system row describing the current mouse-capture
+// state and how it trades off against native text selection. Called by
+// AppModel after it applies a mouseModeMsg.
+func (m *chatModel) reportMouseMode(on bool) {
+	var content string
+	if on {
+		content = "Mouse capture is ON — the wheel scrolls chat history. Native click-drag selection is disabled; hold Shift (or Option on macOS) to select & copy. Use /mouse off to restore native selection."
+	} else {
+		content = "Mouse capture is OFF — click-drag selects & copies text natively. Use /mouse on to enable mouse-wheel scrolling of the chat history."
+	}
+	m.appendMessage(chatMessage{role: "system", content: content})
+	m.updateViewport()
 }
 
 // handleExportCommand handles `/export`, `/export all`, `/export routine`.

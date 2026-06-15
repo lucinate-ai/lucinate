@@ -170,16 +170,6 @@ type RunOptions struct {
 	// terminal that can't otherwise dismiss it, leaves this false.
 	DisableExitKeys bool
 
-	// DisableMouse stops the program from emitting the
-	// alt-screen mouse-tracking enable sequence. Embedders driving the
-	// program through a virtual terminal whose host wants to handle
-	// pan/swipe gestures natively (translating them into PgUp/PgDown
-	// keystrokes for example) should set this so the host's gesture
-	// recogniser doesn't capture pans into mouse motion events that the
-	// program then ignores. The CLI relies on mouse tracking for
-	// selection and should leave it false.
-	DisableMouse bool
-
 	// BrightCursor pins the chat composer's textarea cursor on-frame to
 	// ANSI 15 (bright white) instead of Bubbles' default ANSI 7 (light
 	// grey). Bubbles renders the on-frame as `Style.Reverse(true)` over
@@ -324,7 +314,6 @@ func New(opts RunOptions) (*Program, error) {
 		HideInputArea:         opts.HideInputArea,
 		HideActionHints:       opts.HideActionHints,
 		DisableExitKeys:       opts.DisableExitKeys,
-		DisableMouse:          opts.DisableMouse,
 		BrightCursor:          opts.BrightCursor,
 		OnInputFocusChanged:   opts.OnInputFocusChanged,
 		OnActionsChanged:      opts.OnActionsChanged,

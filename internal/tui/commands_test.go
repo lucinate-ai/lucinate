@@ -113,6 +113,60 @@ func TestSlashCommand_Agent_NoMatchReturnsFailureMsg(t *testing.T) {
 	}
 }
 
+func TestSlashCommand_Mouse_OnOffEmitMsg(t *testing.T) {
+	for _, action := range []string{"on", "off", "toggle"} {
+		m := newSlashTestModel()
+		handled, cmd := m.handleSlashCommand("/mouse " + action)
+		if !handled {
+			t.Fatalf("/mouse %s: expected handled", action)
+		}
+		if cmd == nil {
+			t.Fatalf("/mouse %s: expected a cmd", action)
+		}
+		msg, ok := cmd().(mouseModeMsg)
+		if !ok {
+			t.Fatalf("/mouse %s: expected mouseModeMsg, got %T", action, cmd())
+		}
+		if msg.action != action {
+			t.Errorf("/mouse %s: expected action %q, got %q", action, action, msg.action)
+		}
+	}
+}
+
+func TestSlashCommand_Mouse_BareReportsStatus(t *testing.T) {
+	m := newSlashTestModel()
+	handled, cmd := m.handleSlashCommand("/mouse")
+	if !handled || cmd == nil {
+		t.Fatal("expected bare /mouse to be handled with a cmd")
+	}
+	msg, ok := cmd().(mouseModeMsg)
+	if !ok {
+		t.Fatalf("expected mouseModeMsg, got %T", cmd())
+	}
+	if msg.action != "status" {
+		t.Errorf("expected status action, got %q", msg.action)
+	}
+}
+
+func TestSlashCommand_Mouse_UnknownArgErrors(t *testing.T) {
+	m := newSlashTestModel()
+	before := len(m.messages)
+	handled, cmd := m.handleSlashCommand("/mouse wat")
+	if !handled {
+		t.Fatal("expected /mouse wat to be handled")
+	}
+	if cmd != nil {
+		t.Error("expected nil cmd for invalid /mouse argument")
+	}
+	if len(m.messages) != before+1 {
+		t.Fatalf("expected one error row appended, got %d new", len(m.messages)-before)
+	}
+	last := m.messages[len(m.messages)-1]
+	if last.errMsg == "" || !strings.Contains(last.errMsg, "unknown /mouse argument") {
+		t.Errorf("expected unknown-argument error, got %+v", last)
+	}
+}
+
 func TestSlashCommand_Clear(t *testing.T) {
 	m := newSlashTestModel()
 	handled, cmd := m.handleSlashCommand("/clear")
