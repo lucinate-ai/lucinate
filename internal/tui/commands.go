@@ -57,6 +57,39 @@ var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/command
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
 
+// helpBody is the static body of the /help and /commands output. Kept as a
+// raw string literal (one command per line) so the list stays readable and
+// easy to amend; the /skills hint is appended at render time when skills
+// are loaded.
+const helpBody = `/quit, /exit — quit lucinate
+/agents — return to agent picker
+/agent <name> — switch agent directly
+/cancel — cancel the current response (also: Esc)
+/clear — clear chat display
+/compact — compact session context
+/config — open preferences
+/connections — switch gateway connection
+/crons — list and manage cron jobs (use /crons all for global)
+/export — write the current session's canonical history to a transcript file (/export routine opens the routine form prefilled with the user prompts)
+/header — show current chat header colour
+/header <hex> — set chat header background to a hex colour (e.g. #112233 or #F0C)
+/header reset — restore the default header colour
+/models — open model picker (filter as you type)
+/model <name> — switch model directly
+/mouse on|off — toggle mouse capture (on = wheel scrolls history; off = native click-drag text selection)
+/record on|off — toggle live transcript capture for this session (bare /record shows state)
+/reset — delete session and start fresh
+/sessions — browse and restore previous sessions
+/stats — show session statistics
+/status — show gateway health and agent status
+/skills — list available agent skills
+/think — show current thinking level
+/think <level> — set thinking level (off/minimal/low/medium/high)
+/help — show this help
+
+!<command> — run command locally
+!!<command> — run command on gateway host`
+
 // findSlashTokenAt locates the slash-prefixed token whose end coincides with
 // the cursor at byteOffset in value. Returns ok=false when the cursor is not
 // at the end of a slash token (e.g. mid-token, or no slash preceding the
@@ -294,7 +327,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			}
 		})
 	case "/help", "/commands":
-		helpText := "/quit, /exit — quit lucinate\n/agents — return to agent picker\n/agent <name> — switch agent directly\n/cancel — cancel the current response (also: Esc)\n/clear — clear chat display\n/compact — compact session context\n/config — open preferences\n/connections — switch gateway connection\n/crons — list and manage cron jobs (use /crons all for global)\n/export — write the current session's canonical history to a transcript file (/export routine opens the routine form prefilled with the user prompts)\n/header — show current chat header colour\n/header <hex> — set chat header background to a hex colour (e.g. #112233 or #F0C)\n/header reset — restore the default header colour\n/models — open model picker (filter as you type)\n/model <name> — switch model directly\n/mouse on|off — toggle mouse capture (on = wheel scrolls history; off = native click-drag text selection)\n/record on|off — toggle live transcript capture for this session (bare /record shows state)\n/reset — delete session and start fresh\n/sessions — browse and restore previous sessions\n/stats — show session statistics\n/status — show gateway health and agent status\n/skills — list available agent skills\n/think — show current thinking level\n/think <level> — set thinking level (off/minimal/low/medium/high)\n/help — show this help\n\n!<command> — run command locally\n!!<command> — run command on gateway host"
+		helpText := helpBody
 		if len(m.skills) > 0 {
 			helpText += fmt.Sprintf("\n\n%d agent skill(s) available — type /skills to list", len(m.skills))
 		}
