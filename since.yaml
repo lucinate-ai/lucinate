@@ -1,7 +1,7 @@
 requireBranch: main
 
 ignore:
-  - "build: release"
+  - "^build: release v"
 
 before:
   - script: |
