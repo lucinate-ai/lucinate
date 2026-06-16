@@ -44,7 +44,12 @@ func connectTestClient(t *testing.T) *client.Client {
 	if err != nil {
 		t.Fatalf("client: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// A freshly started gateway lazily compiles its protocol validators on the
+	// first WS connect, which can exceed the SDK's default 10s handshake
+	// deadline. Give the handshake generous headroom so cold-start CI runs do
+	// not flake.
+	c.SetConnectTimeout(30 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("connect: %v", err)

@@ -26,6 +26,10 @@ MODEL="${MODEL:-zai.glm-5}"
 GATEWAY_URL="http://localhost:18789"
 GATEWAY_WS_URL="ws://127.0.0.1:18789/ws"
 GATEWAY_TOKEN="lucinate"
+# The setup-code bootstrap profile grants read/write/approvals but not admin,
+# so the issued device token is bounded to those scopes; request the matching
+# set on connect (operator.admin would be rejected as a scope mismatch).
+OPERATOR_SCOPES="operator.read,operator.write,operator.approvals"
 
 # --- Parse args -----------------------------------------------------------
 
@@ -50,10 +54,12 @@ check_prereq() {
 # Decodes the bootstrapToken from a base64url-encoded `openclaw qr` setup
 # code, whose payload is JSON {url, bootstrapToken}.
 setup_code_token() {
-    local code="$1" b64 pad
+    local code="$1" b64
     b64="${code//-/+}"; b64="${b64//_//}"
-    pad=$(( (4 - ${#b64} % 4) % 4 ))
-    b64="${b64}$(printf '=%.0s' $(seq 1 "$pad"))"
+    # Pad to a multiple of 4. A `printf '=%.0s' $(seq ...)` approach adds a
+    # stray '=' when no padding is needed, which GNU base64 (Linux/CI) rejects
+    # even though BSD base64 (macOS) tolerates it.
+    while [ $(( ${#b64} % 4 )) -ne 0 ]; do b64="${b64}="; done
     printf '%s' "$b64" | base64 -d 2>/dev/null | jq -r '.bootstrapToken // empty'
 }
 
@@ -143,6 +149,7 @@ ok "Setup code minted"
 # first-connect validator compilation after a cold start.
 info "Establishing device via bootstrap token"
 if OPENCLAW_GATEWAY_URL="$GATEWAY_URL" OPENCLAW_BOOTSTRAP_TOKEN="$BOOTSTRAP_TOKEN" \
+    OPENCLAW_OPERATOR_SCOPES="$OPERATOR_SCOPES" \
     go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /'; then
     ok "Device established"
 else
@@ -155,7 +162,8 @@ fi
 
 # Verify the issued device token now authenticates on its own.
 info "Verifying connection"
-if OPENCLAW_GATEWAY_URL="$GATEWAY_URL" go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /'; then
+if OPENCLAW_GATEWAY_URL="$GATEWAY_URL" OPENCLAW_OPERATOR_SCOPES="$OPERATOR_SCOPES" \
+    go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /'; then
     ok "Device paired and verified"
 else
     fail "Connection failed. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"

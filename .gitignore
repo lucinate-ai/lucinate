@@ -30,3 +30,6 @@ dist/
 
 # Integration test state
 test/integration/state/
+test/integration/echomodel.bin
+test/integration/echomodel.log
+test/integration/echomodel.pid
