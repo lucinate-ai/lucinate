@@ -56,6 +56,17 @@ test-integration-openclaw-bedrock-setup:
 test-integration-openclaw:
 	go test -tags integration -count=1 -v ./internal/tui/
 
+.PHONY: test-integration-openclaw-echo-setup
+test-integration-openclaw-echo-setup:
+	./test/integration/setup-openclaw-echo.sh
+
+# Connection + chat smoke test. Runs only the version-agnostic smoke test, so
+# it works with the instant echo model (the queue-ordering test assumes a
+# model with latency). Used by the CI gateway-version matrix.
+.PHONY: test-integration-openclaw-smoke
+test-integration-openclaw-smoke:
+	go test -tags integration -run TestConnectionSmoke_Integration -count=1 -v ./internal/tui/
+
 .PHONY: test-integration-openclaw-teardown
 test-integration-openclaw-teardown:
 	./test/integration/teardown-openclaw.sh

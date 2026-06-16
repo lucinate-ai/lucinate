@@ -1,0 +1,47 @@
+name: Integration (openclaw)
+
+# Smoke-tests the gateway connection (protocol negotiation, setup-code pairing,
+# and a chat round-trip) against a matrix of OpenClaw gateway versions, using a
+# zero-cost local echo model so no remote provider or API key is needed.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  openclaw-smoke:
+    name: openclaw ${{ matrix.gateway }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        gateway:
+          - "2026.4.29" # protocol v3
+          - "2026.5.28" # protocol v4
+    env:
+      OPENCLAW_IMAGE: ghcr.io/openclaw/openclaw:${{ matrix.gateway }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Set up integration env (echo model)
+        run: ./test/integration/setup-openclaw-echo.sh
+
+      - name: Connection + chat smoke test
+        run: make test-integration-openclaw-smoke
+
+      - name: Gateway logs (on failure)
+        if: failure()
+        run: docker compose -f test/integration/docker-compose.yml logs gateway || true
+
+      - name: Echo model logs (on failure)
+        if: failure()
+        run: cat test/integration/echomodel.log || true
+
+      - name: Teardown
+        if: always()
+        run: ./test/integration/teardown-openclaw.sh

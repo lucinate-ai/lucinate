@@ -128,6 +128,32 @@ re-run `make test-integration-openclaw-bedrock-setup`.
 
 ---
 
+## Echo model (CI, zero cost)
+
+For CI and offline smoke tests there is no remote model and no API charge.
+`test/integration/echomodel/` is a tiny stub that speaks both the Ollama-native
+(`/api/chat`, `/api/show`, `/api/tags`) and OpenAI-compatible APIs and replies
+with a canned `echo: <message>`. The gateway is pointed at it via
+`openclaw.echo.json`.
+
+```bash
+# Start echomodel + gateway + pair (OPENCLAW_IMAGE picks the gateway version)
+OPENCLAW_IMAGE=ghcr.io/openclaw/openclaw:2026.5.28 \
+  make test-integration-openclaw-echo-setup
+
+# Run only the connection + chat smoke test (the queue-ordering test assumes a
+# model with latency and does not apply to the instant echo model)
+make test-integration-openclaw-smoke
+
+make test-integration-openclaw-teardown
+```
+
+This is what `.github/workflows/integration.yml` runs, as a matrix across
+gateway versions (currently 2026.4.x / v3 and 2026.5.x / v4), to smoke-test
+that the client still negotiates, pairs, and chats against each.
+
+---
+
 ## What the setup scripts do
 
 There are two setup scripts that share the same gateway, state directory,
