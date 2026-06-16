@@ -578,6 +578,32 @@ func (c *Client) HelloUptimeMs() int64 {
 	return 0
 }
 
+// HelloServerVersion returns the gateway's reported version string from the
+// connect handshake, or "" if not connected or unknown.
+func (c *Client) HelloServerVersion() string {
+	gw := c.currentGW()
+	if gw == nil {
+		return ""
+	}
+	if h := gw.Hello(); h != nil {
+		return h.Server.Version
+	}
+	return ""
+}
+
+// HelloProtocol returns the protocol (API) version negotiated with the gateway
+// during the connect handshake, or 0 if not connected/unknown.
+func (c *Client) HelloProtocol() int {
+	gw := c.currentGW()
+	if gw == nil {
+		return 0
+	}
+	if h := gw.Hello(); h != nil {
+		return h.Protocol
+	}
+	return 0
+}
+
 // ClearToken removes the stored device token so the next Connect call
 // will authenticate without a cached token.
 func (c *Client) ClearToken() error {

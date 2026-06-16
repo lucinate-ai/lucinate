@@ -249,6 +249,14 @@ const (
 type StatusBackend interface {
 	GatewayHealth(ctx context.Context) (*protocol.HealthEvent, error)
 	HelloUptimeMs() int64
+	// GatewayVersion is the gateway's reported version, or "" if unknown.
+	GatewayVersion() string
+	// APIVersion is the protocol version negotiated with the gateway, or 0
+	// if unknown (e.g. not connected).
+	APIVersion() int
+	// APIVersionRange is the inclusive [min, max] protocol version range this
+	// client supports.
+	APIVersionRange() (int, int)
 }
 
 // ExecBackend exposes the !! remote-exec affordance.

@@ -280,7 +280,14 @@ type prefsUpdatedMsg struct {
 type gatewayStatusMsg struct {
 	health   *protocol.HealthEvent
 	uptimeMs int64
-	err      error
+	// gatewayVersion is the gateway's reported version, or "" if unknown.
+	gatewayVersion string
+	// apiVersion is the protocol version in use, or 0 if unknown.
+	apiVersion int
+	// apiVersionMin/apiVersionMax are the protocol range this client supports.
+	apiVersionMin int
+	apiVersionMax int
+	err           error
 }
 
 // thinkingChangedMsg is returned after changing the thinking level.

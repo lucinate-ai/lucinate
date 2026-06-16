@@ -1697,7 +1697,14 @@ func TestGatewayStatusMsg_Success(t *testing.T) {
 		},
 	}
 
-	updated, _ := m.Update(gatewayStatusMsg{health: health, uptimeMs: 7200000})
+	updated, _ := m.Update(gatewayStatusMsg{
+		health:         health,
+		uptimeMs:       7200000,
+		gatewayVersion: "1.2.3",
+		apiVersion:     4,
+		apiVersionMin:  3,
+		apiVersionMax:  4,
+	})
 
 	if len(updated.messages) == 0 {
 		t.Fatal("expected a status message")
@@ -1711,6 +1718,12 @@ func TestGatewayStatusMsg_Success(t *testing.T) {
 	}
 	if !strings.Contains(last.content, "Gateway: OK") {
 		t.Errorf("expected 'Gateway: OK' in content, got %q", last.content)
+	}
+	if !strings.Contains(last.content, "Version: 1.2.3") {
+		t.Errorf("expected gateway version in content, got %q", last.content)
+	}
+	if !strings.Contains(last.content, "v4 in use (supported: v3–v4)") {
+		t.Errorf("expected API version line in content, got %q", last.content)
 	}
 	if !strings.Contains(last.content, "Alpha") {
 		t.Errorf("expected agent name 'Alpha' in content, got %q", last.content)
@@ -1757,7 +1770,7 @@ func TestFormatGatewayStatus_DefaultAgent(t *testing.T) {
 			{AgentID: "a2", Name: "Other", IsDefault: false},
 		},
 	}
-	out := formatGatewayStatus(health, 0)
+	out := formatGatewayStatus(health, 0, "", 0, protocol.MinProtocolVersion, protocol.ProtocolVersion)
 	if !strings.Contains(out, "* Main") {
 		t.Errorf("expected default agent marked with '*', got %q", out)
 	}
@@ -1766,9 +1779,31 @@ func TestFormatGatewayStatus_DefaultAgent(t *testing.T) {
 	}
 }
 
+func TestFormatGatewayStatus_Versions(t *testing.T) {
+	health := &protocol.HealthEvent{OK: true}
+	out := formatGatewayStatus(health, 0, "1.20.0", 4, 3, 4)
+	if !strings.Contains(out, "Version: 1.20.0") {
+		t.Errorf("expected gateway version line, got %q", out)
+	}
+	if !strings.Contains(out, "API:     v4 in use (supported: v3–v4)") {
+		t.Errorf("expected API version line, got %q", out)
+	}
+}
+
+func TestFormatGatewayStatus_VersionsUnknown(t *testing.T) {
+	health := &protocol.HealthEvent{OK: true}
+	out := formatGatewayStatus(health, 0, "", 0, 3, 4)
+	if !strings.Contains(out, "Version: unknown") {
+		t.Errorf("expected 'Version: unknown' when gateway version empty, got %q", out)
+	}
+	if !strings.Contains(out, "API:     unknown in use (supported: v3–v4)") {
+		t.Errorf("expected 'unknown' API version when not negotiated, got %q", out)
+	}
+}
+
 func TestFormatGatewayStatus_NoUptime(t *testing.T) {
 	health := &protocol.HealthEvent{OK: true}
-	out := formatGatewayStatus(health, 0)
+	out := formatGatewayStatus(health, 0, "", 0, protocol.MinProtocolVersion, protocol.ProtocolVersion)
 	if strings.Contains(out, "Uptime") {
 		t.Errorf("expected no Uptime line when uptimeMs=0, got %q", out)
 	}
@@ -1783,7 +1818,7 @@ func TestFormatGatewayStatus_ChannelNilConfigured(t *testing.T) {
 			"email": {Configured: nil, Linked: nil},
 		},
 	}
-	out := formatGatewayStatus(health, 0)
+	out := formatGatewayStatus(health, 0, "", 0, protocol.MinProtocolVersion, protocol.ProtocolVersion)
 	if !strings.Contains(out, "configured:?") {
 		t.Errorf("expected '?' for nil configured field, got %q", out)
 	}

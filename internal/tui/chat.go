@@ -696,7 +696,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		} else {
 			m.appendMessage(chatMessage{
 				role:    "system",
-				content: formatGatewayStatus(msg.health, msg.uptimeMs),
+				content: formatGatewayStatus(msg.health, msg.uptimeMs, msg.gatewayVersion, msg.apiVersion, msg.apiVersionMin, msg.apiVersionMax),
 			})
 		}
 		m.updateViewport()

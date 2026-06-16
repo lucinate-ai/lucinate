@@ -170,6 +170,14 @@ func (b *Backend) GatewayHealth(ctx context.Context) (*protocol.HealthEvent, err
 
 func (b *Backend) HelloUptimeMs() int64 { return b.client.HelloUptimeMs() }
 
+func (b *Backend) GatewayVersion() string { return b.client.HelloServerVersion() }
+
+func (b *Backend) APIVersion() int { return b.client.HelloProtocol() }
+
+func (b *Backend) APIVersionRange() (int, int) {
+	return protocol.MinProtocolVersion, protocol.ProtocolVersion
+}
+
 // --- ExecBackend ---
 
 func (b *Backend) ExecRequest(ctx context.Context, command, sessionKey string) (*protocol.ExecApprovalRequestResult, error) {

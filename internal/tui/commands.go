@@ -359,7 +359,16 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return true, func() tea.Msg {
 			health, err := status.GatewayHealth(context.Background())
 			uptimeMs := status.HelloUptimeMs()
-			return gatewayStatusMsg{health: health, uptimeMs: uptimeMs, err: err}
+			minVer, maxVer := status.APIVersionRange()
+			return gatewayStatusMsg{
+				health:         health,
+				uptimeMs:       uptimeMs,
+				gatewayVersion: status.GatewayVersion(),
+				apiVersion:     status.APIVersion(),
+				apiVersionMin:  minVer,
+				apiVersionMax:  maxVer,
+				err:            err,
+			}
 		}
 
 	case "/skills":
@@ -627,7 +636,10 @@ func localExecCommand(command string) tea.Cmd {
 }
 
 // formatGatewayStatus renders a HealthEvent as a human-readable status block.
-func formatGatewayStatus(h *protocol.HealthEvent, uptimeMs int64) string {
+// gatewayVersion is the gateway's reported version ("" if unknown), apiVersion
+// is the protocol version currently in use (0 if unknown), and apiMin/apiMax
+// are the protocol version range this client supports.
+func formatGatewayStatus(h *protocol.HealthEvent, uptimeMs int64, gatewayVersion string, apiVersion, apiMin, apiMax int) string {
 	var sb strings.Builder
 
 	// Overall status line.
@@ -636,6 +648,19 @@ func formatGatewayStatus(h *protocol.HealthEvent, uptimeMs int64) string {
 		status = "DEGRADED"
 	}
 	sb.WriteString(fmt.Sprintf("Gateway: %s  (check: %dms, heartbeat: %ds)\n", status, h.DurationMs, h.HeartbeatSeconds))
+
+	// Gateway and API (protocol) versions.
+	gwVer := gatewayVersion
+	if gwVer == "" {
+		gwVer = "unknown"
+	}
+	sb.WriteString(fmt.Sprintf("Version: %s\n", gwVer))
+
+	apiInUse := "unknown"
+	if apiVersion > 0 {
+		apiInUse = fmt.Sprintf("v%d", apiVersion)
+	}
+	sb.WriteString(fmt.Sprintf("API:     %s in use (supported: v%d–v%d)\n", apiInUse, apiMin, apiMax))
 
 	if uptimeMs > 0 {
 		sb.WriteString(fmt.Sprintf("Uptime:  %s\n", formatDuration(uptimeMs)))

@@ -135,7 +135,12 @@ func (f *fakeBackend) Capabilities() backend.Capabilities { return f.caps }
 func (f *fakeBackend) GatewayHealth(ctx context.Context) (*protocol.HealthEvent, error) {
 	return &protocol.HealthEvent{}, nil
 }
-func (f *fakeBackend) HelloUptimeMs() int64 { return 0 }
+func (f *fakeBackend) HelloUptimeMs() int64   { return 0 }
+func (f *fakeBackend) GatewayVersion() string { return "" }
+func (f *fakeBackend) APIVersion() int        { return 0 }
+func (f *fakeBackend) APIVersionRange() (int, int) {
+	return protocol.MinProtocolVersion, protocol.ProtocolVersion
+}
 
 // --- ExecBackend ---
 
