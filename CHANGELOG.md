@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.4] - 2026-06-16
+### Changed
+- build: narrow release commit pattern
+- build: release against the tested go.mod instead of an upstream SDK checkout (#154)
+
 ## [1.17.3] - 2026-06-16
 ### Changed
 - test(integration): smoke-test gateway connections across versions in CI
