@@ -511,8 +511,14 @@ func TestBackend_SessionPatchModelPersists(t *testing.T) {
 func TestBackend_Capabilities(t *testing.T) {
 	b := &Backend{}
 	caps := b.Capabilities()
-	if caps.GatewayStatus || caps.RemoteExec || caps.Thinking || caps.SessionUsage {
-		t.Errorf("expected no gateway-only caps, got %+v", caps)
+	if caps.RemoteExec || caps.Thinking || caps.SessionUsage {
+		t.Errorf("expected no remote-exec/thinking/usage caps, got %+v", caps)
+	}
+	// GatewayStatus is now the bit that gates /status — OpenAI
+	// supplies a connection-info payload (endpoint, auth, model,
+	// agent count, history stats) so /status works here too.
+	if !caps.GatewayStatus {
+		t.Errorf("expected GatewayStatus=true for /status, got %+v", caps)
 	}
 	if !caps.SessionCompact {
 		t.Errorf("expected SessionCompact=true (local summarisation pass), got %+v", caps)
@@ -522,6 +528,120 @@ func TestBackend_Capabilities(t *testing.T) {
 	}
 	if caps.AuthRecovery != backend.AuthRecoveryAPIKey {
 		t.Errorf("expected APIKey auth recovery, got %v", caps.AuthRecovery)
+	}
+}
+
+func TestBackend_Status(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	b := newBackend(t, srv)
+	b.opts.APIKey = "sk-test"
+	b.opts.DefaultModel = "gpt-test"
+
+	// Seed two agents and prime one with history so /status picks up
+	// both the AgentCount and the current-agent history block.
+	if _, err := b.store.Create("Alpha", "id-a", "soul-a", "gpt-a"); err != nil {
+		t.Fatalf("create alpha: %v", err)
+	}
+	beta, err := b.store.Create("Beta", "id-b", "soul-b", "gpt-b")
+	if err != nil {
+		t.Fatalf("create beta: %v", err)
+	}
+	historyPath := filepath.Join(b.store.AgentDir(beta.ID), "history.jsonl")
+	if err := os.WriteFile(historyPath, []byte(`{"role":"user"}`+"\n"+`{"role":"assistant"}`+"\n"+`{"role":"user"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("seed history: %v", err)
+	}
+
+	status, err := b.Status(context.Background(), beta.ID, "main")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Type != "openai" {
+		t.Errorf("Type = %q, want openai", status.Type)
+	}
+	if status.Endpoint != srv.URL+"/v1" {
+		t.Errorf("Endpoint = %q", status.Endpoint)
+	}
+	if status.Auth != "API key" {
+		t.Errorf("Auth = %q, want 'API key'", status.Auth)
+	}
+	if status.DefaultModel != "gpt-test" {
+		t.Errorf("DefaultModel = %q", status.DefaultModel)
+	}
+	if status.AgentCount != 2 {
+		t.Errorf("AgentCount = %d, want 2", status.AgentCount)
+	}
+	if status.History == nil {
+		t.Fatal("expected History to be populated for Beta")
+	}
+	if status.History.MessageCount != 3 {
+		t.Errorf("History.MessageCount = %d, want 3", status.History.MessageCount)
+	}
+	if status.History.SizeBytes == 0 {
+		t.Errorf("History.SizeBytes should be non-zero")
+	}
+	if status.Gateway != nil {
+		t.Errorf("Gateway block must be nil for HTTP-only backend, got %+v", status.Gateway)
+	}
+}
+
+func TestBackend_StatusAnonymousNoHistory(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	b := newBackend(t, srv)
+
+	status, err := b.Status(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Auth != "anonymous" {
+		t.Errorf("Auth = %q, want anonymous", status.Auth)
+	}
+	if status.AgentCount != 0 {
+		t.Errorf("AgentCount = %d, want 0", status.AgentCount)
+	}
+	if status.History != nil {
+		t.Errorf("History should be nil without an agent, got %+v", status.History)
+	}
+}
+
+func TestBackend_StatusHistoryTooLargeFallsBackToSize(t *testing.T) {
+	// A history.jsonl past historyCountMaxBytes should report
+	// MessageCount=-1 so the renderer falls back to size-only.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	b := newBackend(t, srv)
+	agent, err := b.store.Create("Big", "id", "soul", "m")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	big := make([]byte, historyCountMaxBytes+1)
+	for i := range big {
+		big[i] = 'a'
+	}
+	historyPath := filepath.Join(b.store.AgentDir(agent.ID), "history.jsonl")
+	if err := os.WriteFile(historyPath, big, 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	status, err := b.Status(context.Background(), agent.ID, "main")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.History == nil {
+		t.Fatal("expected History entry")
+	}
+	if status.History.MessageCount != -1 {
+		t.Errorf("MessageCount = %d, want -1 (over-cap sentinel)", status.History.MessageCount)
+	}
+	if status.History.SizeBytes <= historyCountMaxBytes {
+		t.Errorf("SizeBytes = %d, want > %d", status.History.SizeBytes, historyCountMaxBytes)
 	}
 }
 

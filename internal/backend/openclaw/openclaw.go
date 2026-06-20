@@ -164,18 +164,34 @@ func (b *Backend) Capabilities() backend.Capabilities {
 
 // --- StatusBackend ---
 
-func (b *Backend) GatewayHealth(ctx context.Context) (*protocol.HealthEvent, error) {
-	return b.client.GatewayHealth(ctx)
-}
+// Status returns the gateway-side connection status. agentID and
+// sessionKey are ignored — OpenClaw's per-session state lives on the
+// gateway and is already reflected in the health snapshot.
+func (b *Backend) Status(ctx context.Context, agentID, sessionKey string) (*backend.BackendStatus, error) {
+	// Fetch the gateway health snapshot. A health-fetch failure must
+	// not lose the rest of the status — render with Health=nil so the
+	// user still sees endpoint / version / auth details.
+	health, healthErr := b.client.GatewayHealth(ctx)
 
-func (b *Backend) HelloUptimeMs() int64 { return b.client.HelloUptimeMs() }
+	auth := "anonymous"
+	if b.client.HasDeviceToken() {
+		auth = "device token"
+	}
 
-func (b *Backend) GatewayVersion() string { return b.client.HelloServerVersion() }
-
-func (b *Backend) APIVersion() int { return b.client.HelloProtocol() }
-
-func (b *Backend) APIVersionRange() (int, int) {
-	return protocol.MinProtocolVersion, protocol.ProtocolVersion
+	status := &backend.BackendStatus{
+		Type:     "openclaw",
+		Endpoint: b.client.GatewayURL(),
+		Auth:     auth,
+		Gateway: &backend.GatewayStatus{
+			Health:        health,
+			UptimeMs:      b.client.HelloUptimeMs(),
+			Version:       b.client.HelloServerVersion(),
+			APIVersion:    b.client.HelloProtocol(),
+			APIVersionMin: protocol.MinProtocolVersion,
+			APIVersionMax: protocol.ProtocolVersion,
+		},
+	}
+	return status, healthErr
 }
 
 // --- ExecBackend ---

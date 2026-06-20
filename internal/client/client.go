@@ -604,6 +604,20 @@ func (c *Client) HelloProtocol() int {
 	return 0
 }
 
+// GatewayURL returns the configured gateway WebSocket URL.
+func (c *Client) GatewayURL() string {
+	if c.cfg == nil {
+		return ""
+	}
+	return c.cfg.WSURL
+}
+
+// HasDeviceToken reports whether a device token is currently stored
+// for this client's gateway endpoint.
+func (c *Client) HasDeviceToken() bool {
+	return c.store != nil && c.store.LoadDeviceToken() != ""
+}
+
 // ClearToken removes the stored device token so the next Connect call
 // will authenticate without a cached token.
 func (c *Client) ClearToken() error {

@@ -496,9 +496,46 @@ func (b *Backend) SessionPatchModel(ctx context.Context, sessionKey, modelID str
 // auth, no agent management, no remote exec, no compact, etc.
 func (b *Backend) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
+		GatewayStatus:   true,
 		AuthRecovery:    backend.AuthRecoveryAPIKey,
 		AgentManagement: false,
 	}
+}
+
+// --- StatusBackend ---
+
+// Status reports the Hermes connection summary. agentID / sessionKey
+// are ignored — Hermes pins one server-side thread per connection, so
+// the lastResponseID and discovered profile are the relevant local
+// state regardless of which session triggered the command.
+func (b *Backend) Status(ctx context.Context, agentID, sessionKey string) (*backend.BackendStatus, error) {
+	auth := "anonymous"
+	if b.opts.APIKey != "" {
+		auth = "API key"
+	}
+
+	model := b.opts.DefaultModel
+	if model == "" {
+		b.mu.Lock()
+		model = b.profileModel
+		b.mu.Unlock()
+	}
+
+	status := &backend.BackendStatus{
+		Type:         "hermes",
+		Endpoint:     b.opts.BaseURL,
+		Auth:         auth,
+		DefaultModel: model,
+	}
+
+	b.mu.Lock()
+	lastID := b.lastResponseID
+	b.mu.Unlock()
+	if lastID != "" {
+		status.Thread = &backend.ThreadStatus{Active: true, LastResponseID: lastID}
+	}
+
+	return status, nil
 }
 
 // --- APIKeyAuth ---

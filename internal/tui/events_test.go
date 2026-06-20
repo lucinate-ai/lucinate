@@ -9,6 +9,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/routines"
 )
 
@@ -1697,13 +1698,21 @@ func TestGatewayStatusMsg_Success(t *testing.T) {
 		},
 	}
 
-	updated, _ := m.Update(gatewayStatusMsg{
-		health:         health,
-		uptimeMs:       7200000,
-		gatewayVersion: "1.2.3",
-		apiVersion:     4,
-		apiVersionMin:  3,
-		apiVersionMax:  4,
+	updated, _ := m.Update(backendStatusMsg{
+		connName: "local",
+		status: &backend.BackendStatus{
+			Type:     "openclaw",
+			Endpoint: "wss://gw.example/ws",
+			Auth:     "device token",
+			Gateway: &backend.GatewayStatus{
+				Health:        health,
+				UptimeMs:      7200000,
+				Version:       "1.2.3",
+				APIVersion:    4,
+				APIVersionMin: 3,
+				APIVersionMax: 4,
+			},
+		},
 	})
 
 	if len(updated.messages) == 0 {
@@ -1716,34 +1725,34 @@ func TestGatewayStatusMsg_Success(t *testing.T) {
 	if last.errMsg != "" {
 		t.Errorf("expected no error, got %q", last.errMsg)
 	}
-	if !strings.Contains(last.content, "Gateway: OK") {
-		t.Errorf("expected 'Gateway: OK' in content, got %q", last.content)
-	}
-	if !strings.Contains(last.content, "Version: 1.2.3") {
-		t.Errorf("expected gateway version in content, got %q", last.content)
-	}
-	if !strings.Contains(last.content, "v4 in use (supported: v3–v4)") {
-		t.Errorf("expected API version line in content, got %q", last.content)
-	}
-	if !strings.Contains(last.content, "Alpha") {
-		t.Errorf("expected agent name 'Alpha' in content, got %q", last.content)
-	}
-	if !strings.Contains(last.content, "Slack") {
-		t.Errorf("expected channel label 'Slack' in content, got %q", last.content)
-	}
-	if !strings.Contains(last.content, "2h0m") {
-		t.Errorf("expected uptime '2h0m' in content, got %q", last.content)
+	for _, want := range []string{
+		"Connection: local",
+		"Backend:    openclaw",
+		"Endpoint:   wss://gw.example/ws",
+		"Auth:       device token",
+		"Gateway:    OK",
+		"Version:    1.2.3",
+		"v4 in use (supported: v3–v4)",
+		"Alpha",
+		"Slack",
+		"2h0m",
+	} {
+		if !strings.Contains(last.content, want) {
+			t.Errorf("expected %q in content, got %q", want, last.content)
+		}
 	}
 }
 
-func TestGatewayStatusMsg_Degraded(t *testing.T) {
+func TestBackendStatusMsg_Degraded(t *testing.T) {
 	m := newTestChatModel()
-	health := &protocol.HealthEvent{
-		OK:         false,
-		DurationMs: 500,
-	}
+	health := &protocol.HealthEvent{OK: false, DurationMs: 500}
 
-	updated, _ := m.Update(gatewayStatusMsg{health: health, uptimeMs: 0})
+	updated, _ := m.Update(backendStatusMsg{
+		status: &backend.BackendStatus{
+			Type:    "openclaw",
+			Gateway: &backend.GatewayStatus{Health: health},
+		},
+	})
 
 	last := updated.messages[len(updated.messages)-1]
 	if !strings.Contains(last.content, "DEGRADED") {
@@ -1751,10 +1760,10 @@ func TestGatewayStatusMsg_Degraded(t *testing.T) {
 	}
 }
 
-func TestGatewayStatusMsg_Error(t *testing.T) {
+func TestBackendStatusMsg_Error(t *testing.T) {
 	m := newTestChatModel()
 
-	updated, _ := m.Update(gatewayStatusMsg{err: errString("connection refused")})
+	updated, _ := m.Update(backendStatusMsg{err: errString("connection refused")})
 
 	last := updated.messages[len(updated.messages)-1]
 	if last.errMsg != "connection refused" {
@@ -1762,15 +1771,52 @@ func TestGatewayStatusMsg_Error(t *testing.T) {
 	}
 }
 
-func TestFormatGatewayStatus_DefaultAgent(t *testing.T) {
-	health := &protocol.HealthEvent{
-		OK: true,
-		Agents: []protocol.AgentHealthSummary{
-			{AgentID: "a1", Name: "Main", IsDefault: true},
-			{AgentID: "a2", Name: "Other", IsDefault: false},
+func TestBackendStatusMsg_PartialFailureRendersBoth(t *testing.T) {
+	// OpenClaw's Status returns a populated payload even when the
+	// health fetch fails — the renderer must show the body and the
+	// error together, not swallow either.
+	m := newTestChatModel()
+	updated, _ := m.Update(backendStatusMsg{
+		status: &backend.BackendStatus{
+			Type:     "openclaw",
+			Endpoint: "wss://gw.example/ws",
+			Gateway:  &backend.GatewayStatus{Version: "1.20.0", APIVersion: 4, APIVersionMin: 3, APIVersionMax: 4},
+		},
+		err: errString("health timeout"),
+	})
+
+	if len(updated.messages) < 2 {
+		t.Fatalf("expected status body + error message, got %d", len(updated.messages))
+	}
+	body := updated.messages[len(updated.messages)-2]
+	errMsg := updated.messages[len(updated.messages)-1]
+	if !strings.Contains(body.content, "Version:    1.20.0") {
+		t.Errorf("expected version in body, got %q", body.content)
+	}
+	if !strings.Contains(body.content, "Gateway:    unreachable") {
+		t.Errorf("expected 'Gateway: unreachable' when health is nil, got %q", body.content)
+	}
+	if errMsg.errMsg != "health timeout" {
+		t.Errorf("expected health timeout error, got %q", errMsg.errMsg)
+	}
+}
+
+func TestFormatBackendStatus_DefaultAgent(t *testing.T) {
+	s := &backend.BackendStatus{
+		Type: "openclaw",
+		Gateway: &backend.GatewayStatus{
+			Health: &protocol.HealthEvent{
+				OK: true,
+				Agents: []protocol.AgentHealthSummary{
+					{AgentID: "a1", Name: "Main", IsDefault: true},
+					{AgentID: "a2", Name: "Other", IsDefault: false},
+				},
+			},
+			APIVersionMin: protocol.MinProtocolVersion,
+			APIVersionMax: protocol.ProtocolVersion,
 		},
 	}
-	out := formatGatewayStatus(health, 0, "", 0, protocol.MinProtocolVersion, protocol.ProtocolVersion)
+	out := formatBackendStatus(s, "")
 	if !strings.Contains(out, "* Main") {
 		t.Errorf("expected default agent marked with '*', got %q", out)
 	}
@@ -1779,48 +1825,125 @@ func TestFormatGatewayStatus_DefaultAgent(t *testing.T) {
 	}
 }
 
-func TestFormatGatewayStatus_Versions(t *testing.T) {
-	health := &protocol.HealthEvent{OK: true}
-	out := formatGatewayStatus(health, 0, "1.20.0", 4, 3, 4)
-	if !strings.Contains(out, "Version: 1.20.0") {
-		t.Errorf("expected gateway version line, got %q", out)
+func TestFormatBackendStatus_VersionsUnknown(t *testing.T) {
+	s := &backend.BackendStatus{
+		Type: "openclaw",
+		Gateway: &backend.GatewayStatus{
+			Health:        &protocol.HealthEvent{OK: true},
+			APIVersionMin: 3,
+			APIVersionMax: 4,
+		},
 	}
-	if !strings.Contains(out, "API:     v4 in use (supported: v3–v4)") {
-		t.Errorf("expected API version line, got %q", out)
-	}
-}
-
-func TestFormatGatewayStatus_VersionsUnknown(t *testing.T) {
-	health := &protocol.HealthEvent{OK: true}
-	out := formatGatewayStatus(health, 0, "", 0, 3, 4)
-	if !strings.Contains(out, "Version: unknown") {
+	out := formatBackendStatus(s, "")
+	if !strings.Contains(out, "Version:    unknown") {
 		t.Errorf("expected 'Version: unknown' when gateway version empty, got %q", out)
 	}
-	if !strings.Contains(out, "API:     unknown in use (supported: v3–v4)") {
+	if !strings.Contains(out, "API:        unknown in use (supported: v3–v4)") {
 		t.Errorf("expected 'unknown' API version when not negotiated, got %q", out)
 	}
 }
 
-func TestFormatGatewayStatus_NoUptime(t *testing.T) {
-	health := &protocol.HealthEvent{OK: true}
-	out := formatGatewayStatus(health, 0, "", 0, protocol.MinProtocolVersion, protocol.ProtocolVersion)
+func TestFormatBackendStatus_NoUptime(t *testing.T) {
+	s := &backend.BackendStatus{
+		Type: "openclaw",
+		Gateway: &backend.GatewayStatus{
+			Health:        &protocol.HealthEvent{OK: true},
+			APIVersionMin: protocol.MinProtocolVersion,
+			APIVersionMax: protocol.ProtocolVersion,
+		},
+	}
+	out := formatBackendStatus(s, "")
 	if strings.Contains(out, "Uptime") {
 		t.Errorf("expected no Uptime line when uptimeMs=0, got %q", out)
 	}
 }
 
-func TestFormatGatewayStatus_ChannelNilConfigured(t *testing.T) {
-	health := &protocol.HealthEvent{
-		OK:            true,
-		ChannelOrder:  []string{"email"},
-		ChannelLabels: map[string]string{"email": "Email"},
-		Channels: map[string]protocol.ChannelHealthSummary{
-			"email": {Configured: nil, Linked: nil},
+func TestFormatBackendStatus_ChannelNilConfigured(t *testing.T) {
+	s := &backend.BackendStatus{
+		Type: "openclaw",
+		Gateway: &backend.GatewayStatus{
+			Health: &protocol.HealthEvent{
+				OK:            true,
+				ChannelOrder:  []string{"email"},
+				ChannelLabels: map[string]string{"email": "Email"},
+				Channels: map[string]protocol.ChannelHealthSummary{
+					"email": {Configured: nil, Linked: nil},
+				},
+			},
+			APIVersionMin: protocol.MinProtocolVersion,
+			APIVersionMax: protocol.ProtocolVersion,
 		},
 	}
-	out := formatGatewayStatus(health, 0, "", 0, protocol.MinProtocolVersion, protocol.ProtocolVersion)
+	out := formatBackendStatus(s, "")
 	if !strings.Contains(out, "configured:?") {
 		t.Errorf("expected '?' for nil configured field, got %q", out)
+	}
+}
+
+func TestFormatBackendStatus_OpenAILocalState(t *testing.T) {
+	// HTTP-only backend: no Gateway block, but AgentCount + History
+	// appear under their own section. Endpoint / Auth / Model headers
+	// from the common block render unconditionally.
+	s := &backend.BackendStatus{
+		Type:         "openai",
+		Endpoint:     "https://api.openai.com/v1",
+		Auth:         "API key",
+		DefaultModel: "gpt-5",
+		AgentCount:   12,
+		History: &backend.HistoryStats{
+			Path: "/tmp/agent/history.jsonl", SizeBytes: 12345, MessageCount: 47,
+		},
+	}
+	out := formatBackendStatus(s, "local")
+	for _, want := range []string{
+		"Connection: local",
+		"Backend:    openai",
+		"Endpoint:   https://api.openai.com/v1",
+		"Auth:       API key",
+		"Model:      gpt-5",
+		"Agents stored: 12",
+		"History:    47 messages, 12.1 KB",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in content, got %q", want, out)
+		}
+	}
+	if strings.Contains(out, "Gateway") {
+		t.Errorf("HTTP-only backend should not render a Gateway block, got %q", out)
+	}
+}
+
+func TestFormatBackendStatus_OpenAIHistoryTooLarge(t *testing.T) {
+	// MessageCount=-1 signals the file was past the count cap; the
+	// renderer falls back to size-only.
+	s := &backend.BackendStatus{
+		Type:     "openai",
+		Endpoint: "https://api.openai.com/v1",
+		History:  &backend.HistoryStats{SizeBytes: 5 * 1024 * 1024, MessageCount: -1},
+	}
+	out := formatBackendStatus(s, "")
+	if !strings.Contains(out, "5.0 MB (too large to count)") {
+		t.Errorf("expected 'too large to count' fallback, got %q", out)
+	}
+}
+
+func TestFormatBackendStatus_HermesThread(t *testing.T) {
+	// Hermes pins one server-side thread via lastResponseID; when
+	// active, /status shows the short id so the user knows they have
+	// continuity rather than a fresh start.
+	s := &backend.BackendStatus{
+		Type:         "hermes",
+		Endpoint:     "http://127.0.0.1:8788/v1",
+		Auth:         "anonymous",
+		DefaultModel: "claude-haiku-4-5",
+		Thread:       &backend.ThreadStatus{Active: true, LastResponseID: "resp_abcdefghijklmnopqrstuvwx"},
+	}
+	out := formatBackendStatus(s, "hermes-local")
+	if !strings.Contains(out, "Thread:     active (resp_abcdefghijk…)") {
+		t.Errorf("expected truncated last-response id, got %q", out)
+	}
+	if strings.Contains(out, "Gateway") {
+		t.Errorf("Hermes should not render a Gateway block, got %q", out)
 	}
 }
 

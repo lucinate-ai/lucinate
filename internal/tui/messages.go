@@ -276,18 +276,14 @@ type prefsUpdatedMsg struct {
 	prefs config.Preferences
 }
 
-// gatewayStatusMsg is returned after fetching the gateway health.
-type gatewayStatusMsg struct {
-	health   *protocol.HealthEvent
-	uptimeMs int64
-	// gatewayVersion is the gateway's reported version, or "" if unknown.
-	gatewayVersion string
-	// apiVersion is the protocol version in use, or 0 if unknown.
-	apiVersion int
-	// apiVersionMin/apiVersionMax are the protocol range this client supports.
-	apiVersionMin int
-	apiVersionMax int
-	err           error
+// backendStatusMsg is returned after collecting the cross-backend
+// /status payload. connName is the active connection's display name
+// captured at dispatch time so the renderer doesn't have to reach
+// back into the chat model.
+type backendStatusMsg struct {
+	status   *backend.BackendStatus
+	connName string
+	err      error
 }
 
 // thinkingChangedMsg is returned after changing the thinking level.

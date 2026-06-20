@@ -123,6 +123,63 @@ func TestCapabilities_AgentManagementOff(t *testing.T) {
 	if caps.AuthRecovery != backend.AuthRecoveryAPIKey {
 		t.Errorf("AuthRecovery = %v", caps.AuthRecovery)
 	}
+	// GatewayStatus gates the /status command; Hermes serves a thin
+	// payload (endpoint, auth, model, thread state) so /status works.
+	if !caps.GatewayStatus {
+		t.Error("GatewayStatus should be true so /status works on Hermes")
+	}
+}
+
+func TestStatus_NoThread(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	b := newBackend(t, srv)
+	b.profileModel = "discovered-model"
+
+	status, err := b.Status(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.Type != "hermes" {
+		t.Errorf("Type = %q", status.Type)
+	}
+	if status.Endpoint != srv.URL {
+		t.Errorf("Endpoint = %q", status.Endpoint)
+	}
+	if status.Auth != "API key" {
+		t.Errorf("Auth = %q, want 'API key'", status.Auth)
+	}
+	if status.DefaultModel != "discovered-model" {
+		t.Errorf("DefaultModel = %q, want discovered-model", status.DefaultModel)
+	}
+	if status.Thread != nil {
+		t.Errorf("Thread should be nil without an active lastResponseID, got %+v", status.Thread)
+	}
+}
+
+func TestStatus_ActiveThread(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	b := newBackend(t, srv)
+	b.lastResponseID = "resp_thread123"
+	b.opts.DefaultModel = "configured-model"
+
+	status, err := b.Status(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status.DefaultModel != "configured-model" {
+		t.Errorf("expected configured DefaultModel to win over discovered profile, got %q", status.DefaultModel)
+	}
+	if status.Thread == nil {
+		t.Fatal("Thread should be populated when lastResponseID is set")
+	}
+	if !status.Thread.Active {
+		t.Error("Thread.Active should be true")
+	}
+	if status.Thread.LastResponseID != "resp_thread123" {
+		t.Errorf("LastResponseID = %q", status.Thread.LastResponseID)
+	}
 }
 
 // streamingResponsesHandler returns the typed SSE event sequence
