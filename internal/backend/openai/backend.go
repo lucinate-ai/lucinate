@@ -482,9 +482,79 @@ func (b *Backend) SessionPatchModel(ctx context.Context, sessionKey, modelID str
 // via a local summarisation pass (see SessionCompact below).
 func (b *Backend) Capabilities() backend.Capabilities {
 	return backend.Capabilities{
+		GatewayStatus:   true,
 		SessionCompact:  true,
 		AuthRecovery:    backend.AuthRecoveryAPIKey,
 		AgentManagement: true,
+	}
+}
+
+// --- StatusBackend ---
+
+// historyCountMaxBytes caps how large a history.jsonl file may be
+// before /status falls back to size-only reporting. Counting lines on
+// a multi-megabyte file would add noticeable lag to an interactive
+// command — past this point the renderer reports SizeBytes only and
+// MessageCount = -1.
+const historyCountMaxBytes = 1 << 20 // 1 MiB
+
+// Status reports the OpenAI-compatible connection summary. agentID
+// scopes the History block to the active agent's history.jsonl;
+// sessionKey is ignored (agent ≡ session here).
+func (b *Backend) Status(ctx context.Context, agentID, sessionKey string) (*backend.BackendStatus, error) {
+	auth := "anonymous"
+	if b.opts.APIKey != "" {
+		auth = "API key"
+	}
+
+	status := &backend.BackendStatus{
+		Type:         "openai",
+		Endpoint:     b.opts.BaseURL,
+		Auth:         auth,
+		DefaultModel: b.opts.DefaultModel,
+	}
+
+	if agents, err := b.store.List(); err == nil {
+		status.AgentCount = len(agents)
+	}
+
+	if agentID != "" {
+		path := filepath.Join(b.store.AgentDir(agentID), "history.jsonl")
+		if info, err := os.Stat(path); err == nil {
+			h := &backend.HistoryStats{Path: path, SizeBytes: info.Size()}
+			if info.Size() <= historyCountMaxBytes {
+				h.MessageCount = countNewlines(path)
+			} else {
+				h.MessageCount = -1
+			}
+			status.History = h
+		}
+	}
+
+	return status, nil
+}
+
+// countNewlines counts newline-terminated records in path. Returns 0
+// on any read error so the caller falls back to size-only reporting.
+func countNewlines(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	const bufSize = 32 * 1024
+	buf := make([]byte, bufSize)
+	count := 0
+	for {
+		n, readErr := f.Read(buf)
+		for i := 0; i < n; i++ {
+			if buf[i] == '\n' {
+				count++
+			}
+		}
+		if readErr != nil {
+			return count
+		}
 	}
 }
 

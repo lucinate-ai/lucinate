@@ -66,6 +66,10 @@ type fakeBackend struct {
 	lastCronRunID     string
 	lastCronRunForce  bool
 	cronRemoved       []string
+
+	// statusHook overrides the default /status payload so tests can
+	// inject backend-specific shapes (gateway block, history, thread).
+	statusHook func(ctx context.Context, agentID, sessionKey string) (*backend.BackendStatus, error)
 }
 
 func newFakeBackend() *fakeBackend {
@@ -131,11 +135,19 @@ func (f *fakeBackend) SessionPatchModel(ctx context.Context, sessionKey, modelID
 func (f *fakeBackend) Capabilities() backend.Capabilities { return f.caps }
 
 // --- StatusBackend ---
+//
+// The fake's Status hook lets individual tests inject any shape of
+// payload (gateway-only, OpenAI-style with History, etc.) without
+// having to swap in a different backend stub. statusErr lets a test
+// drive the partial-failure path (status populated, error appended
+// as a second system message).
 
-func (f *fakeBackend) GatewayHealth(ctx context.Context) (*protocol.HealthEvent, error) {
-	return &protocol.HealthEvent{}, nil
+func (f *fakeBackend) Status(ctx context.Context, agentID, sessionKey string) (*backend.BackendStatus, error) {
+	if f.statusHook != nil {
+		return f.statusHook(ctx, agentID, sessionKey)
+	}
+	return &backend.BackendStatus{Type: "fake"}, nil
 }
-func (f *fakeBackend) HelloUptimeMs() int64 { return 0 }
 
 // --- ExecBackend ---
 

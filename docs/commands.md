@@ -41,7 +41,7 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/sessions` | Open the session browser — see [sessions.md](sessions.md#session-browser) |
 | `/skills` | List discovered skills — see [skills.md](skills.md) |
 | `/stats` | Show a token usage and cost table for the current session — **OpenClaw only** |
-| `/status` | Show backend status — **OpenClaw only** |
+| `/status` | Show backend status — common header (type, endpoint, auth, default model) plus backend-specific blocks: OpenClaw gateway health / versions / agents / channels, OpenAI agent count + current `history.jsonl` stats, Hermes thread state |
 | `/think` | Show the current thinking level — **OpenClaw only** |
 | `/think <level>` | Set the thinking level — see [chat-ux.md](chat-ux.md#thinking-levels) — **OpenClaw only** |
 

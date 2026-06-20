@@ -81,7 +81,7 @@ const helpBody = `/quit, /exit — quit lucinate
 /reset — delete session and start fresh
 /sessions — browse and restore previous sessions
 /stats — show session statistics
-/status — show gateway health and agent status
+/status — show backend, endpoint, auth, versions, and local session stats
 /skills — list available agent skills
 /think — show current thinking level
 /think <level> — set thinking level (off/minimal/low/medium/high)
@@ -356,10 +356,12 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			m.updateViewport()
 			return true, nil
 		}
+		agentID := m.agentID
+		sessionKey := m.sessionKey
+		connName := m.connName
 		return true, func() tea.Msg {
-			health, err := status.GatewayHealth(context.Background())
-			uptimeMs := status.HelloUptimeMs()
-			return gatewayStatusMsg{health: health, uptimeMs: uptimeMs, err: err}
+			bs, err := status.Status(context.Background(), agentID, sessionKey)
+			return backendStatusMsg{status: bs, connName: connName, err: err}
 		}
 
 	case "/skills":
@@ -626,57 +628,152 @@ func localExecCommand(command string) tea.Cmd {
 	}
 }
 
-// formatGatewayStatus renders a HealthEvent as a human-readable status block.
-func formatGatewayStatus(h *protocol.HealthEvent, uptimeMs int64) string {
+// formatBackendStatus renders a cross-backend status block. The
+// header (connection / type / endpoint / auth / model) is always
+// printed; the Gateway / History / Thread sub-blocks render only
+// when populated, so an HTTP-only backend produces a tight summary
+// while OpenClaw fills the same canvas with health, versions,
+// agents, and channels.
+//
+// connName is the active connection's display name from the chat
+// model (the backend struct doesn't know it).
+func formatBackendStatus(s *backend.BackendStatus, connName string) string {
 	var sb strings.Builder
 
-	// Overall status line.
-	status := "OK"
-	if !h.OK {
-		status = "DEGRADED"
+	// Header — common to every backend.
+	if connName != "" {
+		sb.WriteString(fmt.Sprintf("Connection: %s\n", connName))
 	}
-	sb.WriteString(fmt.Sprintf("Gateway: %s  (check: %dms, heartbeat: %ds)\n", status, h.DurationMs, h.HeartbeatSeconds))
-
-	if uptimeMs > 0 {
-		sb.WriteString(fmt.Sprintf("Uptime:  %s\n", formatDuration(uptimeMs)))
+	if s.Type != "" {
+		sb.WriteString(fmt.Sprintf("Backend:    %s\n", s.Type))
+	}
+	if s.Endpoint != "" {
+		sb.WriteString(fmt.Sprintf("Endpoint:   %s\n", s.Endpoint))
+	}
+	if s.Auth != "" {
+		sb.WriteString(fmt.Sprintf("Auth:       %s\n", s.Auth))
+	}
+	if s.DefaultModel != "" {
+		sb.WriteString(fmt.Sprintf("Model:      %s\n", s.DefaultModel))
 	}
 
-	// Sessions summary.
-	sb.WriteString(fmt.Sprintf("Sessions: %d active\n", h.Sessions.Count))
+	// Gateway block — OpenClaw.
+	if g := s.Gateway; g != nil {
+		sb.WriteString("\n")
+		writeGatewayBlock(&sb, g)
+	}
 
-	// Agents table.
-	if len(h.Agents) > 0 {
-		sb.WriteString("\nAgents:\n")
-		for _, a := range h.Agents {
-			marker := "  "
-			if a.IsDefault {
-				marker = "* "
+	// Local state — OpenAI agent count + current history.jsonl.
+	if s.AgentCount > 0 || s.History != nil {
+		sb.WriteString("\n")
+		if s.AgentCount > 0 {
+			sb.WriteString(fmt.Sprintf("Agents stored: %d\n", s.AgentCount))
+		}
+		if h := s.History; h != nil {
+			if h.MessageCount >= 0 {
+				sb.WriteString(fmt.Sprintf("History:    %d messages, %s\n",
+					h.MessageCount, formatBytes(h.SizeBytes)))
+			} else {
+				sb.WriteString(fmt.Sprintf("History:    %s (too large to count)\n", formatBytes(h.SizeBytes)))
 			}
-			sb.WriteString(fmt.Sprintf("  %s%-30s  %d session(s)\n", marker, a.Name, a.Sessions.Count))
 		}
 	}
 
-	// Channels table.
-	if len(h.ChannelOrder) > 0 {
-		sb.WriteString("\nChannels:\n")
-		for _, key := range h.ChannelOrder {
-			label := key
-			if l, ok := h.ChannelLabels[key]; ok && l != "" {
-				label = l
-			}
-			ch := h.Channels[key]
-			configured := formatBoolPtr(ch.Configured)
-			linked := formatBoolPtr(ch.Linked)
-			var authAge string
-			if ch.AuthAgeMs != nil {
-				authAge = fmt.Sprintf(" auth: %s ago", formatDuration(*ch.AuthAgeMs))
-			}
-			sb.WriteString(fmt.Sprintf("  %-20s configured:%-3s  linked:%-3s%s\n",
-				label, configured, linked, authAge))
-		}
+	// Server-side conversation thread — Hermes.
+	if t := s.Thread; t != nil && t.Active {
+		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("Thread:     active (%s)\n", shortID(t.LastResponseID)))
 	}
 
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+// writeGatewayBlock appends the OpenClaw gateway sub-section to sb.
+func writeGatewayBlock(sb *strings.Builder, g *backend.GatewayStatus) {
+	if h := g.Health; h != nil {
+		status := "OK"
+		if !h.OK {
+			status = "DEGRADED"
+		}
+		sb.WriteString(fmt.Sprintf("Gateway:    %s  (check: %dms, heartbeat: %ds)\n",
+			status, h.DurationMs, h.HeartbeatSeconds))
+	} else {
+		sb.WriteString("Gateway:    unreachable\n")
+	}
+
+	ver := g.Version
+	if ver == "" {
+		ver = "unknown"
+	}
+	sb.WriteString(fmt.Sprintf("Version:    %s\n", ver))
+
+	apiInUse := "unknown"
+	if g.APIVersion > 0 {
+		apiInUse = fmt.Sprintf("v%d", g.APIVersion)
+	}
+	sb.WriteString(fmt.Sprintf("API:        %s in use (supported: v%d–v%d)\n",
+		apiInUse, g.APIVersionMin, g.APIVersionMax))
+
+	if g.UptimeMs > 0 {
+		sb.WriteString(fmt.Sprintf("Uptime:     %s\n", formatDuration(g.UptimeMs)))
+	}
+
+	if h := g.Health; h != nil {
+		sb.WriteString(fmt.Sprintf("Sessions:   %d active\n", h.Sessions.Count))
+
+		if len(h.Agents) > 0 {
+			sb.WriteString("\nAgents:\n")
+			for _, a := range h.Agents {
+				marker := "  "
+				if a.IsDefault {
+					marker = "* "
+				}
+				sb.WriteString(fmt.Sprintf("  %s%-30s  %d session(s)\n", marker, a.Name, a.Sessions.Count))
+			}
+		}
+
+		if len(h.ChannelOrder) > 0 {
+			sb.WriteString("\nChannels:\n")
+			for _, key := range h.ChannelOrder {
+				label := key
+				if l, ok := h.ChannelLabels[key]; ok && l != "" {
+					label = l
+				}
+				ch := h.Channels[key]
+				configured := formatBoolPtr(ch.Configured)
+				linked := formatBoolPtr(ch.Linked)
+				var authAge string
+				if ch.AuthAgeMs != nil {
+					authAge = fmt.Sprintf(" auth: %s ago", formatDuration(*ch.AuthAgeMs))
+				}
+				sb.WriteString(fmt.Sprintf("  %-20s configured:%-3s  linked:%-3s%s\n",
+					label, configured, linked, authAge))
+			}
+		}
+	}
+}
+
+// formatBytes renders a byte count as B / KB / MB at one decimal place
+// where useful.
+func formatBytes(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
+}
+
+// shortID truncates a long opaque id (e.g. an OpenAI response id) to a
+// stable short prefix suitable for display.
+func shortID(id string) string {
+	const max = 16
+	if len(id) <= max {
+		return id
+	}
+	return id[:max] + "…"
 }
 
 // formatBoolPtr returns "yes", "no", or "?" for a *bool.

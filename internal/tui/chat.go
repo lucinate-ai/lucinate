@@ -690,14 +690,18 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		}
 		return m, nil
 
-	case gatewayStatusMsg:
-		if msg.err != nil {
-			m.appendMessage(chatMessage{role: "system", errMsg: msg.err.Error()})
-		} else {
+	case backendStatusMsg:
+		// A health-fetch error (OpenClaw) still produces a partially
+		// populated payload; render that body and append the error
+		// note as a separate system message so the user gets both.
+		if msg.status != nil {
 			m.appendMessage(chatMessage{
 				role:    "system",
-				content: formatGatewayStatus(msg.health, msg.uptimeMs),
+				content: formatBackendStatus(msg.status, msg.connName),
 			})
+		}
+		if msg.err != nil {
+			m.appendMessage(chatMessage{role: "system", errMsg: msg.err.Error()})
 		}
 		m.updateViewport()
 		return m, nil

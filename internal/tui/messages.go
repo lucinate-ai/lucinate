@@ -276,10 +276,13 @@ type prefsUpdatedMsg struct {
 	prefs config.Preferences
 }
 
-// gatewayStatusMsg is returned after fetching the gateway health.
-type gatewayStatusMsg struct {
-	health   *protocol.HealthEvent
-	uptimeMs int64
+// backendStatusMsg is returned after collecting the cross-backend
+// /status payload. connName is the active connection's display name
+// captured at dispatch time so the renderer doesn't have to reach
+// back into the chat model.
+type backendStatusMsg struct {
+	status   *backend.BackendStatus
+	connName string
 	err      error
 }
 

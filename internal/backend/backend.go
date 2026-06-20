@@ -245,10 +245,94 @@ const (
 	AuthRecoveryAPIKey
 )
 
-// StatusBackend exposes the gateway health endpoint behind /status.
+// StatusBackend exposes a unified connection-status payload behind
+// /status. Every backend implements this — the rendered output varies
+// because each populates the optional sub-blocks that apply (Gateway
+// for OpenClaw, History for OpenAI, Thread for Hermes, etc.).
+//
+// agentID and sessionKey scope the local-state stats to the active
+// chat session. Backends that don't track per-agent local state
+// ignore them.
 type StatusBackend interface {
-	GatewayHealth(ctx context.Context) (*protocol.HealthEvent, error)
-	HelloUptimeMs() int64
+	Status(ctx context.Context, agentID, sessionKey string) (*BackendStatus, error)
+}
+
+// BackendStatus is the cross-backend payload rendered by /status. The
+// header fields are always populated; the optional sub-blocks are
+// populated by backends for which they apply and rendered only when
+// non-nil.
+type BackendStatus struct {
+	// Type is a stable backend identifier shown to the user
+	// ("openclaw", "openai", "hermes").
+	Type string
+	// Endpoint is the connection URL — gateway WebSocket URL for
+	// OpenClaw, HTTP base URL for OpenAI / Hermes.
+	Endpoint string
+	// Auth is a short human-readable auth status, e.g. "device token",
+	// "API key", "anonymous".
+	Auth string
+	// DefaultModel is the configured or discovered default model name,
+	// or "" when no default applies.
+	DefaultModel string
+
+	// Gateway is populated for backends that talk to an OpenClaw
+	// gateway. Nil for HTTP-only backends.
+	Gateway *GatewayStatus
+
+	// AgentCount is the number of locally-stored agents. 0 for
+	// backends without a local agent store.
+	AgentCount int
+
+	// History summarises the current agent's local conversation log
+	// (e.g. OpenAI's history.jsonl). Nil when the backend has no
+	// per-agent on-disk history or when the active session has none.
+	History *HistoryStats
+
+	// Thread describes the active server-side conversation thread,
+	// where the backend pins one (e.g. Hermes lastResponseID). Nil
+	// otherwise.
+	Thread *ThreadStatus
+}
+
+// GatewayStatus carries OpenClaw-specific gateway connection details.
+type GatewayStatus struct {
+	// Health is the latest gateway /health snapshot. Nil if the
+	// fetch failed.
+	Health *protocol.HealthEvent
+	// UptimeMs is the gateway uptime reported during the connect
+	// handshake; 0 if unknown.
+	UptimeMs int64
+	// Version is the gateway's reported version, "" if unknown.
+	Version string
+	// APIVersion is the protocol version negotiated during connect; 0
+	// if unknown.
+	APIVersion int
+	// APIVersionMin / APIVersionMax bound the protocol version range
+	// this client supports.
+	APIVersionMin int
+	APIVersionMax int
+}
+
+// HistoryStats summarises a local conversation history file (line
+// count, size on disk).
+type HistoryStats struct {
+	// Path is the file path on disk.
+	Path string
+	// SizeBytes is the file's size as reported by stat.
+	SizeBytes int64
+	// MessageCount is the number of newline-delimited records.
+	// A value of -1 means the file was too large to count
+	// cheaply and the renderer should fall back to size only.
+	MessageCount int
+}
+
+// ThreadStatus describes an active server-side conversation thread.
+type ThreadStatus struct {
+	// Active is true when the backend has a thread pointer.
+	Active bool
+	// LastResponseID is the upstream pointer, truncated to a short
+	// prefix when surfaced to the user.
+	LastResponseID string
 }
 
 // ExecBackend exposes the !! remote-exec affordance.
