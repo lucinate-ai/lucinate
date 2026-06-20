@@ -12,7 +12,18 @@ See [connections.md](connections.md) for the cross-backend connection lifecycle 
 
 - `AuthRecovery: AuthRecoveryAPIKey` — bearer-token auth-recovery modal, same as OpenAI.
 - `AgentManagement: false` — Hermes profiles are configured server-side (`hermes profile create` / `hermes profile delete` on the host), so the TUI's "new agent" and "delete agent" affordances are both hidden. `CreateAgent` and `DeleteAgent` both return clear errors if ever called regardless.
-- Everything else is off — `/status`, `/compact`, `/think`, `/stats`, `/crons`, `!!` render a "not available on this connection" system message.
+- `GatewayStatus: true` — `/status` reports endpoint, auth, model, and (when present) the active `lastResponseID` thread. See [Status payload](#status-payload).
+- Everything else is off — `/compact`, `/think`, `/stats`, `/crons`, `!!` render a "not available on this connection" system message.
+
+## Status payload
+
+`/status` on a Hermes connection returns a `BackendStatus` carrying:
+
+- `Type: "hermes"`, the API base URL, and the auth mode (`"API key"` or `"anonymous"`).
+- The discovered or configured default model (`opts.DefaultModel` wins over the model cached during connect via `profileModel`).
+- `Thread` populated when `lastResponseID` is set, so the user can see whether the next turn will chain onto an existing server-side conversation or start fresh.
+
+The renderer omits the OpenClaw-specific gateway block entirely for Hermes — see [TUI rendering](#) in `internal/tui/commands.go` (`formatBackendStatus`) for the per-section gating.
 
 ## One profile, one agent
 

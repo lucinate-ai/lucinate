@@ -45,6 +45,15 @@ The check-and-mark is mutex-guarded so two concurrent sends on the same session 
 
 ## Pass-through methods
 
-`SessionsList`, `CreateSession`, `SessionDelete`, `ChatSend`, `ChatAbort`, `ChatHistory`, `ModelsList`, `SessionPatchModel`, and the capability-specific methods (`GatewayHealth`, `GatewayVersion`, `APIVersion`, `ExecRequest`, `ExecResolve`, `SessionCompact`, `SessionPatchThinking`, `SessionUsage`, `CronsList`, `CronRuns`, `CronAdd`, `CronUpdate`, `CronUpdateRaw`, `CronRemove`, `CronRun`) all forward to the underlying client unchanged. The adapter exists to satisfy the `backend.Backend` interface, not to add behaviour.
+`SessionsList`, `CreateSession`, `SessionDelete`, `ChatSend`, `ChatAbort`, `ChatHistory`, `ModelsList`, `SessionPatchModel`, and the capability-specific methods (`ExecRequest`, `ExecResolve`, `SessionCompact`, `SessionPatchThinking`, `SessionUsage`, `CronsList`, `CronRuns`, `CronAdd`, `CronUpdate`, `CronUpdateRaw`, `CronRemove`, `CronRun`) all forward to the underlying client unchanged. The adapter exists to satisfy the `backend.Backend` interface, not to add behaviour.
 
-`APIVersionRange` is the one `StatusBackend` method that does not delegate — it returns `protocol.MinProtocolVersion` and `protocol.ProtocolVersion` from the OpenClaw SDK so the displayed range is exactly the pair advertised in `ConnectParams.MinProtocol`/`MaxProtocol` during the handshake.
+## Status payload
+
+`Status(ctx, agentID, sessionKey)` assembles the cross-backend `BackendStatus` from a single gateway `/health` round-trip plus accessors on `*client.Client`:
+
+- Common header — `Type: "openclaw"`, the gateway WebSocket URL, and `"device token"` / `"anonymous"` derived from whether a token is loaded for this endpoint.
+- `Gateway` block — the health snapshot (sessions, agents, channels), the gateway version and uptime from the connect handshake, and the negotiated protocol version bounded by `protocol.MinProtocolVersion` and `protocol.ProtocolVersion` (the same pair advertised in `ConnectParams.MinProtocol`/`MaxProtocol`, so the displayed range matches what the handshake actually negotiated against).
+
+If the health fetch fails, `Status` still returns a populated payload with `Gateway.Health = nil` and surfaces the error to the caller; the TUI renders the body and the error as separate system messages rather than swallowing either.
+
+`agentID` and `sessionKey` are ignored — OpenClaw's per-session state lives on the gateway and is already reflected in the health snapshot.

@@ -6,7 +6,7 @@ The cron browser (`internal/tui/crons.go`) lets users list, inspect, run, edit, 
 
 `/crons` and `/crons all` are the only entry points. The chat view's slash-command handler (`internal/tui/commands.go`) type-asserts the active backend against `backend.CronBackend`:
 
-- Assertion fails → `"/crons is not available on this connection"` system message, no view transition (same pattern as `/status`, `/compact`).
+- Assertion fails → `"/crons is not available on this connection"` system message, no view transition (same pattern as `/compact` on Hermes).
 - Assertion succeeds → `showCronsMsg{filterAgentID, filterLabel}` is emitted. With `/crons` the filter is the chat's current agent; `/crons all` clears the filter so jobs across every agent are listed.
 
 ## Capability surface

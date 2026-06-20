@@ -6,7 +6,17 @@ See [connections.md](connections.md) for the cross-backend connection lifecycle 
 
 ## Capabilities
 
-`Backend.Capabilities()` reports `AuthRecovery: AuthRecoveryAPIKey`, `AgentManagement: true`, and `SessionCompact: true` (the local summarisation pass — see [Compaction](#compaction) below). Everything else is off — `/status`, `/think`, `/stats`, and `!!` render a "not available on this connection" system message.
+`Backend.Capabilities()` reports `AuthRecovery: AuthRecoveryAPIKey`, `AgentManagement: true`, `SessionCompact: true` (the local summarisation pass — see [Compaction](#compaction) below), and `GatewayStatus: true` (`/status` — see [Status payload](#status-payload)). Everything else is off — `/think`, `/stats`, and `!!` render a "not available on this connection" system message.
+
+## Status payload
+
+`/status` returns a `BackendStatus` carrying:
+
+- `Type: "openai"`, the configured `BaseURL`, the auth mode (`"API key"` or `"anonymous"`), and the configured `DefaultModel`.
+- `AgentCount` — the number of agent directories under the connection's store root.
+- `History` — the active agent's `history.jsonl` size and newline-counted message count. Files larger than `historyCountMaxBytes` (1 MiB) skip the count and the renderer falls back to size-only so an interactive command never blocks on a huge transcript.
+
+No `Gateway` block — that section is OpenClaw-specific and stays nil here.
 
 ### `/think` is currently a no-op
 

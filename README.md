@@ -168,7 +168,7 @@ Type these in the chat input. As soon as you type `/`, a menu shows every matchi
 | `/sessions` | Browse and restore previous sessions |
 | `/skills` | List available agent skills |
 | `/stats` | Show token usage and cost breakdown — OpenClaw only |
-| `/status` | Show gateway health, versions, and agent status — OpenClaw only |
+| `/status` | Show backend, endpoint, auth, versions, and local session stats |
 | `/think` | Show current thinking level — OpenClaw only |
 | `/think <level>` | Set thinking level (`off`, `minimal`, `low`, `medium`, `high`) — OpenClaw only |
 | `/quit`, `/exit` | Quit lucinate |
