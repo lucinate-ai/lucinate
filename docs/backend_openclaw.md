@@ -45,4 +45,6 @@ The check-and-mark is mutex-guarded so two concurrent sends on the same session 
 
 ## Pass-through methods
 
-`SessionsList`, `CreateSession`, `SessionDelete`, `ChatSend`, `ChatAbort`, `ChatHistory`, `ModelsList`, `SessionPatchModel`, and the capability-specific methods (`GatewayHealth`, `ExecRequest`, `ExecResolve`, `SessionCompact`, `SessionPatchThinking`, `SessionUsage`, `CronsList`, `CronRuns`, `CronAdd`, `CronUpdate`, `CronUpdateRaw`, `CronRemove`, `CronRun`) all forward to the underlying client unchanged. The adapter exists to satisfy the `backend.Backend` interface, not to add behaviour.
+`SessionsList`, `CreateSession`, `SessionDelete`, `ChatSend`, `ChatAbort`, `ChatHistory`, `ModelsList`, `SessionPatchModel`, and the capability-specific methods (`GatewayHealth`, `GatewayVersion`, `APIVersion`, `ExecRequest`, `ExecResolve`, `SessionCompact`, `SessionPatchThinking`, `SessionUsage`, `CronsList`, `CronRuns`, `CronAdd`, `CronUpdate`, `CronUpdateRaw`, `CronRemove`, `CronRun`) all forward to the underlying client unchanged. The adapter exists to satisfy the `backend.Backend` interface, not to add behaviour.
+
+`APIVersionRange` is the one `StatusBackend` method that does not delegate — it returns `protocol.MinProtocolVersion` and `protocol.ProtocolVersion` from the OpenClaw SDK so the displayed range is exactly the pair advertised in `ConnectParams.MinProtocol`/`MaxProtocol` during the handshake.
