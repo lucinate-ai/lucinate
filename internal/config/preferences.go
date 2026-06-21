@@ -37,6 +37,30 @@ type Preferences struct {
 	// setting) so future per-agent prefs can sit alongside HeaderColor
 	// without growing config.json horizontally.
 	Agents map[string]AgentPreferences `json:"agents,omitempty"`
+
+	// Ask holds the preconfigured defaults for the `ask` subcommand.
+	Ask AskDefaults `json:"ask,omitempty"`
+}
+
+// AskDefaults holds the preconfigured values for the `lucinate ask`
+// subcommand, which is a thin alias for `lucinate send` with these
+// fields pre-filled. Each field maps one-to-one to a `send` flag; an
+// empty string means "no default", so the user must supply that flag
+// on the command line (or leave the field blank in the config screen).
+//
+// KEEP IN SYNC with app.SendOptions / the `send` flag set
+// (internal/cli/send.go) and the `ask` flag set (internal/cli/ask.go):
+// every field `send` accepts should be customisable here.
+type AskDefaults struct {
+	// Connection is the saved connection name or ID (send: --connection/-c).
+	Connection string `json:"connection,omitempty"`
+	// Agent is the agent name or ID within the connection (send: --agent/-a).
+	Agent string `json:"agent,omitempty"`
+	// Session is the session key; empty routes to the agent's main
+	// session (send: --session/-s).
+	Session string `json:"session,omitempty"`
+	// Detach dispatches without waiting for a reply (send: --detach/-d).
+	Detach bool `json:"detach,omitempty"`
 }
 
 // AgentPreferences holds settings that are scoped to a single agent.

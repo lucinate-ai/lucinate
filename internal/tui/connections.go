@@ -333,6 +333,8 @@ func (m connectionsModel) Actions() []Action {
 			Action{ID: "delete-connection", Label: "Delete", Key: "d"},
 		)
 	}
+	// Config is reachable here as well as from chat and the agent list.
+	actions = append(actions, Action{ID: "config", Label: "Config", Key: ","})
 	return actions
 }
 
@@ -356,6 +358,8 @@ func (m connectionsModel) TriggerAction(id string) (connectionsModel, tea.Cmd) {
 	case "delete-cancel":
 		m.deletingID = ""
 		m.subState = subStateConnList
+	case "config":
+		return m, func() tea.Msg { return showConfigMsg{} }
 	}
 	return m, nil
 }

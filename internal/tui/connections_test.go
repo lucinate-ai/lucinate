@@ -547,10 +547,21 @@ func TestConnectionsModel_DisableExitKeysUnbindsListQuit(t *testing.T) {
 	}
 }
 
+func TestConnectionsModel_ConfigActionOpensConfig(t *testing.T) {
+	m := newConnectionsModel(&config.Connections{}, false, false)
+	_, cmd := m.TriggerAction("config")
+	if cmd == nil {
+		t.Fatal("expected a cmd from the config action")
+	}
+	if _, ok := cmd().(showConfigMsg); !ok {
+		t.Fatalf("expected showConfigMsg, got %T", cmd())
+	}
+}
+
 func TestConnectionsModel_ActionsListReflectsState(t *testing.T) {
 	m := newConnectionsModel(&config.Connections{}, false, false)
-	if got := m.Actions(); len(got) != 1 || got[0].ID != "new-connection" {
-		t.Errorf("empty store should expose only New, got %+v", got)
+	if got := m.Actions(); len(got) != 2 || got[0].ID != "new-connection" || got[1].ID != "config" {
+		t.Errorf("empty store should expose New and Config, got %+v", got)
 	}
 
 	store := newSeededStore(t)
@@ -561,7 +572,7 @@ func TestConnectionsModel_ActionsListReflectsState(t *testing.T) {
 	for _, a := range m.Actions() {
 		gotIDs = append(gotIDs, a.ID)
 	}
-	want := []string{"new-connection", "edit-connection", "delete-connection"}
+	want := []string{"new-connection", "edit-connection", "delete-connection", "config"}
 	if strings.Join(gotIDs, ",") != strings.Join(want, ",") {
 		t.Errorf("Actions = %v, want %v", gotIDs, want)
 	}

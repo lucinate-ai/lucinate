@@ -268,8 +268,21 @@ type mouseModeMsg struct {
 	action string
 }
 
-// goBackFromConfigMsg signals the AppModel to return to the chat view from config.
+// goBackFromConfigMsg signals the AppModel to return from the config
+// view to whichever view opened it (chat, the connections list, or the
+// agent list).
 type goBackFromConfigMsg struct{}
+
+// showAskConfigMsg signals the AppModel to open the ask-command-defaults
+// sub-screen from the config view.
+type showAskConfigMsg struct{}
+
+// askConfigClosedMsg carries the saved preferences when the
+// ask-config sub-screen closes, and signals the AppModel to return to
+// the config view.
+type askConfigClosedMsg struct {
+	prefs config.Preferences
+}
 
 // prefsUpdatedMsg carries updated preferences after a config toggle.
 type prefsUpdatedMsg struct {

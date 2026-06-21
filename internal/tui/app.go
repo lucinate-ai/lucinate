@@ -21,6 +21,7 @@ const (
 	viewChat
 	viewSessions
 	viewConfig
+	viewAskConfig
 	viewCrons
 	viewModelPicker
 	viewRoutines
@@ -112,6 +113,7 @@ type AppModel struct {
 	chatModel        chatModel
 	sessionsModel    sessionsModel
 	configModel      configModel
+	askConfigModel   askConfigModel
 	cronsModel       cronsModel
 	modelPicker      modelPickerModel
 	routinesModel    routinesModel
@@ -129,6 +131,12 @@ type AppModel struct {
 	disableExitKeys  bool
 	brightCursor     bool
 	managed          bool
+
+	// configReturn records the view that opened the config screen so
+	// Esc / Back returns there rather than always to chat. The config
+	// screen is reachable from chat (/config), the connections list,
+	// and the agent list, none of which share a fixed parent.
+	configReturn viewState
 
 	// mouseCapture toggles SGR mouse tracking. Off by default so a plain
 	// click-drag runs the terminal's native text selection (the fix for
@@ -271,6 +279,8 @@ func (m AppModel) Actions() []Action {
 		return m.sessionsModel.Actions()
 	case viewConfig:
 		return m.configModel.Actions()
+	case viewAskConfig:
+		return m.askConfigModel.Actions()
 	case viewCrons:
 		return m.cronsModel.Actions()
 	case viewModelPicker:
@@ -306,6 +316,10 @@ func (m AppModel) TriggerAction(id string) (AppModel, tea.Cmd) {
 	case viewConfig:
 		var cmd tea.Cmd
 		m.configModel, cmd = m.configModel.TriggerAction(id)
+		return m, cmd
+	case viewAskConfig:
+		var cmd tea.Cmd
+		m.askConfigModel, cmd = m.askConfigModel.TriggerAction(id)
 		return m, cmd
 	case viewCrons:
 		var cmd tea.Cmd
@@ -368,6 +382,8 @@ func (m AppModel) computeWantsInput() bool {
 		return m.connectionsModel.wantsInput()
 	case viewConnecting:
 		return m.connectingModel.wantsInput()
+	case viewAskConfig:
+		return m.askConfigModel.wantsInput()
 	}
 	return false
 }
@@ -465,6 +481,8 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.sessionsModel.setSize(msg.Width, msg.Height)
 		case viewConfig:
 			m.configModel.setSize(msg.Width, msg.Height)
+		case viewAskConfig:
+			m.askConfigModel.setSize(msg.Width, msg.Height)
 		case viewCrons:
 			m.cronsModel.setSize(msg.Width, msg.Height)
 		case viewModelPicker:
@@ -479,8 +497,24 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		return m, nil
 
 	case showConfigMsg:
+		// Remember where we came from so Back returns there — config is
+		// reachable from chat, the connections list, and the agent list.
+		m.configReturn = m.state
 		m.configModel = newConfigModel(m.prefs, m.hideActionHints)
 		m.configModel.setSize(m.width, m.height)
+		m.state = viewConfig
+		return m, nil
+
+	case showAskConfigMsg:
+		m.askConfigModel = newAskConfigModel(m.prefs, m.hideActionHints)
+		m.askConfigModel.setSize(m.width, m.height)
+		cmd := m.askConfigModel.focusInitial()
+		m.state = viewAskConfig
+		return m, cmd
+
+	case askConfigClosedMsg:
+		m.prefs = msg.prefs
+		m.chatModel.prefs = msg.prefs
 		m.state = viewConfig
 		return m, nil
 
@@ -500,7 +534,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		return m, nil
 
 	case goBackFromConfigMsg:
-		m.state = viewChat
+		m.state = m.configReturn
 		return m, nil
 
 	case prefsUpdatedMsg:
@@ -770,13 +804,15 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			return m, tea.Quit
 		case "esc":
 			if m.state == viewConfig {
-				m.state = viewChat
+				m.state = m.configReturn
 				return m, nil
 			}
 			if m.state == viewSessions {
 				m.state = viewChat
 				return m, nil
 			}
+			// viewAskConfig intentionally falls through: its model
+			// handles Esc so the edits are saved before returning.
 		}
 	}
 
@@ -852,6 +888,11 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case viewConfig:
 		var cmd tea.Cmd
 		m.configModel, cmd = m.configModel.Update(msg)
+		return m, cmd
+
+	case viewAskConfig:
+		var cmd tea.Cmd
+		m.askConfigModel, cmd = m.askConfigModel.Update(msg)
 		return m, cmd
 
 	case viewCrons:
@@ -1060,6 +1101,8 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView(m.sessionsModel.View())
 	case viewConfig:
 		v = tea.NewView(m.configModel.View())
+	case viewAskConfig:
+		v = tea.NewView(m.askConfigModel.View())
 	case viewCrons:
 		v = tea.NewView(m.cronsModel.View())
 	case viewModelPicker:
