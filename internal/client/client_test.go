@@ -1,11 +1,14 @@
 package client
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/a3tai/openclaw-go/gateway"
 	"github.com/a3tai/openclaw-go/identity"
 
 	"github.com/lucinate-ai/lucinate/internal/config"
@@ -197,6 +200,87 @@ func TestDone_PreClosedWhenNotConnected(t *testing.T) {
 	case <-ch:
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("Done() channel was not pre-closed when no gateway is attached")
+	}
+}
+
+// TestRPCsReturnErrNotConnectedWhenGWNil pins the contract that RPC
+// methods surface a clean ErrNotConnected when the gateway client is
+// not attached, instead of dereferencing nil. The original bug: a
+// dropped tailscale tunnel left the supervisor mid-reconnect with
+// c.gw == nil; ChatSend then panicked when the user hit Enter.
+func TestRPCsReturnErrNotConnectedWhenGWNil(t *testing.T) {
+	c := NewWithIdentityStore(&config.Config{}, &fakeIdentityStore{})
+
+	if _, err := c.ChatSend(context.Background(), "sess", "hi", "idem"); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("ChatSend: got %v, want ErrNotConnected", err)
+	}
+	if err := c.ChatAbort(context.Background(), "sess", "run"); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("ChatAbort: got %v, want ErrNotConnected", err)
+	}
+	if _, err := c.ListAgents(context.Background()); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("ListAgents: got %v, want ErrNotConnected", err)
+	}
+	if _, err := c.CreateSession(context.Background(), "agent", "main"); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("CreateSession: got %v, want ErrNotConnected", err)
+	}
+}
+
+// TestRPC_BoundsContextWhenNoDeadline pins the anti-hang contract: an RPC
+// whose caller passed a deadline-less context (every TUI background cmd
+// uses context.Background()) is given defaultRPCTimeout, so a silently
+// dropped transport cannot park the calling goroutine forever waiting on
+// a reply that never comes.
+func TestRPC_BoundsContextWhenNoDeadline(t *testing.T) {
+	c := NewWithIdentityStore(&config.Config{}, &fakeIdentityStore{})
+	// A non-nil gateway is required to reach the context-bounding path;
+	// rpc makes no network call, so an unconnected client is fine here.
+	c.gw = gateway.NewClient()
+
+	_, ctx, cancel, err := c.rpc(context.Background())
+	if err != nil {
+		t.Fatalf("rpc: unexpected error %v", err)
+	}
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("rpc did not bound a deadline-less context")
+	}
+	if d := time.Until(deadline); d <= 0 || d > defaultRPCTimeout+time.Second {
+		t.Errorf("deadline %v out of expected ~%v window", d, defaultRPCTimeout)
+	}
+}
+
+// TestRPC_RespectsCallerDeadline pins that rpc does not override a
+// deadline the caller already set (so a caller wanting a tighter or
+// looser bound keeps it).
+func TestRPC_RespectsCallerDeadline(t *testing.T) {
+	c := NewWithIdentityStore(&config.Config{}, &fakeIdentityStore{})
+	c.gw = gateway.NewClient()
+
+	caller, callerCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer callerCancel()
+
+	_, ctx, cancel, err := c.rpc(caller)
+	if err != nil {
+		t.Fatalf("rpc: unexpected error %v", err)
+	}
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("rpc dropped the caller's deadline")
+	}
+	if d := time.Until(deadline); d > 3*time.Second {
+		t.Errorf("rpc widened the caller's 2s deadline to %v", d)
+	}
+}
+
+// TestRPC_ReturnsErrNotConnected pins that rpc surfaces ErrNotConnected
+// (and a no-op cancel is unnecessary because cancel is nil) when no
+// gateway is attached.
+func TestRPC_ReturnsErrNotConnected(t *testing.T) {
+	c := NewWithIdentityStore(&config.Config{}, &fakeIdentityStore{})
+	if _, _, _, err := c.rpc(context.Background()); !errors.Is(err, ErrNotConnected) {
+		t.Errorf("rpc with no gateway: got %v, want ErrNotConnected", err)
 	}
 }
 
