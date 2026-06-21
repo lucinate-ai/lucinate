@@ -389,6 +389,55 @@ func (c *Client) ListAgents(ctx context.Context) (*protocol.AgentsListResult, er
 	return c.currentGW().AgentsList(ctx)
 }
 
+// grantedScopes returns the operator scopes the gateway granted this
+// connection at the hello handshake, or nil if not connected or the gateway
+// reported none. The granted set is the intersection of the scopes requested
+// on connect and those the device token actually carries, so it can be
+// narrower than defaultOperatorScopes.
+func (c *Client) grantedScopes() []string {
+	gw := c.currentGW()
+	if gw == nil {
+		return nil
+	}
+	if h := gw.Hello(); h != nil && h.Auth != nil {
+		return h.Auth.Scopes
+	}
+	return nil
+}
+
+// requireAdminScope fails fast, before an admin-only RPC, when the connection
+// was demonstrably granted a scope set without operator.admin. The most common
+// cause is OPENCLAW_OPERATOR_SCOPES bounding the requested scopes below admin —
+// for example a leftover integration-test .env picked up by godotenv from the
+// working directory — so the message points there. When the granted set is
+// unknown (older gateway, no hello auth) it returns nil and lets the RPC
+// surface the gateway's own error, which adminScopeHint then annotates.
+func (c *Client) requireAdminScope(op string) error {
+	scopes := c.grantedScopes()
+	if len(scopes) == 0 {
+		return nil
+	}
+	for _, s := range scopes {
+		if s == string(protocol.ScopeOperatorAdmin) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s requires the operator.admin scope, but this connection was granted only [%s]. "+
+		"Check that OPENCLAW_OPERATOR_SCOPES is not bounding scopes below admin (e.g. a leftover .env from the integration tests), then reconnect",
+		op, strings.Join(scopes, ", "))
+}
+
+// adminScopeHint annotates a gateway "missing scope: operator.admin" error with
+// the likely local cause so the raw protocol error is not the only thing the
+// user sees. It is a fallback for when requireAdminScope could not pre-empt the
+// failure (the granted scope set was unknown at call time).
+func adminScopeHint(err error) error {
+	if err == nil || !strings.Contains(err.Error(), string(protocol.ScopeOperatorAdmin)) {
+		return err
+	}
+	return fmt.Errorf("%w (check that OPENCLAW_OPERATOR_SCOPES is not bounding scopes below admin, e.g. a leftover .env from the integration tests, then reconnect)", err)
+}
+
 // DeleteAgent removes an agent via the gateway API. deleteFiles is
 // the user's explicit choice from the confirm view: when true, the
 // gateway also wipes the agent's workspace files; when false, only
@@ -396,13 +445,16 @@ func (c *Client) ListAgents(ctx context.Context) (*protocol.AgentsListResult, er
 // reuse it. The result payload (ok / removed bindings count) is
 // discarded — callers care only about success vs failure.
 func (c *Client) DeleteAgent(ctx context.Context, agentID string, deleteFiles bool) error {
+	if err := c.requireAdminScope("agents delete"); err != nil {
+		return err
+	}
 	gw := c.currentGW()
 	flag := deleteFiles
 	if _, err := gw.AgentsDelete(ctx, protocol.AgentsDeleteParams{
 		AgentID:     agentID,
 		DeleteFiles: &flag,
 	}); err != nil {
-		return fmt.Errorf("agents delete: %w", err)
+		return adminScopeHint(fmt.Errorf("agents delete: %w", err))
 	}
 	return nil
 }
@@ -410,13 +462,16 @@ func (c *Client) DeleteAgent(ctx context.Context, agentID string, deleteFiles bo
 // CreateAgent provisions a new agent via the gateway API and seeds an
 // IDENTITY.md file for it.
 func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error {
+	if err := c.requireAdminScope("agents create"); err != nil {
+		return err
+	}
 	gw := c.currentGW()
 	result, err := gw.AgentsCreate(ctx, protocol.AgentsCreateParams{
 		Name:      name,
 		Workspace: workspace,
 	})
 	if err != nil {
-		return fmt.Errorf("agents create: %w", err)
+		return adminScopeHint(fmt.Errorf("agents create: %w", err))
 	}
 
 	// Seed IDENTITY.md so the agent has a name.

@@ -76,7 +76,11 @@ Once the TUI is running, a supervisor in `internal/client/supervisor.go` watches
 
 ## Scopes
 
-The client connects with operator-level scopes: `ScopeOperatorRead`, `ScopeOperatorWrite`, `ScopeOperatorAdmin`, and `ScopeOperatorApprovals`. These are set in `internal/client/client.go` and are required for session management, exec approval, and agent administration.
+The client connects with operator-level scopes: `ScopeOperatorRead`, `ScopeOperatorWrite`, `ScopeOperatorAdmin`, and `ScopeOperatorApprovals`. These are the default requested in `internal/client/client.go` and are required for session management, exec approval, and agent administration. The gateway grants the intersection of the requested scopes and those the device token actually carries, so the effective set can be narrower.
+
+`OPENCLAW_OPERATOR_SCOPES` (comma-separated, e.g. `operator.read,operator.write,operator.approvals`) overrides the default requested set. This is needed when the device token is bounded to a subset — such as a setup-code bootstrap credential that cannot carry `operator.admin` — because requesting scopes beyond what the token grants is rejected as a scope mismatch.
+
+> **Foot-gun:** because `config.Load()` reads `.env` from the working directory, an `OPENCLAW_OPERATOR_SCOPES` left in a `.env` silently bounds scopes for *every* connection, regardless of which gateway is selected. The integration-test setup scripts write such a file (to `test/integration/integration.env`, not the repo root, and remove it on teardown). If admin-only operations such as creating an agent fail with `missing scope: operator.admin` despite a token that should carry admin, check for a stray `OPENCLAW_OPERATOR_SCOPES`. Admin-only client operations fail fast with a message pointing here rather than surfacing the raw gateway error.
 
 ## Stored files
 

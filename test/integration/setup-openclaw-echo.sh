@@ -158,16 +158,16 @@ else
     fail "Connection failed. Logs: docker compose -f $COMPOSE_FILE logs gateway"
 fi
 
-# --- Write .env for test runs ---------------------------------------------
+# --- Write integration.env for test runs ----------------------------------
 
-info "Writing test .env"
-cat > "$PROJECT_ROOT/.env" <<EOF
+info "Writing test integration.env"
+cat > "$SCRIPT_DIR/integration.env" <<EOF
 OPENCLAW_GATEWAY_URL=$GATEWAY_URL
 # The setup-code bootstrap profile grants read/write/approvals but not admin,
 # so the device token is bounded to those scopes. Request the matching set.
 OPENCLAW_OPERATOR_SCOPES=$OPERATOR_SCOPES
 EOF
-ok "Wrote .env"
+ok "Wrote test/integration/integration.env"
 
 echo ""
 info "OpenClaw (echo model) integration test environment is ready"
