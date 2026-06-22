@@ -23,6 +23,47 @@ type historyMessage struct {
 	Timestamp int64              `json:"timestamp,omitempty"` // unix millis, when present
 }
 
+// UnmarshalJSON normalizes the message's content field, which the gateway
+// sends in either of the two Anthropic shapes: a plain string (the short
+// form) or an array of typed content blocks. A string payload is wrapped
+// in a single text block so the rest of the history pipeline can treat
+// both shapes uniformly. An unrecognised content shape leaves Content nil
+// rather than failing the whole load — one odd message must not blank the
+// entire conversation history.
+func (hm *historyMessage) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Role      string          `json:"role"`
+		Content   json.RawMessage `json:"content"`
+		Timestamp int64           `json:"timestamp,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	hm.Role = raw.Role
+	hm.Timestamp = raw.Timestamp
+	hm.Content = nil
+	if len(raw.Content) == 0 {
+		return nil
+	}
+	// Array form: typed content blocks.
+	var blocks []chatContentBlock
+	if err := json.Unmarshal(raw.Content, &blocks); err == nil {
+		hm.Content = blocks
+		return nil
+	}
+	// String form: wrap the text in a single text block.
+	var s string
+	if err := json.Unmarshal(raw.Content, &s); err == nil {
+		if s != "" {
+			hm.Content = []chatContentBlock{{Type: "text", Text: s}}
+		}
+		return nil
+	}
+	// Unknown shape — leave content empty so the message is skipped
+	// downstream instead of aborting the whole history load.
+	return nil
+}
+
 func (m chatModel) loadHistory() tea.Cmd {
 	sessionKey := m.sessionKey
 	b := m.backend

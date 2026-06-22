@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -104,6 +106,167 @@ func TestBuildCronTranscriptMessages_DedupesIdenticalRunAndDeliveryError(t *test
 	}
 	if got := msgs[2].errMsg; got != "Run error: boom" {
 		t.Errorf("expected dedup'd 'Run error: boom'; got %q", got)
+	}
+}
+
+// TestHistoryMessageUnmarshalJSON pins the content-field normalisation
+// against the two Anthropic wire shapes a history turn may carry — a
+// plain string (the short form) and an array of typed blocks — plus the
+// empty/null/unknown fallbacks that must never abort the decode. The
+// string case is the direct regression guard for the gateway sending
+// content as a bare string, which previously failed the whole history
+// load with "cannot unmarshal string into ... []tui.chatContentBlock".
+func TestHistoryMessageUnmarshalJSON(t *testing.T) {
+	cases := []struct {
+		name      string
+		raw       string
+		wantRole  string
+		wantTs    int64
+		wantBlock []chatContentBlock
+		wantErr   bool
+	}{
+		{
+			name:      "string content wrapped in text block",
+			raw:       `{"role":"user","content":"hello there"}`,
+			wantRole:  "user",
+			wantBlock: []chatContentBlock{{Type: "text", Text: "hello there"}},
+		},
+		{
+			name:      "string content preserves timestamp",
+			raw:       `{"role":"assistant","content":"hi","timestamp":1700000000000}`,
+			wantRole:  "assistant",
+			wantTs:    1700000000000,
+			wantBlock: []chatContentBlock{{Type: "text", Text: "hi"}},
+		},
+		{
+			name:     "empty string content yields no blocks",
+			raw:      `{"role":"user","content":""}`,
+			wantRole: "user",
+		},
+		{
+			name:     "array content preserved",
+			raw:      `{"role":"assistant","content":[{"type":"thinking","text":"hmm"},{"type":"text","text":"answer"}]}`,
+			wantRole: "assistant",
+			wantBlock: []chatContentBlock{
+				{Type: "thinking", Text: "hmm"},
+				{Type: "text", Text: "answer"},
+			},
+		},
+		{
+			name:     "empty array content",
+			raw:      `{"role":"user","content":[]}`,
+			wantRole: "user",
+		},
+		{
+			name:     "missing content key",
+			raw:      `{"role":"user"}`,
+			wantRole: "user",
+		},
+		{
+			name:     "null content",
+			raw:      `{"role":"user","content":null}`,
+			wantRole: "user",
+		},
+		{
+			name:     "unknown content shape left empty not error",
+			raw:      `{"role":"user","content":42}`,
+			wantRole: "user",
+		},
+		{
+			name:    "malformed json errors",
+			raw:     `{not json`,
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var hm historyMessage
+			err := json.Unmarshal([]byte(tc.raw), &hm)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if hm.Role != tc.wantRole {
+				t.Errorf("role = %q, want %q", hm.Role, tc.wantRole)
+			}
+			if hm.Timestamp != tc.wantTs {
+				t.Errorf("timestamp = %d, want %d", hm.Timestamp, tc.wantTs)
+			}
+			if len(hm.Content) != len(tc.wantBlock) {
+				t.Fatalf("content = %+v, want %+v", hm.Content, tc.wantBlock)
+			}
+			for i, b := range hm.Content {
+				if b != tc.wantBlock[i] {
+					t.Errorf("content[%d] = %+v, want %+v", i, b, tc.wantBlock[i])
+				}
+			}
+		})
+	}
+}
+
+// TestFetchHistory_StringContentTurn reproduces the reported bug: a
+// gateway history payload whose turns carry content as a bare string
+// (rather than a block array) must load cleanly instead of failing the
+// whole conversation with an unmarshal error.
+func TestFetchHistory_StringContentTurn(t *testing.T) {
+	payload := `{"messages":[` +
+		`{"role":"user","content":"turn the lights on"},` +
+		`{"role":"assistant","content":"Done — lights are on."}` +
+		`]}`
+	fb := &fakeBackend{
+		chatHistoryHook: func(ctx context.Context, sessionKey string, limit int) (json.RawMessage, error) {
+			return json.RawMessage(payload), nil
+		},
+	}
+
+	msgs, err := fetchHistory(fb, "sess", nil, 50)
+	if err != nil {
+		t.Fatalf("fetchHistory returned error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].role != "user" || msgs[0].content != "turn the lights on" {
+		t.Errorf("msgs[0] = %+v, want user 'turn the lights on'", msgs[0])
+	}
+	if msgs[1].role != "assistant" || msgs[1].content != "Done — lights are on." {
+		t.Errorf("msgs[1] = %+v, want assistant 'Done — lights are on.'", msgs[1])
+	}
+}
+
+// TestFetchHistory_MixedStringAndBlockTurns guards the realistic case
+// where a single conversation interleaves string-content and
+// block-array turns — a string turn must not break decoding of the
+// block turns around it.
+func TestFetchHistory_MixedStringAndBlockTurns(t *testing.T) {
+	payload := `{"messages":[` +
+		`{"role":"user","content":"first"},` +
+		`{"role":"assistant","content":[{"type":"thinking","text":"reasoning"},{"type":"text","text":"second"}]},` +
+		`{"role":"user","content":"third"}` +
+		`]}`
+	fb := &fakeBackend{
+		chatHistoryHook: func(ctx context.Context, sessionKey string, limit int) (json.RawMessage, error) {
+			return json.RawMessage(payload), nil
+		},
+	}
+
+	msgs, err := fetchHistory(fb, "sess", nil, 50)
+	if err != nil {
+		t.Fatalf("fetchHistory returned error: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[1].content != "second" {
+		t.Errorf("msgs[1].content = %q, want %q", msgs[1].content, "second")
+	}
+	if msgs[1].thinking != "reasoning" {
+		t.Errorf("msgs[1].thinking = %q, want %q", msgs[1].thinking, "reasoning")
 	}
 }
 

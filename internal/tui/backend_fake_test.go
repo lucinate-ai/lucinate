@@ -70,6 +70,11 @@ type fakeBackend struct {
 	// statusHook overrides the default /status payload so tests can
 	// inject backend-specific shapes (gateway block, history, thread).
 	statusHook func(ctx context.Context, agentID, sessionKey string) (*backend.BackendStatus, error)
+
+	// chatHistoryHook, when non-nil, replaces the default empty
+	// chat.history response so tests can stage the various gateway
+	// content shapes (string content, block arrays, mixed turns).
+	chatHistoryHook func(ctx context.Context, sessionKey string, limit int) (json.RawMessage, error)
 }
 
 func newFakeBackend() *fakeBackend {
@@ -124,6 +129,9 @@ func (f *fakeBackend) ChatSend(ctx context.Context, sessionKey string, params ba
 }
 func (f *fakeBackend) ChatAbort(ctx context.Context, sessionKey, runID string) error { return nil }
 func (f *fakeBackend) ChatHistory(ctx context.Context, sessionKey string, limit int) (json.RawMessage, error) {
+	if f.chatHistoryHook != nil {
+		return f.chatHistoryHook(ctx, sessionKey, limit)
+	}
 	return json.RawMessage(`{"messages":[]}`), nil
 }
 func (f *fakeBackend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, error) {
