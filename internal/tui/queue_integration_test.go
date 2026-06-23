@@ -28,11 +28,16 @@ func projectRoot() string {
 	return filepath.Join(filepath.Dir(thisFile), "..", "..")
 }
 
-// connectTestClient loads .env, creates a client, and connects to the gateway.
+// connectTestClient loads the integration env, creates a client, and connects
+// to the gateway.
 func connectTestClient(t *testing.T) *client.Client {
 	t.Helper()
-	// Load .env from project root since go test runs in the package directory.
-	envFile := filepath.Join(projectRoot(), ".env")
+	// Load the integration env file written by the setup scripts. It lives
+	// under test/integration/ rather than the repo root so it can never be
+	// mistaken for a real .env and silently bound the operator scopes of an
+	// interactive `lucinate` launched from the repo directory. go test runs in
+	// the package directory, so resolve the path from the repo root.
+	envFile := filepath.Join(projectRoot(), "test", "integration", "integration.env")
 	if _, err := os.Stat(envFile); err == nil {
 		_ = godotenv.Load(envFile)
 	}

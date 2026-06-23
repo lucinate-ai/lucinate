@@ -43,6 +43,17 @@ if [ -d "$STATE_DIR" ]; then
     ok "Removed gateway state directory"
 fi
 
+# --- Remove integration env ------------------------------------------------
+
+# The setup scripts write integration.env to bound the operator scopes for
+# test runs. Remove it on teardown so it can never leak into an interactive
+# `lucinate` launched from the repo and silently strip the operator.admin scope.
+ENV_FILE="$SCRIPT_DIR/integration.env"
+if [ -f "$ENV_FILE" ]; then
+    rm -f "$ENV_FILE"
+    ok "Removed integration.env"
+fi
+
 # --- Restore device token --------------------------------------------------
 
 if [ -f "$BACKUP_FILE" ]; then

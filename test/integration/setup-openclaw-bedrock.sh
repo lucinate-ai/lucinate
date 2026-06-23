@@ -17,7 +17,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 IDENTITY_DIR="$HOME/.lucinate/identity/localhost_18789"
 BACKUP_FILE="$IDENTITY_DIR/device-token.backup"
@@ -169,17 +168,17 @@ else
     fail "Connection failed. Check gateway logs: docker compose -f $COMPOSE_FILE logs gateway"
 fi
 
-# --- Write .env for test runs ---------------------------------------------
+# --- Write integration.env for test runs ----------------------------------
 
-info "Writing test .env"
-cat > "$PROJECT_ROOT/.env" <<EOF
+info "Writing test integration.env"
+cat > "$SCRIPT_DIR/integration.env" <<EOF
 OPENCLAW_GATEWAY_URL=$GATEWAY_URL
 # The setup-code bootstrap profile grants read/write/approvals but not admin,
 # so the device token is bounded to those scopes. Request the matching set;
 # asking for operator.admin would be rejected as a scope mismatch.
 OPENCLAW_OPERATOR_SCOPES=operator.read,operator.write,operator.approvals
 EOF
-ok "Wrote .env with OPENCLAW_GATEWAY_URL=$GATEWAY_URL"
+ok "Wrote test/integration/integration.env with OPENCLAW_GATEWAY_URL=$GATEWAY_URL"
 
 # --- Done ------------------------------------------------------------------
 

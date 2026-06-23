@@ -1,6 +1,9 @@
 services:
   gateway:
-    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    # Pin a known-good gateway version by default. `:latest` has broken the
+    # setup-code bootstrap (NOT_PAIRED) in the past, so the local scripts need a
+    # stable pin. CI overrides this via OPENCLAW_IMAGE to sweep its version matrix.
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.5.28}
     user: "${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}"
     ports:
       - "18789:18789"

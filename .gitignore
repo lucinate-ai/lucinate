@@ -5,6 +5,7 @@ lucinate
 .env
 .env.openai
 .env.hermes
+test/integration/integration.env
 
 # Coverage
 coverage.out

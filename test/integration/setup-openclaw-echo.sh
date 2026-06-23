@@ -18,7 +18,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 IDENTITY_DIR="$HOME/.lucinate/identity/localhost_18789"
 BACKUP_FILE="$IDENTITY_DIR/device-token.backup"
@@ -89,7 +88,7 @@ mkdir -p "$STATE_DIR"
 cp "$SCRIPT_DIR/openclaw.echo.json" "$STATE_DIR/openclaw.json"
 ok "State directory ready at $STATE_DIR"
 
-info "Starting OpenClaw gateway (${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest})"
+info "Starting OpenClaw gateway (${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.5.28})"
 # Don't use `--wait`: a fresh gateway installs bundled runtime deps on first
 # start (~30s) during which the healthcheck fails; poll /healthz instead.
 OPENCLAW_UID="$(id -u)" OPENCLAW_GID="$(id -g)" \
@@ -158,22 +157,22 @@ else
     fail "Connection failed. Logs: docker compose -f $COMPOSE_FILE logs gateway"
 fi
 
-# --- Write .env for test runs ---------------------------------------------
+# --- Write integration.env for test runs ----------------------------------
 
-info "Writing test .env"
-cat > "$PROJECT_ROOT/.env" <<EOF
+info "Writing test integration.env"
+cat > "$SCRIPT_DIR/integration.env" <<EOF
 OPENCLAW_GATEWAY_URL=$GATEWAY_URL
 # The setup-code bootstrap profile grants read/write/approvals but not admin,
 # so the device token is bounded to those scopes. Request the matching set.
 OPENCLAW_OPERATOR_SCOPES=$OPERATOR_SCOPES
 EOF
-ok "Wrote .env"
+ok "Wrote test/integration/integration.env"
 
 echo ""
 info "OpenClaw (echo model) integration test environment is ready"
 echo ""
 echo "  Provider: echomodel (no API charge)"
-echo "  Gateway:  $GATEWAY_URL  (${OPENCLAW_IMAGE:-latest})"
+echo "  Gateway:  $GATEWAY_URL  (${OPENCLAW_IMAGE:-2026.5.28})"
 echo "  Run tests:     make test-integration-openclaw"
 echo "  Tear down:     make test-integration-openclaw-teardown"
 echo ""
