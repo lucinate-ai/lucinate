@@ -27,6 +27,23 @@ func TestAskConfigModel_PrefillsFromPrefs(t *testing.T) {
 	}
 }
 
+func TestAskConfigModel_Init(t *testing.T) {
+	if cmd := newAskConfigModel(config.DefaultPreferences(), false).Init(); cmd != nil {
+		t.Error("expected nil cmd from Init")
+	}
+}
+
+func TestAskConfigModel_NonKeyMsgRoutesToFocusedInputWithoutChangingFocus(t *testing.T) {
+	m := newAskConfigModel(config.DefaultPreferences(), false)
+	m.focusInitial()
+	// A non-key message (e.g. a cursor blink tick) is forwarded to the
+	// focused input for its animation and must not move focus.
+	next, _ := m.Update(spinnerTickMsg{})
+	if next.focusIdx != askFieldConnection {
+		t.Errorf("non-key msg should not change focus, got %d", next.focusIdx)
+	}
+}
+
 func TestAskConfigModel_FocusInitialAndNavigate(t *testing.T) {
 	m := newAskConfigModel(config.DefaultPreferences(), false)
 	m.focusInitial()
@@ -102,6 +119,72 @@ func TestAskConfigModel_SaveOnEscEmitsClosedMsg(t *testing.T) {
 	if closed.prefs.Ask.Connection != "home" || closed.prefs.Ask.Agent != "bot" ||
 		closed.prefs.Ask.Session != "sess" || !closed.prefs.Ask.Detach {
 		t.Errorf("saved Ask defaults wrong: %+v", closed.prefs.Ask)
+	}
+}
+
+func TestAskConfigModel_ShiftTabNavigatesBackwards(t *testing.T) {
+	m := newAskConfigModel(config.DefaultPreferences(), false)
+	m.focusInitial() // connection (first field)
+
+	// Shift+Tab from the first field wraps to the last (detach).
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.focusIdx != askFieldDetach {
+		t.Fatalf("shift+tab should wrap to detach, got %d", m.focusIdx)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.focusIdx != askFieldSession {
+		t.Fatalf("shift+tab should step back to session, got %d", m.focusIdx)
+	}
+}
+
+func TestAskConfigModel_TypingUpdatesFocusedField(t *testing.T) {
+	m := newAskConfigModel(config.DefaultPreferences(), false)
+	m.focusInitial()
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // → agent
+	for _, r := range "bot" {
+		m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if m.agentInput.Value() != "bot" {
+		t.Errorf("typing should land in the focused agent field, got %q", m.agentInput.Value())
+	}
+	if m.connInput.Value() != "" {
+		t.Errorf("the unfocused connection field should be untouched, got %q", m.connInput.Value())
+	}
+}
+
+func TestAskConfigModel_WantsInput(t *testing.T) {
+	m := newAskConfigModel(config.DefaultPreferences(), false)
+	m.focusIdx = askFieldConnection
+	if !m.wantsInput() {
+		t.Error("a text field should want free-form input")
+	}
+	m.focusIdx = askFieldDetach
+	if m.wantsInput() {
+		t.Error("the detach toggle should not want free-form input")
+	}
+}
+
+func TestAskConfigModel_TriggerAction(t *testing.T) {
+	t.Setenv("LUCINATE_DATA_DIR", t.TempDir())
+	m := newAskConfigModel(config.DefaultPreferences(), false)
+
+	// toggle flips detach regardless of focus (embedders dispatch by ID).
+	m, _ = m.TriggerAction("toggle")
+	if !m.detach {
+		t.Error("toggle action should turn detach on")
+	}
+
+	// back saves and emits the closed message.
+	_, cmd := m.TriggerAction("back")
+	if cmd == nil {
+		t.Fatal("expected a save cmd from the back action")
+	}
+	closed, ok := cmd().(askConfigClosedMsg)
+	if !ok {
+		t.Fatalf("expected askConfigClosedMsg, got %T", cmd())
+	}
+	if !closed.prefs.Ask.Detach {
+		t.Error("saved prefs should carry the toggled-on detach value")
 	}
 }
 

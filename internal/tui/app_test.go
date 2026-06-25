@@ -455,3 +455,84 @@ func TestAppModel_CreateSessionHonoursRequestTimeout(t *testing.T) {
 		t.Fatal("CreateSession command never returned — request deadline is not wired")
 	}
 }
+
+// TestAppModel_ConfigReturnsToOpeningView verifies the config screen
+// hands control back to whichever view opened it. Config is reachable
+// from chat (/config), the connections list, and the agent list, so a
+// hard-coded "return to chat" would strand the user in chat after
+// opening config before any session exists.
+func TestAppModel_ConfigReturnsToOpeningView(t *testing.T) {
+	for _, origin := range []viewState{viewChat, viewConnections, viewSelect} {
+		m := AppModel{state: origin}
+
+		opened, _ := m.update(showConfigMsg{})
+		if opened.state != viewConfig {
+			t.Fatalf("origin %v: expected viewConfig, got %v", origin, opened.state)
+		}
+		if opened.configReturn != origin {
+			t.Fatalf("origin %v: configReturn = %v, want origin", origin, opened.configReturn)
+		}
+
+		// Esc (the global handler) returns to the opening view.
+		back, _ := opened.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		if back.state != origin {
+			t.Errorf("origin %v: esc should return to origin, got %v", origin, back.state)
+		}
+
+		// The embedder-facing Back action (goBackFromConfigMsg) agrees.
+		back2, _ := opened.update(goBackFromConfigMsg{})
+		if back2.state != origin {
+			t.Errorf("origin %v: Back should return to origin, got %v", origin, back2.state)
+		}
+	}
+}
+
+// TestAppModel_AskConfigSubScreenRoundTrip walks the full ask-defaults
+// path: config → ask sub-screen → save → back to config, with the
+// original opening view preserved across the hop so the eventual Esc
+// from config still lands where the user came from.
+func TestAppModel_AskConfigSubScreenRoundTrip(t *testing.T) {
+	// Opened from the agent list.
+	m := AppModel{state: viewSelect}
+	cfg, _ := m.update(showConfigMsg{})
+
+	ask, cmd := cfg.update(showAskConfigMsg{})
+	if ask.state != viewAskConfig {
+		t.Fatalf("expected viewAskConfig, got %v", ask.state)
+	}
+	if cmd == nil {
+		t.Error("expected a focus cmd on entering the ask sub-screen")
+	}
+
+	// Esc inside the sub-screen is handled by the model (which saves),
+	// not by the global handler — the view stays put until the close
+	// message it emits is processed.
+	escd, saveCmd := ask.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if escd.state != viewAskConfig {
+		t.Errorf("esc should stay in viewAskConfig until the save resolves, got %v", escd.state)
+	}
+	if saveCmd == nil {
+		t.Fatal("expected a save cmd from esc in the sub-screen")
+	}
+	if _, ok := saveCmd().(askConfigClosedMsg); !ok {
+		t.Errorf("expected askConfigClosedMsg from the save cmd, got %T", saveCmd())
+	}
+
+	// Closing the sub-screen returns to config and propagates the prefs.
+	prefs := config.DefaultPreferences()
+	prefs.Ask = config.AskDefaults{Connection: "home", Agent: "bot"}
+	closed, _ := ask.update(askConfigClosedMsg{prefs: prefs})
+	if closed.state != viewConfig {
+		t.Fatalf("expected viewConfig after closing the sub-screen, got %v", closed.state)
+	}
+	if closed.prefs.Ask.Connection != "home" || closed.prefs.Ask.Agent != "bot" {
+		t.Errorf("ask prefs not propagated to AppModel: %+v", closed.prefs.Ask)
+	}
+
+	// configReturn survived the sub-screen hop, so Esc from config still
+	// returns to the agent list it was opened from.
+	back, _ := closed.update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if back.state != viewSelect {
+		t.Errorf("expected esc from config to return to viewSelect origin, got %v", back.state)
+	}
+}
