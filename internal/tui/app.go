@@ -138,6 +138,15 @@ type AppModel struct {
 	// View() that emits the mode lives on AppModel.
 	mouseCapture bool
 
+	// cronsReturnChat preserves the chat the user was viewing when they
+	// opened the cron browser. Opening a run transcript rebuilds chatModel
+	// in place (see cronTranscriptMsg), so without this the esc-from-crons
+	// path would strand the user on the transcript instead of the screen
+	// they came from. Captured the first time a transcript replaces the
+	// live chat and restored when leaving the cron browser.
+	cronsReturnChat  chatModel
+	cronsReturnValid bool
+
 	onInputFocusChanged func(bool)
 	lastWantsInput      bool
 	inputFocusReported  bool
@@ -652,10 +661,22 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		}
 		m.cronsModel = newCronsModel(cron, msg.filterAgentID, msg.filterLabel, m.hideActionHints, m.activeConn, m.disableExitKeys)
 		m.cronsModel.setSize(m.width, m.height)
+		// Fresh excursion: forget any chat preserved by a prior one.
+		m.cronsReturnValid = false
 		m.state = viewCrons
 		return m, m.cronsModel.Init()
 
 	case goBackFromCronsMsg:
+		// If a transcript replaced the live chat during this excursion,
+		// restore the chat the user opened the crons list from so esc
+		// lands them back on the screen they came from.
+		if m.cronsReturnValid {
+			m.chatModel = m.cronsReturnChat
+			m.cronsReturnChat = chatModel{}
+			m.cronsReturnValid = false
+			m.chatModel.setSize(m.width, m.height)
+			m.chatModel.updateViewport()
+		}
 		m.state = viewChat
 		return m, nil
 
@@ -692,6 +713,13 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		// same data the run-history previews on the cron-detail page
 		// already use.
 		_, _ = m.chatModel.stopRecording()
+		// Preserve the chat the user came from (only the first time, so a
+		// second transcript view doesn't overwrite it with a transcript)
+		// so esc out of the crons list can restore it.
+		if !m.cronsReturnValid {
+			m.cronsReturnChat = m.chatModel
+			m.cronsReturnValid = true
+		}
 		m.chatModel = newChatModel(m.backend, "", msg.job.AgentID, msg.agentName, "", m.prefs, true, connectionLabel(m.activeConn), "", m.brightCursor)
 		m.chatModel.setSize(m.width, m.height)
 		m.chatModel.messages = buildCronTranscriptMessages(cronPayloadText(msg.job), msg.runs, m.chatModel.renderer)
