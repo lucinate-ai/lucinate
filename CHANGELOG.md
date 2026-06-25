@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.2] - 2026-06-25
+### Fixed
+- fix(client): guard disconnected-gateway sends against panic and hang
+- fix(openclaw): keep a stray .env from blocking agent creation
+
 ## [1.18.1] - 2026-06-22
 ### Fixed
 - fix(tui): accept string content in chat history turns (#159)
