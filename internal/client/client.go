@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -18,6 +19,14 @@ import (
 
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
+
+// ErrNotConnected is returned by RPC methods when the gateway client is
+// not currently attached — either before the first Connect, after Close,
+// or while the supervisor is between Reconnect attempts (the underlying
+// transport is rebuilt from scratch, so c.gw is briefly nil during each
+// retry). Surfaces as a clean error in the TUI's chat-send error path
+// instead of a nil-pointer panic.
+var ErrNotConnected = errors.New("gateway not connected")
 
 // IdentityStore abstracts persistence of the device keypair and device token.
 //
@@ -376,17 +385,58 @@ func (c *Client) Events() <-chan protocol.Event {
 	return c.events
 }
 
-// gw returns the current gateway client under read-lock. Callers must
-// handle nil (returned only before the first Connect succeeds).
-func (c *Client) currentGW() *gateway.Client {
+// currentGW returns the current gateway client under read-lock, or
+// ErrNotConnected when none is attached (before the first Connect, after
+// Close, or briefly between Reconnect attempts while the supervisor
+// retries a failed dial). Callers MUST propagate the error rather than
+// dereferencing the gw — Reconnect nils gw out before re-dialing so a
+// dial failure (e.g. tunnel drop) leaves it nil for the full backoff
+// window, and a stray dereference there is what panics the TUI.
+func (c *Client) currentGW() (*gateway.Client, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.gw
+	if c.gw == nil {
+		return nil, ErrNotConnected
+	}
+	return c.gw, nil
+}
+
+// defaultRPCTimeout bounds any gateway RPC whose caller did not already
+// set a deadline. It exists because a silently-dropped transport (a
+// tunnel that vanishes without a TCP close) leaves the SDK's request
+// loop waiting on a response that never arrives: the write succeeds into
+// the kernel send buffer, but the gateway is gone, and the SDK's internal
+// "connection closed" signal only fires once the OS TCP timeout lapses
+// minutes later. Without a deadline the calling goroutine — a chat send,
+// the post-send history refresh, a stats poll — would block for that
+// whole window. The bound turns the silent hang into a prompt error the
+// TUI can surface, while staying well above any healthy round-trip.
+const defaultRPCTimeout = 30 * time.Second
+
+// rpc is the single funnel every gateway RPC method goes through. It
+// returns the live gateway client (or ErrNotConnected) together with a
+// context bounded by defaultRPCTimeout, unless the caller already set its
+// own deadline. The returned cancel must always be called.
+func (c *Client) rpc(ctx context.Context) (*gateway.Client, context.Context, context.CancelFunc, error) {
+	gw, err := c.currentGW()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return gw, ctx, func() {}, nil
+	}
+	cctx, cancel := context.WithTimeout(ctx, defaultRPCTimeout)
+	return gw, cctx, cancel, nil
 }
 
 // ListAgents returns the list of available agents.
 func (c *Client) ListAgents(ctx context.Context) (*protocol.AgentsListResult, error) {
-	return c.currentGW().AgentsList(ctx)
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return gw.AgentsList(ctx)
 }
 
 // grantedScopes returns the operator scopes the gateway granted this
@@ -395,8 +445,8 @@ func (c *Client) ListAgents(ctx context.Context) (*protocol.AgentsListResult, er
 // on connect and those the device token actually carries, so it can be
 // narrower than defaultOperatorScopes.
 func (c *Client) grantedScopes() []string {
-	gw := c.currentGW()
-	if gw == nil {
+	gw, err := c.currentGW()
+	if err != nil {
 		return nil
 	}
 	if h := gw.Hello(); h != nil && h.Auth != nil {
@@ -448,7 +498,11 @@ func (c *Client) DeleteAgent(ctx context.Context, agentID string, deleteFiles bo
 	if err := c.requireAdminScope("agents delete"); err != nil {
 		return err
 	}
-	gw := c.currentGW()
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
 	flag := deleteFiles
 	if _, err := gw.AgentsDelete(ctx, protocol.AgentsDeleteParams{
 		AgentID:     agentID,
@@ -465,7 +519,11 @@ func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error 
 	if err := c.requireAdminScope("agents create"); err != nil {
 		return err
 	}
-	gw := c.currentGW()
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
 	result, err := gw.AgentsCreate(ctx, protocol.AgentsCreateParams{
 		Name:      name,
 		Workspace: workspace,
@@ -490,9 +548,14 @@ func (c *Client) CreateAgent(ctx context.Context, name, workspace string) error 
 
 // SessionsList lists sessions for the given agent.
 func (c *Client) SessionsList(ctx context.Context, agentID string) (json.RawMessage, error) {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
 	includeTitles := true
 	includeLastMsg := true
-	return c.currentGW().SessionsList(ctx, protocol.SessionsListParams{
+	return gw.SessionsList(ctx, protocol.SessionsListParams{
 		AgentID:              agentID,
 		IncludeDerivedTitles: &includeTitles,
 		IncludeLastMessage:   &includeLastMsg,
@@ -502,7 +565,12 @@ func (c *Client) SessionsList(ctx context.Context, agentID string) (json.RawMess
 // CreateSession creates or resumes a session for the given agent and returns
 // the gateway-assigned session key.
 func (c *Client) CreateSession(ctx context.Context, agentID, key string) (string, error) {
-	raw, err := c.currentGW().SessionsCreate(ctx, protocol.SessionsCreateParams{
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer cancel()
+	raw, err := gw.SessionsCreate(ctx, protocol.SessionsCreateParams{
 		Key:     key,
 		AgentID: agentID,
 	})
@@ -520,7 +588,12 @@ func (c *Client) CreateSession(ctx context.Context, agentID, key string) (string
 
 // ChatSend sends a chat message and returns the initial ack.
 func (c *Client) ChatSend(ctx context.Context, sessionKey, message, idemKey string) (*protocol.ChatSendResult, error) {
-	return c.currentGW().ChatSend(ctx, protocol.ChatSendParams{
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return gw.ChatSend(ctx, protocol.ChatSendParams{
 		SessionKey:     sessionKey,
 		Message:        message,
 		IdempotencyKey: idemKey,
@@ -529,7 +602,12 @@ func (c *Client) ChatSend(ctx context.Context, sessionKey, message, idemKey stri
 
 // ChatHistory retrieves recent chat history for a session.
 func (c *Client) ChatHistory(ctx context.Context, sessionKey string, limit int) (json.RawMessage, error) {
-	return c.currentGW().ChatHistory(ctx, protocol.ChatHistoryParams{
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return gw.ChatHistory(ctx, protocol.ChatHistoryParams{
 		SessionKey: sessionKey,
 		Limit:      &limit,
 	})
@@ -537,8 +615,13 @@ func (c *Client) ChatHistory(ctx context.Context, sessionKey string, limit int) 
 
 // SessionUsage retrieves usage data for a session.
 func (c *Client) SessionUsage(ctx context.Context, sessionKey string) (json.RawMessage, error) {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
 	includeContext := true
-	return c.currentGW().SessionsUsage(ctx, protocol.SessionsUsageParams{
+	return gw.SessionsUsage(ctx, protocol.SessionsUsageParams{
 		Key:                  sessionKey,
 		IncludeContextWeight: &includeContext,
 	})
@@ -546,12 +629,22 @@ func (c *Client) SessionUsage(ctx context.Context, sessionKey string) (json.RawM
 
 // ModelsList returns the available models.
 func (c *Client) ModelsList(ctx context.Context) (*protocol.ModelsListResult, error) {
-	return c.currentGW().ModelsList(ctx)
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return gw.ModelsList(ctx)
 }
 
 // SessionPatchModel changes the model for a session.
 func (c *Client) SessionPatchModel(ctx context.Context, sessionKey, modelID string) error {
-	return c.currentGW().SessionsPatch(ctx, protocol.SessionsPatchParams{
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return gw.SessionsPatch(ctx, protocol.SessionsPatchParams{
 		Key:   sessionKey,
 		Model: &modelID,
 	})
@@ -559,7 +652,12 @@ func (c *Client) SessionPatchModel(ctx context.Context, sessionKey, modelID stri
 
 // SessionPatchThinking sets the thinking level for a session.
 func (c *Client) SessionPatchThinking(ctx context.Context, sessionKey, level string) error {
-	return c.currentGW().SessionsPatch(ctx, protocol.SessionsPatchParams{
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return gw.SessionsPatch(ctx, protocol.SessionsPatchParams{
 		Key:           sessionKey,
 		ThinkingLevel: &level,
 	})
@@ -569,8 +667,13 @@ func (c *Client) SessionPatchThinking(ctx context.Context, sessionKey, level str
 // TwoPhase is set so the gateway returns immediately with status "accepted"
 // and the decision arrives asynchronously via an exec.approval.resolved event.
 func (c *Client) ExecRequest(ctx context.Context, command, sessionKey string) (*protocol.ExecApprovalRequestResult, error) {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
 	twoPhase := true
-	return c.currentGW().ExecApprovalRequest(ctx, protocol.ExecApprovalRequestParams{
+	return gw.ExecApprovalRequest(ctx, protocol.ExecApprovalRequestParams{
 		Command:    command,
 		SessionKey: &sessionKey,
 		TwoPhase:   &twoPhase,
@@ -579,7 +682,12 @@ func (c *Client) ExecRequest(ctx context.Context, command, sessionKey string) (*
 
 // ExecResolve approves or denies a pending exec approval.
 func (c *Client) ExecResolve(ctx context.Context, id, decision string) (*protocol.ExecApprovalResolveResult, error) {
-	return c.currentGW().ExecApprovalResolve(ctx, protocol.ExecApprovalResolveParams{
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return gw.ExecApprovalResolve(ctx, protocol.ExecApprovalResolveParams{
 		ID:       id,
 		Decision: decision,
 	})
@@ -587,7 +695,12 @@ func (c *Client) ExecResolve(ctx context.Context, id, decision string) (*protoco
 
 // ChatAbort aborts a running chat turn.
 func (c *Client) ChatAbort(ctx context.Context, sessionKey, runID string) error {
-	return c.currentGW().ChatAbort(ctx, protocol.ChatAbortParams{
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return gw.ChatAbort(ctx, protocol.ChatAbortParams{
 		SessionKey: sessionKey,
 		RunID:      runID,
 	})
@@ -595,13 +708,23 @@ func (c *Client) ChatAbort(ctx context.Context, sessionKey, runID string) error 
 
 // SessionCompact compacts (summarises) the session context.
 func (c *Client) SessionCompact(ctx context.Context, sessionKey string) error {
-	return c.currentGW().SessionsCompact(ctx, protocol.SessionsCompactParams{Key: sessionKey})
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return gw.SessionsCompact(ctx, protocol.SessionsCompactParams{Key: sessionKey})
 }
 
 // SessionDelete deletes a session and its transcript.
 func (c *Client) SessionDelete(ctx context.Context, sessionKey string) error {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
 	deleteTranscript := true
-	return c.currentGW().SessionsDelete(ctx, protocol.SessionsDeleteParams{
+	return gw.SessionsDelete(ctx, protocol.SessionsDeleteParams{
 		Key:              sessionKey,
 		DeleteTranscript: &deleteTranscript,
 	})
@@ -609,7 +732,12 @@ func (c *Client) SessionDelete(ctx context.Context, sessionKey string) error {
 
 // GatewayHealth retrieves the gateway health snapshot.
 func (c *Client) GatewayHealth(ctx context.Context) (*protocol.HealthEvent, error) {
-	raw, err := c.currentGW().Health(ctx)
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	raw, err := gw.Health(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("health: %w", err)
 	}
@@ -623,8 +751,8 @@ func (c *Client) GatewayHealth(ctx context.Context) (*protocol.HealthEvent, erro
 // HelloUptimeMs returns the gateway uptime in milliseconds from the connect
 // handshake, or 0 if not connected.
 func (c *Client) HelloUptimeMs() int64 {
-	gw := c.currentGW()
-	if gw == nil {
+	gw, err := c.currentGW()
+	if err != nil {
 		return 0
 	}
 	if h := gw.Hello(); h != nil {
@@ -636,8 +764,8 @@ func (c *Client) HelloUptimeMs() int64 {
 // HelloServerVersion returns the gateway's reported version string from the
 // connect handshake, or "" if not connected or unknown.
 func (c *Client) HelloServerVersion() string {
-	gw := c.currentGW()
-	if gw == nil {
+	gw, err := c.currentGW()
+	if err != nil {
 		return ""
 	}
 	if h := gw.Hello(); h != nil {
@@ -649,8 +777,8 @@ func (c *Client) HelloServerVersion() string {
 // HelloProtocol returns the protocol (API) version negotiated with the gateway
 // during the connect handshake, or 0 if not connected/unknown.
 func (c *Client) HelloProtocol() int {
-	gw := c.currentGW()
-	if gw == nil {
+	gw, err := c.currentGW()
+	if err != nil {
 		return 0
 	}
 	if h := gw.Hello(); h != nil {
@@ -693,22 +821,42 @@ func (c *Client) StoreToken(token string) error {
 
 // CronsList lists cron jobs on the gateway.
 func (c *Client) CronsList(ctx context.Context, params protocol.CronListParams) (*protocol.CronListResult, error) {
-	return c.currentGW().CronList(ctx, params)
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return gw.CronList(ctx, params)
 }
 
 // CronRuns retrieves the run history for a cron job (or all jobs).
 func (c *Client) CronRuns(ctx context.Context, params protocol.CronRunsParams) (*protocol.CronRunsResult, error) {
-	return c.currentGW().CronRuns(ctx, params)
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return gw.CronRuns(ctx, params)
 }
 
 // CronAdd creates a new cron job.
 func (c *Client) CronAdd(ctx context.Context, params protocol.CronAddParams) (json.RawMessage, error) {
-	return c.currentGW().CronAdd(ctx, params)
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return gw.CronAdd(ctx, params)
 }
 
 // CronUpdate updates an existing cron job.
 func (c *Client) CronUpdate(ctx context.Context, params protocol.CronUpdateParams) error {
-	return c.currentGW().CronUpdate(ctx, params)
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return gw.CronUpdate(ctx, params)
 }
 
 // CronUpdateRaw updates an existing cron job using a raw patch map.
@@ -719,7 +867,12 @@ func (c *Client) CronUpdate(ctx context.Context, params protocol.CronUpdateParam
 // The form-edit flow uses this so clearing the model or description
 // fields actually persists.
 func (c *Client) CronUpdateRaw(ctx context.Context, jobID string, patch map[string]any) error {
-	resp, err := c.currentGW().Send(ctx, string(protocol.MethodCronUpdate), map[string]any{
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	resp, err := gw.Send(ctx, string(protocol.MethodCronUpdate), map[string]any{
 		"id":    jobID,
 		"patch": patch,
 	})
@@ -734,23 +887,37 @@ func (c *Client) CronUpdateRaw(ctx context.Context, jobID string, patch map[stri
 
 // CronRemove deletes a cron job.
 func (c *Client) CronRemove(ctx context.Context, jobID string) error {
-	return c.currentGW().CronRemove(ctx, protocol.CronRemoveParams{ID: jobID})
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	return gw.CronRemove(ctx, protocol.CronRemoveParams{ID: jobID})
 }
 
 // CronRun manually triggers a cron job. When force is true, the job runs
 // regardless of its schedule; otherwise it only runs if currently due.
 func (c *Client) CronRun(ctx context.Context, jobID string, force bool) error {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
 	mode := "due"
 	if force {
 		mode = "force"
 	}
-	return c.currentGW().CronRun(ctx, protocol.CronRunParams{ID: jobID, Mode: mode})
+	return gw.CronRun(ctx, protocol.CronRunParams{ID: jobID, Mode: mode})
 }
 
 // GW returns the underlying gateway client (for direct RPC access).
 // May return nil if no connection has been established yet, or briefly
-// during a reconnect cycle.
-func (c *Client) GW() *gateway.Client { return c.currentGW() }
+// during a reconnect cycle — callers must handle the nil case (the TUI's
+// capability-assertion sites already do).
+func (c *Client) GW() *gateway.Client {
+	gw, _ := c.currentGW()
+	return gw
+}
 
 // Close closes the gateway connection.
 func (c *Client) Close() error {
