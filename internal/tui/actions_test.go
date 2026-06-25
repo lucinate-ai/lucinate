@@ -55,6 +55,37 @@ func TestSelectModel_KeyDelegatesToTriggerAction(t *testing.T) {
 	}
 }
 
+func TestSelectModel_ConfigActionInManagedMode(t *testing.T) {
+	// Config is gated on the same managed-mode flag (showConnections) as
+	// the Connections action, so it only appears when the CLI owns the
+	// connection lifecycle.
+	hidden := selectModel{subState: subStateList, allowAgentManagement: true}
+	for _, a := range hidden.Actions() {
+		if a.ID == "config" {
+			t.Fatal("config action should not appear without showConnections")
+		}
+	}
+
+	shown := selectModel{subState: subStateList, allowAgentManagement: true, showConnections: true}
+	found := false
+	for _, a := range shown.Actions() {
+		if a.ID == "config" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected config action in managed mode, got %v", actionIDs(shown.Actions()))
+	}
+
+	_, cmd := shown.TriggerAction("config")
+	if cmd == nil {
+		t.Fatal("expected a cmd from the config action")
+	}
+	if _, ok := cmd().(showConfigMsg); !ok {
+		t.Fatalf("expected showConfigMsg, got %T", cmd())
+	}
+}
+
 func TestSessionsModel_Actions(t *testing.T) {
 	cases := []struct {
 		name    string

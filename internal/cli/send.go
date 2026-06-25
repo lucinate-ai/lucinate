@@ -17,6 +17,12 @@ import (
 // argument so the message body — which may contain text that looks
 // like flags — is taken verbatim from the remaining args. Use `--`
 // before a message that starts with a dash, the standard Unix escape.
+//
+// KEEP IN SYNC with runAsk (ask.go): `ask` is an alias for `send` that
+// pre-fills these same flags from the saved Ask defaults, so any change
+// to the flag set, message handling, or app.Send dispatch here should be
+// mirrored there (and any new send field should become customisable in
+// config.AskDefaults).
 func runSend(ctx context.Context, args []string, stdout io.Writer) error {
 	var (
 		connection, agent, session string

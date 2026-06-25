@@ -48,6 +48,16 @@ It does **not** guarantee:
 
 Detach is intended for cron-style automation ("nudge the agent at 09:00 to draft the morning digest, render the result on my next browse") and for fire-and-forget shell-pipeline steps that don't care about the response text.
 
+## The `ask` alias
+
+`lucinate ask` (`internal/cli/ask.go`) is a thin wrapper over the same `app.Send` pipeline — there is no second code path. The only difference from `send` is where the flags' default values come from:
+
+- `runAsk` loads `config.LoadPreferences().Ask` (a `config.AskDefaults` block in `config.json`) and seeds the `ask` flag set's defaults with it. An omitted `-c`/`-a`/`-s`/`-d` falls back to the saved value; an explicit flag still overrides it, because `flag` parsing runs after the defaults are set.
+- After parsing, `runAsk` guards on a blank connection or agent and returns an `ask:`-prefixed error pointing the user at `/config ▸ Ask command defaults`, rather than letting `app.Send`'s `send:`-prefixed "required" error surface for what is, in `ask`'s world, a configuration gap.
+- Everything else — message join, `--`/dash handling, the `app.Send` dispatch — is identical to `runSend`.
+
+`config.AskDefaults` has one field per `send` flag (`Connection`, `Agent`, `Session`, `Detach`). The three files carry mutual `KEEP IN SYNC` comments (`internal/cli/send.go`, `internal/cli/ask.go`, `internal/config/preferences.go`): a new field added to `send` should gain an `AskDefaults` field and a row in the TUI sub-screen so `ask` stays a complete alias. The defaults are edited in the TUI under `/config ▸ Ask command defaults` (`internal/tui/askconfigview.go`); see [commands.md](commands.md) for `/config` dispatch.
+
 ## Embedding `app.Send` from Go
 
 `SendOptions` is the embedder's seam set:

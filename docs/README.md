@@ -16,7 +16,7 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 | [crons.md](crons.md) | Gateway cron browser: list/detail/form substates, capability gating, raw-patch edit semantics |
 | [routines.md](routines.md) | Local prompt routines: STEPS.md format, controller lifecycle, auto-advance hook, directives, manager view |
 | [commands.md](commands.md) | Slash command dispatch, all built-in commands, tab completion, confirmation pattern |
-| [one-shot.md](one-shot.md) | One-shot CLI mode: `lucinate send` lifecycle, default session rule, detach semantics, embedding |
+| [one-shot.md](one-shot.md) | One-shot CLI mode: `lucinate send` lifecycle, default session rule, detach semantics, embedding, the `ask` alias |
 | [chat-launch.md](chat-launch.md) | Pre-navigated TUI launch: `lucinate chat` override plumbing, consumption points, stale-clearing rules |
 | [shell-execution.md](shell-execution.md) | `!` local exec and `!!` remote exec with two-phase approval |
 | [export-and-recording.md](export-and-recording.md) | `/record` and `/export` transcripts: canonical-history tap, dedup, file layout, lifecycle |

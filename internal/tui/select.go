@@ -577,6 +577,9 @@ func (m selectModel) Actions() []Action {
 	}
 	if m.showConnections {
 		actions = append(actions, Action{ID: "connections", Label: "Connections", Key: "c"})
+		// Config is gated on the same managed-mode flag as Connections;
+		// it's also reachable from chat and the connections list.
+		actions = append(actions, Action{ID: "config", Label: "Config", Key: ","})
 	}
 	return actions
 }
@@ -630,6 +633,8 @@ func (m selectModel) TriggerAction(id string) (selectModel, tea.Cmd) {
 		return m, m.loadAgents()
 	case "connections":
 		return m, func() tea.Msg { return showConnectionsMsg{} }
+	case "config":
+		return m, func() tea.Msg { return showConfigMsg{} }
 	}
 	return m, nil
 }

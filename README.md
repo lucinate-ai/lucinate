@@ -141,8 +141,9 @@ Use `/config` to open the preferences view. Settings are persisted to `~/.lucina
 | Check for updates on startup | On | Once a day, fetch a tiny manifest from `lucinate.ai` and show a subtle `↑` badge in the chat header when a newer release is out. No telemetry — just a single GET. |
 | History limit | 50 | Number of messages loaded when restoring a session (range 10–500) |
 | Connect timeout | 15s | Per-attempt deadline for the initial connect and each reconnect (range 5–300s — bump it for slow local LLMs) |
+| Ask command defaults | — | Connection, agent, session, and detach values pre-filled for `lucinate ask`. Opens a sub-screen (`Enter`); leave a field blank to keep requiring it on the command line. |
 
-In the config view, use `Space` to toggle checkboxes and `←`/`→` to adjust numeric values.
+In the config view, use `Space` to toggle checkboxes, `←`/`→` to adjust numeric values, and `Enter` to open a sub-screen like **Ask command defaults**. The preferences screen is also reachable from the connections and agent lists with `,`.
 
 ## Commands
 
@@ -279,7 +280,17 @@ echo "$reply" | tee notes.md
 lucinate send --connection my-con --agent main --detach "kick off the morning digest"
 ```
 
-For the lifecycle, the default-session rule, embedding `app.Send` from Go, and the detach contract, see [docs/one-shot.md](docs/one-shot.md).
+### Ask: send with your defaults baked in
+
+Typing `-c my-con -a main` on every call gets old. `lucinate ask` is `send` with the connection, agent, session, and detach flags pre-filled from a saved profile, so day to day it's just:
+
+```sh
+lucinate ask "what's on my plate today?"
+```
+
+Set the defaults once in the TUI under `/config` → **Ask command defaults**. Any flag you pass still wins — `lucinate ask -a other "…"` overrides the saved agent for that one call — and leaving a field blank in the config screen keeps requiring it on the command line.
+
+For the lifecycle, the default-session rule, embedding `app.Send` from Go, the detach contract, and the `ask` alias, see [docs/one-shot.md](docs/one-shot.md).
 
 ## Skip the pickers
 

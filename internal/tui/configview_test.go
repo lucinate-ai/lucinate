@@ -108,6 +108,32 @@ func TestConfigModel_SpaceTogglesOn(t *testing.T) {
 	}
 }
 
+func TestConfigModel_AskDefaultsRowOpensSubScreen(t *testing.T) {
+	m := newTestConfigModel()
+	m, _ = cursorToKey(t, m, "askDefaults")
+
+	if got := actionIDs(m.Actions()); !equalStrings(got, []string{"open-ask", "back"}) {
+		t.Fatalf("actions on ask-defaults row = %v, want [open-ask back]", got)
+	}
+
+	// Enter routes through the open-ask action and dispatches the
+	// showAskConfigMsg the AppModel turns into a view transition.
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a cmd from enter on the ask-defaults row")
+	}
+	if _, ok := cmd().(showAskConfigMsg); !ok {
+		t.Fatalf("expected showAskConfigMsg, got %T", cmd())
+	}
+}
+
+func TestConfigModel_View_ContainsAskDefaultsRow(t *testing.T) {
+	m := newTestConfigModel()
+	if !strings.Contains(m.View(), "Ask command defaults") {
+		t.Errorf("expected view to contain the ask-defaults row, got: %s", m.View())
+	}
+}
+
 func TestConfigModel_EscGoesBack(t *testing.T) {
 	m := newTestConfigModel()
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})

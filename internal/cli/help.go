@@ -17,6 +17,8 @@ func runHelp(args []string, out io.Writer) error {
 	switch args[0] {
 	case "send":
 		printSendUsage(out)
+	case "ask":
+		printAskUsage(out)
 	case "chat":
 		printChatUsage(out)
 	case "help":
@@ -36,6 +38,7 @@ func printTopUsage(out io.Writer) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Commands:")
 	fmt.Fprintln(out, "  send    Dispatch a single message and print the reply (one-shot, no TUI)")
+	fmt.Fprintln(out, "  ask     Like send, but with connection / agent pre-filled from saved defaults")
 	fmt.Fprintln(out, "  chat    Launch the TUI pre-navigated to a connection / agent / session")
 	fmt.Fprintln(out, "  help    Show help for lucinate or a specific command")
 	fmt.Fprintln(out, "")

@@ -15,6 +15,9 @@ type configItemKind int
 const (
 	configItemBool configItemKind = iota
 	configItemInt
+	// configItemAction is a row that, when activated (enter), navigates
+	// to a sub-screen rather than holding a value of its own.
+	configItemAction
 )
 
 type configItem struct {
@@ -46,6 +49,7 @@ func newConfigModel(prefs config.Preferences, hideHints bool) configModel {
 			{label: "Check for updates on startup", key: "checkForUpdates", kind: configItemBool, checked: prefs.UpdateChecksEnabled()},
 			{label: "History limit (messages loaded per session)", key: "historyLimit", kind: configItemInt, value: prefs.HistoryLimit, min: 10, max: 500, step: 10},
 			{label: "Connect timeout (seconds, increase for slow backends)", key: "connectTimeoutSeconds", kind: configItemInt, value: prefs.ConnectTimeoutSeconds, min: 5, max: 300, step: 5},
+			{label: "Ask command defaults…", key: "askDefaults", kind: configItemAction},
 		},
 	}
 }
@@ -107,8 +111,13 @@ func (m configModel) Update(msg tea.Msg) (configModel, tea.Cmd) {
 // form controls, not screen commands), so they don't appear here.
 func (m configModel) Actions() []Action {
 	actions := make([]Action, 0, 2)
-	if m.cursor >= 0 && m.cursor < len(m.items) && m.items[m.cursor].kind == configItemBool {
-		actions = append(actions, Action{ID: "toggle", Label: "Toggle", Key: "space"})
+	if m.cursor >= 0 && m.cursor < len(m.items) {
+		switch m.items[m.cursor].kind {
+		case configItemBool:
+			actions = append(actions, Action{ID: "toggle", Label: "Toggle", Key: "space"})
+		case configItemAction:
+			actions = append(actions, Action{ID: "open-ask", Label: "Configure", Key: "enter"})
+		}
 	}
 	actions = append(actions, Action{ID: "back", Label: "Back", Key: "esc"})
 	return actions
@@ -132,6 +141,8 @@ func (m configModel) TriggerAction(id string) (configModel, tea.Cmd) {
 			_ = config.SavePreferences(prefs)
 			return prefsUpdatedMsg{prefs: prefs}
 		}
+	case "open-ask":
+		return m, func() tea.Msg { return showAskConfigMsg{} }
 	case "back":
 		return m, func() tea.Msg { return goBackFromConfigMsg{} }
 	}
@@ -172,6 +183,8 @@ func (m configModel) View() string {
 			line = fmt.Sprintf("  %s %s", check, item.label)
 		case configItemInt:
 			line = fmt.Sprintf("  ◀ %d ▶  %s", item.value, item.label)
+		case configItemAction:
+			line = fmt.Sprintf("  › %s", item.label)
 		}
 		if i == m.cursor {
 			line = lipgloss.NewStyle().Foreground(accent).Bold(true).Render(line)
