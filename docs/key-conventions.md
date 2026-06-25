@@ -2,7 +2,7 @@
 
 Cross-view keyboard conventions for the lucinate TUI. New manager views, picker views, and forms should follow these so the user's mental model carries from one screen to the next.
 
-The conventions are descriptive of what is in the code today (`internal/tui/crons.go`, `internal/tui/routines.go`, `internal/tui/sessions.go`, `internal/tui/connections.go`, `internal/tui/configview.go`, `internal/tui/select.go`), not aspirational. When you find yourself wanting to deviate, rename the action so the convention still holds, or update this document with the new convention and a short rationale.
+The conventions are descriptive of what is in the code today (`internal/tui/crons.go`, `internal/tui/routines.go`, `internal/tui/sessions.go`, `internal/tui/connections.go`, `internal/tui/configview.go`, `internal/tui/askconfigview.go`, `internal/tui/select.go`), not aspirational. When you find yourself wanting to deviate, rename the action so the convention still holds, or update this document with the new convention and a short rationale.
 
 ## Action keys
 
@@ -19,7 +19,8 @@ The conventions are descriptive of what is in the code today (`internal/tui/cron
 | `!` | Run now | crons detail |
 | `a` | Toggle agent filter | crons list (only when filtering by agent) |
 | `c` | Connections | agent picker (when management surface allows it) |
-| `Space` | Toggle (boolean config item) | config view |
+| `,` | Config (open the preferences screen) | connections list, agent picker (managed mode) |
+| `Space` | Toggle (boolean config item) | config view, Ask-defaults sub-screen |
 
 A few of these warrant explanation:
 
