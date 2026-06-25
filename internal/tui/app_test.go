@@ -306,6 +306,84 @@ func runCmd(t *testing.T, cmd tea.Cmd) {
 	}
 }
 
+// TestAppModel_EscFromCrons_RestoresOriginalChat: opening a cron run
+// transcript rebuilds chatModel in place, so esc out of the crons list
+// must restore the chat the user opened the list from rather than
+// stranding them on the transcript.
+func TestAppModel_EscFromCrons_RestoresOriginalChat(t *testing.T) {
+	fake := newFakeBackend()
+	m := AppModel{backend: fake, width: 120, height: 40}
+	m.chatModel = newChatModel(fake, "orig-session", "agent-1", "Scout", "", config.Preferences{}, false, "", "", false)
+	m.chatModel.setSize(120, 40)
+	m.state = viewCrons
+
+	// Open a run transcript: this clobbers the live chat in place.
+	updated, _ := m.Update(cronTranscriptMsg{job: sampleJobs()[0], agentName: "Scout"})
+	m = updated.(AppModel)
+	if !m.cronsReturnValid {
+		t.Fatal("expected the original chat to be preserved when a transcript opens")
+	}
+	if !m.chatModel.transcript {
+		t.Fatal("expected the live chat to be the transcript after cronTranscriptMsg")
+	}
+
+	// Esc out of the crons list must put the original chat back.
+	updated, _ = m.Update(goBackFromCronsMsg{})
+	m = updated.(AppModel)
+	if m.state != viewChat {
+		t.Errorf("expected viewChat after esc from crons, got %v", m.state)
+	}
+	if m.chatModel.transcript {
+		t.Error("expected the original (non-transcript) chat to be restored")
+	}
+	if m.chatModel.sessionKey != "orig-session" {
+		t.Errorf("expected original session restored, got %q", m.chatModel.sessionKey)
+	}
+	if m.cronsReturnValid {
+		t.Error("expected the preserved chat to be released after restore")
+	}
+}
+
+// TestAppModel_ShowCrons_ClearsStalePreservedChat: each fresh crons
+// excursion must forget any chat preserved by a previous one, so an esc
+// that never opened a transcript doesn't restore a stale chat.
+func TestAppModel_ShowCrons_ClearsStalePreservedChat(t *testing.T) {
+	fake := newFakeBackend()
+	m := AppModel{backend: fake, width: 120, height: 40}
+	m.chatModel = newChatModel(fake, "orig-session", "agent-1", "Scout", "", config.Preferences{}, false, "", "", false)
+	m.state = viewChat
+	// Leftover state from a prior excursion that ended abnormally.
+	m.cronsReturnValid = true
+
+	updated, _ := m.Update(showCronsMsg{filterAgentID: "agent-1", filterLabel: "Scout"})
+	m = updated.(AppModel)
+	if m.state != viewCrons {
+		t.Errorf("expected viewCrons after showCronsMsg, got %v", m.state)
+	}
+	if m.cronsReturnValid {
+		t.Error("expected a fresh crons excursion to clear any preserved chat")
+	}
+}
+
+// TestAppModel_EscFromCrons_NoTranscriptLeavesChatUntouched: when the
+// user never opened a transcript there is nothing to restore, so esc
+// just returns to the (untouched) chat.
+func TestAppModel_EscFromCrons_NoTranscriptLeavesChatUntouched(t *testing.T) {
+	fake := newFakeBackend()
+	m := AppModel{backend: fake, width: 120, height: 40}
+	m.chatModel = newChatModel(fake, "orig-session", "agent-1", "Scout", "", config.Preferences{}, false, "", "", false)
+	m.state = viewCrons
+
+	updated, _ := m.Update(goBackFromCronsMsg{})
+	m = updated.(AppModel)
+	if m.state != viewChat {
+		t.Errorf("expected viewChat after esc from crons, got %v", m.state)
+	}
+	if m.chatModel.sessionKey != "orig-session" {
+		t.Errorf("expected chat left untouched, got session %q", m.chatModel.sessionKey)
+	}
+}
+
 // TestAppModel_SessionCreatedError_ClearsSelectingLock: an error from
 // CreateSession bounces the user back to the agent picker; the picker's
 // `selecting` flag must be cleared in the same step so it doesn't stay
