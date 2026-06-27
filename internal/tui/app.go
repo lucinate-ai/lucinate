@@ -25,6 +25,7 @@ const (
 	viewCrons
 	viewModelPicker
 	viewRoutines
+	viewSubagents
 )
 
 // BackendFactory builds an unconnected backend.Backend for a stored
@@ -128,6 +129,7 @@ type AppModel struct {
 	cronsModel       cronsModel
 	modelPicker      modelPickerModel
 	routinesModel    routinesModel
+	subagentsModel   subagentsModel
 	backend          backend.Backend
 	activeConn       *config.Connection // the connection backend belongs to; rendered in status bars
 	store            *config.Connections
@@ -315,6 +317,8 @@ func (m AppModel) viewActions() []Action {
 		return m.modelPicker.Actions()
 	case viewRoutines:
 		return m.routinesModel.Actions()
+	case viewSubagents:
+		return m.subagentsModel.Actions()
 	}
 	return nil
 }
@@ -378,6 +382,10 @@ func (m AppModel) TriggerAction(id string) (AppModel, tea.Cmd) {
 	case viewRoutines:
 		var cmd tea.Cmd
 		m.routinesModel, cmd = m.routinesModel.TriggerAction(id)
+		return m, cmd
+	case viewSubagents:
+		var cmd tea.Cmd
+		m.subagentsModel, cmd = m.subagentsModel.TriggerAction(id)
 		return m, cmd
 	}
 	return m, nil
@@ -575,6 +583,8 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.modelPicker.setSize(msg.Width, msg.Height)
 		case viewRoutines:
 			m.routinesModel.setSize(msg.Width, msg.Height)
+		case viewSubagents:
+			m.subagentsModel.setSize(msg.Width, msg.Height)
 		}
 		return m, nil
 
@@ -877,6 +887,39 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		m.state = viewChat
 		return m, nil
 
+	case showSubagentsMsg:
+		_, ok := m.backend.(backend.SubagentBackend)
+		if !ok {
+			// Capability missing — bounce silently. The /subagents
+			// handler in commands.go has already rendered the
+			// "not available" message inline, so reaching this branch
+			// implies a programming error elsewhere.
+			return m, nil
+		}
+		defaults := config.LoadSubagentDefaults()
+		m.subagentsModel = newSubagentsModel(m.backend, msg.parentSessionKey, msg.parentAgentID, m.hideActionHints, m.activeConn, m.disableExitKeys, defaults)
+		m.subagentsModel.setSize(m.width, m.height)
+		m.state = viewSubagents
+		init := m.subagentsModel.Init()
+		// If the user invoked `/subagents spawn <task>` we dispatched
+		// here with initialSpawn set so the browser handles the spawn
+		// + surfacing in one screen rather than from the chat input.
+		if msg.initialSpawn != nil {
+			sub := m.backend.(backend.SubagentBackend)
+			parent := msg.parentSessionKey
+			params := *msg.initialSpawn
+			spawnCmd := func() tea.Msg {
+				info, err := sub.SubagentSpawn(context.Background(), parent, params)
+				return subagentSpawnedMsg{info: info, err: err}
+			}
+			return m, tea.Batch(init, spawnCmd)
+		}
+		return m, init
+
+	case goBackFromSubagentsMsg:
+		m.state = viewChat
+		return m, nil
+
 	case sessionCreatedMsg:
 		if msg.err != nil {
 			m.selectModel.err = msg.err
@@ -1037,6 +1080,11 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case viewRoutines:
 		var cmd tea.Cmd
 		m.routinesModel, cmd = m.routinesModel.Update(msg)
+		return m, cmd
+
+	case viewSubagents:
+		var cmd tea.Cmd
+		m.subagentsModel, cmd = m.subagentsModel.Update(msg)
 		return m, cmd
 	}
 
@@ -1238,6 +1286,8 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView(m.modelPicker.View())
 	case viewRoutines:
 		v = tea.NewView(m.routinesModel.View())
+	case viewSubagents:
+		v = tea.NewView(m.subagentsModel.View())
 	default:
 		v = tea.NewView("")
 	}

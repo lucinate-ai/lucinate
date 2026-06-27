@@ -158,9 +158,9 @@ type chatModel struct {
 	agentID            string
 	agentName          string
 	sending            bool
-	runID              string // active run ID for cancellation
+	runID              string          // active run ID for cancellation
 	finalisedRuns      finalisedRunSet // bounded LRU of run IDs we have already finalised; chat events still bearing one of these IDs are stale duplicates emitted by the gateway after final and must not corrupt the next run's placeholder
-	gen                uint64 // generation counter stamped onto every newly-appended chatMessage; bumped after each turn finalises so the just-finalised turn can be replaced by a server-canonical refresh while the next turn's live state survives the merge
+	gen                uint64          // generation counter stamped onto every newly-appended chatMessage; bumped after each turn finalises so the just-finalised turn can be replaced by a server-canonical refresh while the next turn's live state survives the merge
 	pendingMessages    []string
 	historyBrowseIndex int    // bash-style up-arrow recall position; -1 when not browsing, 0 = most recent user message, N = N user messages back
 	historyBrowseValue string // textarea contents last placed by history navigation; lets repeated up/down keep walking until the user edits
@@ -192,6 +192,7 @@ type chatModel struct {
 	updateLatest       string // populated by AppModel when the startup check finds a newer release; rendered as a header badge
 	activeRoutine      *activeRoutine
 	recorder           *transcriptRecorder // non-nil while /record on is active; closed and cleared on /record off, session switch, or quit
+	subagents          *subagentTracker    // live cache of subagent children spawned from this session; powers the /subagents browser + list verb without a round-trip on every refresh
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -461,26 +462,27 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 	}
 
 	return chatModel{
-		viewport:        vp,
-		textarea:        ta,
-		backend:         b,
-		connName:        connName,
-		sessionKey:      sessionKey,
-		agentID:         agentID,
-		agentName:       agentName,
-		renderer:        renderer,
-		modelID:         modelID,
-		prefs:           prefs,
-		historyLimit:    prefs.HistoryLimit,
-		historyLoading:  true,
-		hideInput:       hideInput,
-		terminalFocused: true,
+		viewport:           vp,
+		textarea:           ta,
+		backend:            b,
+		connName:           connName,
+		sessionKey:         sessionKey,
+		agentID:            agentID,
+		agentName:          agentName,
+		renderer:           renderer,
+		modelID:            modelID,
+		prefs:              prefs,
+		historyLimit:       prefs.HistoryLimit,
+		historyLoading:     true,
+		hideInput:          hideInput,
+		terminalFocused:    true,
 		pendingMessages:    pending,
 		historyBrowseIndex: -1,
 		// Start at gen=1 so the zero value on chatMessage.gen reads as
 		// "older than any live turn" — server-history imports keep that
 		// default and are always replaceable on subsequent refreshes.
-		gen: 1,
+		gen:       1,
+		subagents: newSubagentTracker(),
 	}
 }
 
@@ -755,6 +757,46 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 
 	case chatRoutineNamesLoadedMsg:
 		m.routineNames = msg.names
+		return m, nil
+
+	case subagentsLoadedMsg:
+		m.appendMessage(chatMessage{
+			role:    "system",
+			content: formatSubagentList(msg.items, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
+	case subagentInfoLoadedMsg:
+		m.appendMessage(chatMessage{
+			role:    "system",
+			content: formatSubagentInfo(msg.info, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
+	case subagentSpawnedMsg:
+		if msg.err != nil {
+			m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("subagent spawn failed: %v", msg.err)})
+		} else if msg.info != nil {
+			if m.subagents != nil {
+				m.subagents.upsert(*msg.info)
+			}
+			m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("spawned subagent %s", msg.info.SessionKey)})
+		}
+		m.updateViewport()
+		return m, nil
+
+	case subagentKilledMsg:
+		if msg.err != nil {
+			m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("subagent kill failed (%s): %v", msg.sessionKey, msg.err)})
+		} else {
+			if m.subagents != nil {
+				m.subagents.remove(msg.sessionKey)
+			}
+			m.appendMessage(chatMessage{role: "system", content: fmt.Sprintf("killed subagent %s", msg.sessionKey)})
+		}
+		m.updateViewport()
 		return m, nil
 
 	case startRoutineMsg:

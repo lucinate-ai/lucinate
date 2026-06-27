@@ -225,6 +225,19 @@ type Capabilities struct {
 	// side scheduling print a clear "not available" message rather
 	// than crashing on a failed type assertion.
 	Cron bool
+
+	// Subagents indicates the backend implements SubagentBackend.
+	// The TUI gates the /subagents command and browser view on this
+	// so backends without subagent/delegation support print a clear
+	// "not available" message rather than crashing on a failed type
+	// assertion. OpenClaw opts in (the gateway exposes
+	// sessions.create / sessions.list / sessions.abort with the
+	// spawnedBy + parentSessionKey metadata that mediate subagents).
+	// Hermes and OpenAI-compat leave this false: Hermes' delegation
+	// is server-managed and blocking within a turn (nothing to
+	// manage client-side), and OpenAI-compat has no tool/function-
+	// calling loop today so the client cannot orchestrate children.
+	Subagents bool
 }
 
 // AuthRecovery selects the auth-modal flow the connecting view runs
@@ -371,6 +384,100 @@ type DeviceTokenAuth interface {
 // backends when the upstream returns 401/403.
 type APIKeyAuth interface {
 	StoreAPIKey(key string) error
+}
+
+// SubagentBackend exposes management of subagent sessions behind the
+// /subagents command and browser view. A "subagent" is a child session
+// the backend (or its model) spawned from the current session — for
+// OpenClaw this maps to sessions linked via spawnedBy/parentSessionKey.
+// Backends that don't support subagent control omit this interface and
+// leave Capabilities.Subagents false; the TUI then surfaces "not
+// available on this connection" rather than failing the type assertion.
+type SubagentBackend interface {
+	// SubagentsList enumerates subagents spawned from parentSessionKey.
+	// An empty parentSessionKey is allowed and lists every subagent the
+	// backend can see (useful for global views, though the TUI scopes
+	// to the active session by default).
+	SubagentsList(ctx context.Context, parentSessionKey string) ([]SubagentInfo, error)
+
+	// SubagentInfo returns metadata for a single subagent session.
+	SubagentInfo(ctx context.Context, sessionKey string) (*SubagentInfo, error)
+
+	// SubagentSpawn creates a new subagent child of parentSessionKey
+	// and dispatches the task to it. Returns the created subagent's
+	// metadata. The child runs asynchronously; lifecycle events
+	// surface via the standard Events() channel.
+	SubagentSpawn(ctx context.Context, parentSessionKey string, p SubagentSpawnParams) (*SubagentInfo, error)
+
+	// SubagentKill aborts an in-flight subagent run. Backends are
+	// expected to cascade the kill to any further-nested children.
+	SubagentKill(ctx context.Context, sessionKey string) error
+
+	// SubagentSteer sends mid-flight guidance to a running subagent
+	// without aborting it. Used by the browser view's "steer" action.
+	SubagentSteer(ctx context.Context, sessionKey, message string) error
+}
+
+// SubagentInfo describes one subagent session as the TUI renders it.
+// Fields are best-effort: backends populate what they know and leave
+// the rest at zero values.
+type SubagentInfo struct {
+	// SessionKey identifies the child session. Required.
+	SessionKey string
+
+	// ParentKey is the parent session this child was spawned from.
+	ParentKey string
+
+	// Label is a short human-readable handle (taskName / derived
+	// title) used in the list view.
+	Label string
+
+	// AgentID is the underlying agent the subagent runs as.
+	AgentID string
+
+	// Model is the model the subagent is using, when known.
+	Model string
+
+	// Status is a normalised short string: "running", "completed",
+	// "failed", "timed-out", "aborted", or "unknown".
+	Status string
+
+	// SpawnDepth is the nesting depth (0 = main session, 1 = first
+	// level of subagents, etc.). Useful for the browser view to
+	// indent nested children.
+	SpawnDepth int
+
+	// CreatedAtMs is the spawn timestamp in unix milliseconds.
+	CreatedAtMs int64
+
+	// UpdatedAtMs is the last-activity timestamp in unix milliseconds.
+	UpdatedAtMs int64
+
+	// LastMessage is a one-line summary of the most recent message
+	// (for the list view's subtitle).
+	LastMessage string
+}
+
+// SubagentSpawnParams bundles the inputs to SubagentBackend.SubagentSpawn.
+// Required fields per backend vary; the TUI populates what the form
+// collected and the backend ignores unknown fields.
+type SubagentSpawnParams struct {
+	// AgentID is the target agent for the subagent. When empty the
+	// backend falls back to the parent session's agent.
+	AgentID string
+
+	// Task is the human-readable task description handed to the
+	// child. Required for OpenClaw (becomes the first user message
+	// in the child session).
+	Task string
+
+	// Label is an optional human-readable handle for the child,
+	// surfaced in the browser view.
+	Label string
+
+	// Model overrides the model the subagent uses. Empty lets the
+	// backend pick (parent's model for OpenClaw).
+	Model string
 }
 
 // CronBackend exposes the gateway cron API behind the /crons view.

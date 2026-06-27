@@ -56,7 +56,6 @@ type Client struct {
 	// user-configured deadline. Applies to both initial Connect and
 	// each Reconnect attempt.
 	connectTimeout time.Duration
-
 }
 
 // SetConnectTimeout sets the WebSocket connect/handshake deadline used
@@ -908,6 +907,97 @@ func (c *Client) CronRun(ctx context.Context, jobID string, force bool) error {
 		mode = "force"
 	}
 	return gw.CronRun(ctx, protocol.CronRunParams{ID: jobID, Mode: mode})
+}
+
+// SubagentsListRaw lists subagent sessions spawned by parentSessionKey.
+// Returns the raw sessions.list payload; the openclaw backend adapter
+// projects the fields into backend.SubagentInfo. An empty
+// parentSessionKey lists every subagent the gateway can surface.
+func (c *Client) SubagentsListRaw(ctx context.Context, parentSessionKey string) (json.RawMessage, error) {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	includeTitles := true
+	includeLastMsg := true
+	return gw.SessionsList(ctx, protocol.SessionsListParams{
+		SpawnedBy:            parentSessionKey,
+		IncludeDerivedTitles: &includeTitles,
+		IncludeLastMessage:   &includeLastMsg,
+	})
+}
+
+// SubagentGetRaw fetches the raw sessions.get payload for sessionKey.
+// Used by the /subagents info verb and the browser detail row.
+func (c *Client) SubagentGetRaw(ctx context.Context, sessionKey string) (json.RawMessage, error) {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+	return gw.SessionsGet(ctx, protocol.SessionsGetParams{Key: sessionKey})
+}
+
+// SubagentSpawn creates a child session under parentSessionKey and
+// dispatches the task to it. Returns the gateway-assigned key of the
+// new child. agentID empty means "fall back to the parent's agent";
+// model empty means "inherit the parent's model".
+func (c *Client) SubagentSpawn(ctx context.Context, parentSessionKey, agentID, task, label, model string) (string, error) {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer cancel()
+	raw, err := gw.SessionsCreate(ctx, protocol.SessionsCreateParams{
+		AgentID:          agentID,
+		ParentSessionKey: parentSessionKey,
+		Task:             task,
+		Label:            label,
+		Model:            model,
+	})
+	if err != nil {
+		return "", fmt.Errorf("subagent spawn: %w", err)
+	}
+	var result struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return "", fmt.Errorf("parse subagent spawn result: %w", err)
+	}
+	return result.Key, nil
+}
+
+// SubagentKill aborts an in-flight subagent run. RunID is left empty so
+// the gateway targets whatever run (if any) is currently active for the
+// session. The gateway cascades the abort to any nested children.
+func (c *Client) SubagentKill(ctx context.Context, sessionKey string) error {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	if _, err := gw.SessionsAbort(ctx, protocol.SessionsAbortParams{Key: sessionKey}); err != nil {
+		return fmt.Errorf("subagent abort: %w", err)
+	}
+	return nil
+}
+
+// SubagentSteer sends mid-flight guidance to a running subagent
+// without aborting it.
+func (c *Client) SubagentSteer(ctx context.Context, sessionKey, message string) error {
+	gw, ctx, cancel, err := c.rpc(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	if _, err := gw.SessionsSteer(ctx, protocol.SessionsSendParams{
+		Key:     sessionKey,
+		Message: message,
+	}); err != nil {
+		return fmt.Errorf("subagent steer: %w", err)
+	}
+	return nil
 }
 
 // GW returns the underlying gateway client (for direct RPC access).

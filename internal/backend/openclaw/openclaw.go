@@ -159,6 +159,7 @@ func (b *Backend) Capabilities() backend.Capabilities {
 		AgentWorkspace:  true,
 		AgentManagement: true,
 		Cron:            true,
+		Subagents:       true,
 	}
 }
 
@@ -258,6 +259,133 @@ func (b *Backend) CronRun(ctx context.Context, jobID string, force bool) error {
 	return b.client.CronRun(ctx, jobID, force)
 }
 
+// --- SubagentBackend ---
+
+// subagentListEntry is the subset of fields the openclaw backend
+// projects out of a sessions.list row. Field names mirror the gateway's
+// JSON keys; spawnedBy / spawnDepth / agentId distinguish subagent
+// rows from ordinary sessions and feed the TUI's tracker/browser view.
+type subagentListEntry struct {
+	Key                string `json:"key"`
+	AgentID            string `json:"agentId"`
+	Model              string `json:"model"`
+	DerivedTitle       string `json:"derivedTitle"`
+	Label              string `json:"label"`
+	LastMessagePreview string `json:"lastMessagePreview"`
+	CreatedAt          int64  `json:"createdAt"`
+	UpdatedAt          int64  `json:"updatedAt"`
+	SpawnedBy          string `json:"spawnedBy"`
+	SpawnDepth         int    `json:"spawnDepth"`
+	Status             string `json:"status"`
+}
+
+func (e subagentListEntry) info() backend.SubagentInfo {
+	label := strings.TrimSpace(e.Label)
+	if label == "" {
+		label = strings.TrimSpace(e.DerivedTitle)
+	}
+	status := strings.TrimSpace(e.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	return backend.SubagentInfo{
+		SessionKey:  e.Key,
+		ParentKey:   e.SpawnedBy,
+		Label:       label,
+		AgentID:     e.AgentID,
+		Model:       e.Model,
+		Status:      status,
+		SpawnDepth:  e.SpawnDepth,
+		CreatedAtMs: e.CreatedAt,
+		UpdatedAtMs: e.UpdatedAt,
+		LastMessage: e.LastMessagePreview,
+	}
+}
+
+// subagentListResponse is the envelope returned by sessions.list.
+type subagentListResponse struct {
+	Sessions []json.RawMessage `json:"sessions"`
+}
+
+func (b *Backend) SubagentsList(ctx context.Context, parentSessionKey string) ([]backend.SubagentInfo, error) {
+	raw, err := b.client.SubagentsListRaw(ctx, parentSessionKey)
+	if err != nil {
+		return nil, err
+	}
+	var resp subagentListResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("parse subagents list: %w", err)
+	}
+	out := make([]backend.SubagentInfo, 0, len(resp.Sessions))
+	for _, rawEntry := range resp.Sessions {
+		var entry subagentListEntry
+		if err := json.Unmarshal(rawEntry, &entry); err != nil {
+			// Best-effort: a single malformed row shouldn't sink the
+			// whole list — drop it and keep going.
+			continue
+		}
+		// Defensive filter: gateways without a spawnedBy filter would
+		// otherwise return everything when parentSessionKey == "".
+		// When the caller does pass a parent key, only keep matching
+		// rows even if the gateway shipped extras.
+		if parentSessionKey != "" && entry.SpawnedBy != parentSessionKey {
+			continue
+		}
+		out = append(out, entry.info())
+	}
+	return out, nil
+}
+
+func (b *Backend) SubagentInfo(ctx context.Context, sessionKey string) (*backend.SubagentInfo, error) {
+	raw, err := b.client.SubagentGetRaw(ctx, sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	var entry subagentListEntry
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return nil, fmt.Errorf("parse subagent info: %w", err)
+	}
+	if entry.Key == "" {
+		entry.Key = sessionKey
+	}
+	info := entry.info()
+	return &info, nil
+}
+
+func (b *Backend) SubagentSpawn(ctx context.Context, parentSessionKey string, p backend.SubagentSpawnParams) (*backend.SubagentInfo, error) {
+	if strings.TrimSpace(p.Task) == "" {
+		return nil, fmt.Errorf("subagent spawn: task is required")
+	}
+	if strings.TrimSpace(parentSessionKey) == "" {
+		return nil, fmt.Errorf("subagent spawn: parent session key is required")
+	}
+	key, err := b.client.SubagentSpawn(ctx, parentSessionKey, p.AgentID, p.Task, p.Label, p.Model)
+	if err != nil {
+		return nil, err
+	}
+	// Best-effort metadata fetch — the spawn itself is successful even
+	// if the immediate read-back fails.
+	if info, err := b.SubagentInfo(ctx, key); err == nil && info != nil {
+		return info, nil
+	}
+	return &backend.SubagentInfo{
+		SessionKey: key,
+		ParentKey:  parentSessionKey,
+		AgentID:    p.AgentID,
+		Model:      p.Model,
+		Label:      p.Label,
+		Status:     "running",
+	}, nil
+}
+
+func (b *Backend) SubagentKill(ctx context.Context, sessionKey string) error {
+	return b.client.SubagentKill(ctx, sessionKey)
+}
+
+func (b *Backend) SubagentSteer(ctx context.Context, sessionKey, message string) error {
+	return b.client.SubagentSteer(ctx, sessionKey, message)
+}
+
 // Compile-time assertions that the wrapper implements every interface
 // it claims to.
 var (
@@ -269,4 +397,5 @@ var (
 	_ backend.UsageBackend    = (*Backend)(nil)
 	_ backend.DeviceTokenAuth = (*Backend)(nil)
 	_ backend.CronBackend     = (*Backend)(nil)
+	_ backend.SubagentBackend = (*Backend)(nil)
 )

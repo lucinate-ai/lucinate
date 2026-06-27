@@ -32,14 +32,14 @@ type fakeBackend struct {
 
 	// Recorded auth-modal calls — exposed to tests so they can assert
 	// the right path was taken (clear vs reset vs store).
-	storedToken    string
-	storedAPIKey   string
-	clearedToken   bool
-	resetIdentity  bool
+	storedToken   string
+	storedAPIKey  string
+	clearedToken  bool
+	resetIdentity bool
 
 	// Recorded DeleteAgent calls so tests can assert keep-files /
 	// delete-files routing.
-	deletedAgents []backend.DeleteAgentParams
+	deletedAgents  []backend.DeleteAgentParams
 	deleteAgentErr error
 
 	// createSessionHook, when non-nil, replaces the default
@@ -55,10 +55,10 @@ type fakeBackend struct {
 
 	// Cron RPC seams — tests pre-seed jobs / runs / errors and read
 	// back the recorded calls through these fields.
-	cronJobs        []protocol.CronJob
-	cronRuns        []protocol.CronRunLogEntry
-	cronListErr     error
-	cronRunsErr     error
+	cronJobs          []protocol.CronJob
+	cronRuns          []protocol.CronRunLogEntry
+	cronListErr       error
+	cronRunsErr       error
 	lastCronAdd       *protocol.CronAddParams
 	lastCronUpdate    *protocol.CronUpdateParams
 	lastCronUpdateRaw map[string]any
@@ -70,6 +70,21 @@ type fakeBackend struct {
 	// statusHook overrides the default /status payload so tests can
 	// inject backend-specific shapes (gateway block, history, thread).
 	statusHook func(ctx context.Context, agentID, sessionKey string) (*backend.BackendStatus, error)
+
+	// Subagent RPC seams. Tests pre-seed lists / errors and read back
+	// recorded calls through these fields. nil-able pointers track the
+	// most recent call so a single-shot assertion can read the args
+	// without juggling a slice.
+	subagentList       []backend.SubagentInfo
+	subagentListErr    error
+	subagentInfoHook   func(ctx context.Context, sessionKey string) (*backend.SubagentInfo, error)
+	subagentSpawnHook  func(ctx context.Context, parent string, p backend.SubagentSpawnParams) (*backend.SubagentInfo, error)
+	lastSubagentSpawn  *backend.SubagentSpawnParams
+	lastSubagentParent string
+	subagentKilled     []string
+	subagentKillErr    error
+	subagentSteered    []string
+	subagentSteerErr   error
 
 	// chatHistoryHook, when non-nil, replaces the default empty
 	// chat.history response so tests can stage the various gateway
@@ -90,13 +105,14 @@ func newFakeBackend() *fakeBackend {
 			AgentWorkspace:  true,
 			AgentManagement: true,
 			Cron:            true,
+			Subagents:       true,
 		},
 	}
 }
 
-func (f *fakeBackend) Connect(ctx context.Context) error  { return f.connectErr }
-func (f *fakeBackend) Close() error                       { return nil }
-func (f *fakeBackend) Events() <-chan protocol.Event      { return f.events }
+func (f *fakeBackend) Connect(ctx context.Context) error { return f.connectErr }
+func (f *fakeBackend) Close() error                      { return nil }
+func (f *fakeBackend) Events() <-chan protocol.Event     { return f.events }
 func (f *fakeBackend) Supervise(ctx context.Context, notify func(client.ConnState)) {
 	<-ctx.Done()
 }
@@ -241,6 +257,67 @@ func (f *fakeBackend) CronRun(ctx context.Context, jobID string, force bool) err
 	return nil
 }
 
+// --- SubagentBackend ---
+//
+// All four verbs are seamy: the test pre-seeds the result it wants
+// (subagentList, subagentInfoHook, ...) and reads recorded calls
+// (lastSubagentSpawn, subagentKilled, ...) back through the
+// corresponding fields. Lets the slash-command and browser tests stay
+// declarative.
+
+func (f *fakeBackend) SubagentsList(ctx context.Context, parentSessionKey string) ([]backend.SubagentInfo, error) {
+	if f.subagentListErr != nil {
+		return nil, f.subagentListErr
+	}
+	return f.subagentList, nil
+}
+
+func (f *fakeBackend) SubagentInfo(ctx context.Context, sessionKey string) (*backend.SubagentInfo, error) {
+	if f.subagentInfoHook != nil {
+		return f.subagentInfoHook(ctx, sessionKey)
+	}
+	for i := range f.subagentList {
+		if f.subagentList[i].SessionKey == sessionKey {
+			info := f.subagentList[i]
+			return &info, nil
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeBackend) SubagentSpawn(ctx context.Context, parentSessionKey string, p backend.SubagentSpawnParams) (*backend.SubagentInfo, error) {
+	params := p
+	f.lastSubagentSpawn = &params
+	f.lastSubagentParent = parentSessionKey
+	if f.subagentSpawnHook != nil {
+		return f.subagentSpawnHook(ctx, parentSessionKey, p)
+	}
+	return &backend.SubagentInfo{
+		SessionKey: "child-of-" + parentSessionKey,
+		ParentKey:  parentSessionKey,
+		AgentID:    p.AgentID,
+		Model:      p.Model,
+		Label:      p.Label,
+		Status:     "running",
+	}, nil
+}
+
+func (f *fakeBackend) SubagentKill(ctx context.Context, sessionKey string) error {
+	if f.subagentKillErr != nil {
+		return f.subagentKillErr
+	}
+	f.subagentKilled = append(f.subagentKilled, sessionKey)
+	return nil
+}
+
+func (f *fakeBackend) SubagentSteer(ctx context.Context, sessionKey, message string) error {
+	if f.subagentSteerErr != nil {
+		return f.subagentSteerErr
+	}
+	f.subagentSteered = append(f.subagentSteered, sessionKey+"|"+message)
+	return nil
+}
+
 // Compile-time assertions.
 var (
 	_ backend.Backend         = (*fakeBackend)(nil)
@@ -252,4 +329,5 @@ var (
 	_ backend.DeviceTokenAuth = (*fakeBackend)(nil)
 	_ backend.APIKeyAuth      = (*fakeBackend)(nil)
 	_ backend.CronBackend     = (*fakeBackend)(nil)
+	_ backend.SubagentBackend = (*fakeBackend)(nil)
 )

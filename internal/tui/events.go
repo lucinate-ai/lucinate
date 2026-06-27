@@ -487,6 +487,9 @@ func (m *chatModel) handleAgentEvent(ev protocol.Event) tea.Cmd {
 		if name == "" {
 			name = "tool"
 		}
+		if isSubagentToolName(name) && m.subagents != nil {
+			m.subagents.observeToolStart(m.sessionKey, td.ToolCallID, td.Args)
+		}
 		m.appendMessage(chatMessage{
 			role:         "tool",
 			toolName:     name,
@@ -516,6 +519,9 @@ func (m *chatModel) handleAgentEvent(ev protocol.Event) tea.Cmd {
 				m.messages[i].toolError = extractToolErrorText(td.Result)
 			} else {
 				m.messages[i].toolState = "success"
+			}
+			if isSubagentToolName(m.messages[i].toolName) && m.subagents != nil {
+				m.subagents.observeToolResult(td.ToolCallID, td.IsError, m.messages[i].toolError)
 			}
 			break
 		}

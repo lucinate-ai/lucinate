@@ -389,6 +389,62 @@ type ConnStateMsg struct {
 	Err     error
 }
 
+// showSubagentsMsg signals the AppModel to switch to the subagent
+// browser. parentSessionKey scopes the view to subagents spawned from
+// the active session (empty lists every subagent the backend exposes).
+// When a `/subagents spawn` invocation initiated the navigation,
+// initialSpawn carries its details so the browser can dispatch the
+// spawn on entry and surface its outcome in the same view rather than
+// inline in the chat transcript.
+type showSubagentsMsg struct {
+	parentSessionKey string
+	parentAgentID    string
+	initialSpawn     *backend.SubagentSpawnParams
+}
+
+// goBackFromSubagentsMsg signals the AppModel to return from the
+// subagent browser to the chat view.
+type goBackFromSubagentsMsg struct{}
+
+// subagentsLoadedMsg carries the result of a SubagentsList RPC for the
+// browser. err is non-nil on RPC failure; the browser surfaces it as
+// an inline error row and offers a retry action.
+type subagentsLoadedMsg struct {
+	items []backend.SubagentInfo
+	err   error
+}
+
+// subagentSpawnedMsg is returned after a /subagents spawn action
+// completes. info is non-nil on success; err carries the failure
+// message otherwise.
+type subagentSpawnedMsg struct {
+	info *backend.SubagentInfo
+	err  error
+}
+
+// subagentKilledMsg is returned after a /subagents kill action
+// completes. sessionKey identifies which child was targeted so the
+// browser can update the corresponding row.
+type subagentKilledMsg struct {
+	sessionKey string
+	err        error
+}
+
+// subagentSteeredMsg is returned after a /subagents steer action
+// completes. The browser uses err to render a transient toast.
+type subagentSteeredMsg struct {
+	sessionKey string
+	err        error
+}
+
+// subagentInfoLoadedMsg carries the result of a SubagentInfo RPC issued
+// by the `/subagents info` verb so the chat view can render an inline
+// system message with the metadata.
+type subagentInfoLoadedMsg struct {
+	info *backend.SubagentInfo
+	err  error
+}
+
 // showCronsMsg signals the AppModel to switch to the cron browser.
 // filterAgentID empty means "show jobs across all agents".
 type showCronsMsg struct {

@@ -8,11 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	tea "charm.land/bubbletea/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
@@ -52,7 +53,7 @@ type pendingNavConfirm struct {
 // hint surfaces the picker first, "/model" before "/models" likewise.
 // Tab now extends to the longest common prefix and the completion menu
 // shows every candidate, so the curated order no longer rules Tab.
-var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/export", "/help", "/header", "/model", "/models", "/mouse", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/skills", "/stats", "/status", "/think"}
+var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/export", "/help", "/header", "/model", "/models", "/mouse", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/skills", "/stats", "/status", "/subagents", "/think"}
 
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
@@ -82,6 +83,7 @@ const helpBody = `/quit, /exit — quit lucinate
 /sessions — browse and restore previous sessions
 /stats — show session statistics
 /status — show backend, endpoint, auth, versions, and local session stats
+/subagents — manage subagents (bare opens browser; verbs: list, info <#>, spawn <task>, kill <#|all>)
 /skills — list available agent skills
 /think — show current thinking level
 /think <level> — set thinking level (off/minimal/low/medium/high)
@@ -400,6 +402,13 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	// nav is gated.
 	if command == "/routines" {
 		return true, m.gateNavigation("Opening the routines manager", func() tea.Msg { return showRoutinesMsg{} })
+	}
+
+	// /subagents and its inline verbs (list/info/spawn/kill). The
+	// browser view is the primary surface; the verbs are convenience
+	// shortcuts so the user can act without leaving the chat.
+	if command == "/subagents" || strings.HasPrefix(command, "/subagents ") {
+		return m.handleSubagentsCommand(text)
 	}
 
 	// /model with optional argument.
@@ -829,6 +838,185 @@ func (m *chatModel) handleRoutineCommand(text string) (bool, tea.Cmd) {
 	cmd := m.startRoutine(name)
 	m.updateViewport()
 	return true, cmd
+}
+
+// handleSubagentsCommand dispatches `/subagents` and its inline verbs
+// (list / info / spawn / kill). Bare `/subagents` opens the browser
+// view. Verbs run inline so the user can act without navigating away
+// from the chat. Every path first checks the backend's SubagentBackend
+// capability so connections without subagent support render a clean
+// "not available" hint instead of crashing on a type assertion.
+func (m *chatModel) handleSubagentsCommand(text string) (bool, tea.Cmd) {
+	sub, ok := m.backend.(backend.SubagentBackend)
+	if !ok {
+		m.appendMessage(chatMessage{
+			role:   "system",
+			errMsg: "/subagents is not available on this connection",
+		})
+		m.updateViewport()
+		return true, nil
+	}
+
+	rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(text), "/subagents"))
+	if rest == "" {
+		return true, m.gateNavigation("Opening subagents", func() tea.Msg {
+			return showSubagentsMsg{
+				parentSessionKey: m.sessionKey,
+				parentAgentID:    m.agentID,
+			}
+		})
+	}
+
+	verb := rest
+	arg := ""
+	if idx := strings.IndexByte(rest, ' '); idx >= 0 {
+		verb = strings.ToLower(rest[:idx])
+		arg = strings.TrimSpace(rest[idx+1:])
+	} else {
+		verb = strings.ToLower(rest)
+	}
+
+	switch verb {
+	case "list":
+		return true, m.runSubagentsList(sub)
+	case "info":
+		if arg == "" {
+			m.appendMessage(chatMessage{role: "system", errMsg: "/subagents info requires a row index or session key"})
+			m.updateViewport()
+			return true, nil
+		}
+		return true, m.runSubagentsInfo(sub, arg)
+	case "spawn":
+		if arg == "" {
+			m.appendMessage(chatMessage{role: "system", errMsg: "/subagents spawn requires a task description"})
+			m.updateViewport()
+			return true, nil
+		}
+		defaults := config.LoadSubagentDefaults()
+		params := backend.SubagentSpawnParams{
+			AgentID: firstNonEmpty(defaults.AgentID, m.agentID),
+			Task:    arg,
+			Model:   defaults.Model,
+			Label:   defaults.Label,
+		}
+		return true, m.gateNavigation("Spawning subagent", func() tea.Msg {
+			return showSubagentsMsg{
+				parentSessionKey: m.sessionKey,
+				parentAgentID:    m.agentID,
+				initialSpawn:     &params,
+			}
+		})
+	case "kill":
+		if arg == "" {
+			m.appendMessage(chatMessage{role: "system", errMsg: "/subagents kill requires a row index, session key, or 'all'"})
+			m.updateViewport()
+			return true, nil
+		}
+		return true, m.runSubagentsKill(sub, arg)
+	}
+
+	m.appendMessage(chatMessage{
+		role:   "system",
+		errMsg: fmt.Sprintf("unknown /subagents verb %q — try list, info, spawn, or kill", verb),
+	})
+	m.updateViewport()
+	return true, nil
+}
+
+// runSubagentsList returns a tea.Cmd that prints the tracker snapshot
+// inline. If the tracker is empty we fall back to a fresh RPC so the
+// first invocation in a session always gets canonical state.
+func (m *chatModel) runSubagentsList(sub backend.SubagentBackend) tea.Cmd {
+	tracker := m.subagents
+	parent := m.sessionKey
+	return func() tea.Msg {
+		var items []backend.SubagentInfo
+		if tracker != nil && tracker.len() > 0 {
+			items = tracker.snapshot()
+		} else {
+			fetched, err := sub.SubagentsList(context.Background(), parent)
+			if err != nil {
+				return subagentsLoadedMsg{err: err}
+			}
+			items = fetched
+			if tracker != nil {
+				tracker.replace(fetched)
+			}
+		}
+		return subagentsLoadedMsg{items: items}
+	}
+}
+
+// runSubagentsInfo fetches metadata for one subagent and renders it
+// inline. arg may be either an integer index into the tracker snapshot
+// or the literal session key.
+func (m *chatModel) runSubagentsInfo(sub backend.SubagentBackend, arg string) tea.Cmd {
+	key := m.resolveSubagentKey(arg)
+	if key == "" {
+		m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("no subagent matching %q", arg)})
+		m.updateViewport()
+		return nil
+	}
+	return func() tea.Msg {
+		info, err := sub.SubagentInfo(context.Background(), key)
+		return subagentInfoLoadedMsg{info: info, err: err}
+	}
+}
+
+// runSubagentsKill dispatches a kill against the resolved session key,
+// or against every tracked child when arg is "all".
+func (m *chatModel) runSubagentsKill(sub backend.SubagentBackend, arg string) tea.Cmd {
+	if strings.EqualFold(arg, "all") {
+		if m.subagents == nil || m.subagents.len() == 0 {
+			m.appendMessage(chatMessage{role: "system", content: "no tracked subagents to kill"})
+			m.updateViewport()
+			return nil
+		}
+		items := m.subagents.snapshot()
+		cmds := make([]tea.Cmd, 0, len(items))
+		for _, info := range items {
+			key := info.SessionKey
+			cmds = append(cmds, func() tea.Msg {
+				err := sub.SubagentKill(context.Background(), key)
+				return subagentKilledMsg{sessionKey: key, err: err}
+			})
+		}
+		return tea.Batch(cmds...)
+	}
+	key := m.resolveSubagentKey(arg)
+	if key == "" {
+		m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("no subagent matching %q", arg)})
+		m.updateViewport()
+		return nil
+	}
+	return func() tea.Msg {
+		err := sub.SubagentKill(context.Background(), key)
+		return subagentKilledMsg{sessionKey: key, err: err}
+	}
+}
+
+// resolveSubagentKey turns a /subagents verb argument into a concrete
+// session key. The argument may be either an integer index into the
+// tracker snapshot (1-based, matching what /subagents list prints) or a
+// literal session key. Returns "" when no row matches.
+func (m *chatModel) resolveSubagentKey(arg string) string {
+	if m.subagents == nil {
+		return arg
+	}
+	snap := m.subagents.snapshot()
+	// Try numeric row index first.
+	if n, err := strconv.Atoi(arg); err == nil {
+		if n >= 1 && n <= len(snap) {
+			return snap[n-1].SessionKey
+		}
+	}
+	// Literal session-key match.
+	for _, info := range snap {
+		if info.SessionKey == arg {
+			return info.SessionKey
+		}
+	}
+	return ""
 }
 
 // findRoutineArgAt detects whether the cursor sits at the end of the
