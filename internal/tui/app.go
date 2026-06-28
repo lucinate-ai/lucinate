@@ -42,6 +42,17 @@ type AppOptions struct {
 	HideActionHints bool
 	DisableExitKeys bool
 
+	// OnExit, if non-nil, is invoked when the user requests a quit
+	// (/quit, the Quit action, q on a navigation screen, ctrl+c) and
+	// makes the host responsible for tearing the program down. It exists
+	// for embedders mounted inside a host whose own surface outlives the
+	// TUI loop: there, tea.Quit would stop rendering but leave the host
+	// view showing a frozen frame, so instead the program asks the host
+	// to terminate (and let its teardown path call Program.Quit). When
+	// set it takes precedence over DisableExitKeys. The CLI leaves it nil
+	// and relies on tea.Quit. See app.RunOptions for the full rationale.
+	OnExit func()
+
 	// BrightCursor pins the chat textarea cursor's on-frame to ANSI 15
 	// (bright white) instead of Bubbles' default ANSI 7. See
 	// app.RunOptions for the full rationale; this is the unexported
@@ -129,6 +140,7 @@ type AppModel struct {
 	hideInput        bool
 	hideActionHints  bool
 	disableExitKeys  bool
+	onExit           func()
 	brightCursor     bool
 	managed          bool
 
@@ -198,6 +210,7 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 		hideInput:             opts.HideInputArea,
 		hideActionHints:       opts.HideActionHints,
 		disableExitKeys:       opts.DisableExitKeys,
+		onExit:                opts.OnExit,
 		brightCursor:          opts.BrightCursor,
 		store:                 opts.Store,
 		backendFactory:        opts.BackendFactory,
@@ -277,6 +290,12 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // transition through OnActionsChanged so embedders can rebuild their
 // action UI without polling.
 func (m AppModel) Actions() []Action {
+	return m.withExitAction(m.viewActions())
+}
+
+// viewActions returns the active view's own action list, before the
+// app-level Quit action is mixed in.
+func (m AppModel) viewActions() []Action {
 	switch m.state {
 	case viewConnections:
 		return m.connectionsModel.Actions()
@@ -300,11 +319,29 @@ func (m AppModel) Actions() []Action {
 	return nil
 }
 
+// withExitAction appends a Quit action when the host delegates exit to
+// us, so an embedder rendering actions as native controls always offers
+// a way out. Suppressed on views with a focused text input (where q is
+// a literal character and the inline "q: quit" hint would mislead) so
+// it tracks the same screens the q shortcut quits on. The CLI leaves
+// hostDrivenExit false and keeps bubbles' own quit footer instead.
+func (m AppModel) withExitAction(actions []Action) []Action {
+	if !m.hostDrivenExit() || m.computeWantsInput() {
+		return actions
+	}
+	return append(actions, Action{ID: "quit", Label: "Quit", Key: "q"})
+}
+
 // TriggerAction routes an embedder-issued action invocation to the
 // active view. Both keystrokes (handled inside each view's KeyPressMsg
 // switch) and external triggers (Program.TriggerAction) go through the
 // view's TriggerAction so the work lives in one place.
 func (m AppModel) TriggerAction(id string) (AppModel, tea.Cmd) {
+	// The Quit action is owned by the AppModel, not any single view, so
+	// intercept it before delegating — the views don't know about it.
+	if id == "quit" {
+		return m, m.requestExit()
+	}
 	switch m.state {
 	case viewConnections:
 		var cmd tea.Cmd
@@ -395,6 +432,46 @@ func (m AppModel) computeWantsInput() bool {
 		return m.askConfigModel.wantsInput()
 	}
 	return false
+}
+
+// exitUnavailableNotice is shown when the user asks to quit on a host
+// that can't terminate itself. Phrased platform-neutrally: the core
+// has no concept of which host it's embedded in.
+const exitUnavailableNotice = "Quitting isn't available here — use your device's app switcher to leave."
+
+// requestExit resolves a user quit request into the command appropriate
+// for how the program is hosted. A non-nil cmd means the quit is being
+// honoured; nil means the host cannot terminate itself and the caller
+// should surface a notice instead of silently swallowing the request.
+//
+//   - onExit set (embedded in a host that owns teardown): hand off to
+//     the host and keep rendering until it tears us down. Never tea.Quit
+//     here — that would freeze the host view on the last frame.
+//   - disableExitKeys without onExit (host whose OS forbids self-exit):
+//     no command; the request can't be honoured.
+//   - neither (the CLI): tea.Quit returns the user to their shell.
+func (m AppModel) requestExit() tea.Cmd {
+	if m.onExit != nil {
+		cb := m.onExit
+		return func() tea.Msg {
+			cb()
+			return nil
+		}
+	}
+	if m.disableExitKeys {
+		return nil
+	}
+	return tea.Quit
+}
+
+// hostDrivenExit reports whether quitting is delegated to the host
+// (rather than tea.Quit or suppressed). It gates the affordances that
+// only make sense when the host can actually close the program in
+// response: the Quit action button and the q-to-quit shortcut on
+// navigation screens. The CLI surfaces quit through bubbles' own
+// bindings, so it leaves this false.
+func (m AppModel) hostDrivenExit() bool {
+	return m.onExit != nil
 }
 
 // maybeNotifyInputFocus invokes the OnInputFocusChanged callback whenever
@@ -503,6 +580,23 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 
 	case goBackMsg:
 		m.state = viewSelect
+		return m, nil
+
+	case requestExitMsg:
+		if cmd := m.requestExit(); cmd != nil {
+			return m, cmd
+		}
+		// The host can't terminate itself (a native platform whose OS
+		// forbids quitting). Don't leave the user wondering why /quit
+		// did nothing — surface a one-line notice in the chat, the only
+		// place a quit command is typed.
+		if m.state == viewChat {
+			m.chatModel.appendMessage(chatMessage{
+				role:    "system",
+				content: exitUnavailableNotice,
+			})
+			m.chatModel.updateViewport()
+		}
 		return m, nil
 
 	case showConfigMsg:
@@ -821,15 +915,22 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
-			if m.disableExitKeys {
-				// Embedded host disallows process termination — on a
-				// native-platform shell whose OS forbids quitting,
-				// tea.Quit would only stop the TUI loop while the
-				// host view stays mounted. Swallow the keypress so
-				// it doesn't accidentally tear down half the program.
-				return m, nil
+			// requestExit routes per host: the CLI gets tea.Quit, an
+			// exit-capable host gets its OnExit callback, and a host
+			// whose OS forbids self-termination gets nil — swallowing
+			// the keypress so it can't tear down the TUI loop behind a
+			// still-mounted host view.
+			return m, m.requestExit()
+		case "q":
+			// q quits on navigation screens, mirroring the CLI's bubbles
+			// list binding — but only on a host that delegates exit to us
+			// (the CLI keeps its own binding) and never while a text
+			// input has focus, so a literal 'q' still types into the chat
+			// composer or a form field. The navigation lists disable
+			// filtering, so there's no filter query to type a 'q' into.
+			if m.hostDrivenExit() && !m.computeWantsInput() {
+				return m, m.requestExit()
 			}
-			return m, tea.Quit
 		case "esc":
 			if m.state == viewConfig {
 				m.state = m.configReturn

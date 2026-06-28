@@ -219,7 +219,10 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	command := strings.ToLower(strings.TrimSpace(text))
 	switch command {
 	case "/quit", "/exit":
-		return true, tea.Quit
+		// Defer the exit policy to the AppModel: it knows whether to
+		// tea.Quit, hand off to an exit-capable host, or report that
+		// self-termination isn't possible. See requestExitMsg.
+		return true, func() tea.Msg { return requestExitMsg{} }
 	case "/agents":
 		return true, m.gateNavigation("Switching agents", func() tea.Msg { return goBackMsg{} })
 	case "/models":
