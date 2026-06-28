@@ -1,7 +1,8 @@
 # Integration Testing
 
 End-to-end integration tests that run repclaw against a real OpenClaw gateway.
-Two inference backends are supported: a local Ollama model (default) or AWS Bedrock.
+Several inference backends are supported: a local Ollama model (default), AWS
+Bedrock, OpenRouter, or a zero-cost echo stub for CI.
 
 ## Ollama (default)
 
@@ -128,6 +129,72 @@ re-run `make test-integration-openclaw-bedrock-setup`.
 
 ---
 
+## OpenRouter
+
+The gateway connects directly to OpenRouter. No local model required. The
+default model is DeepSeek V4 Flash.
+
+```
+┌──────────────── macOS host ────────────────┐
+│                                            │
+│  repclaw (go test -tags integration)       │
+│      │                                     │
+│      ▼ ws://localhost:18789                │
+│  ┌──────────────────────┐                  │
+│  │ OpenClaw gateway     │ ← Docker         │
+│  │ (ghcr.io/openclaw/…) │                  │
+│  └──────────┬───────────┘                  │
+│             │ OpenRouter API               │
+│             ▼                              │
+│  OpenRouter (cloud inference)              │
+│  Model: deepseek/deepseek-v4-flash         │
+└────────────────────────────────────────────┘
+```
+
+### Prerequisites
+
+| Requirement       | Notes                            |
+|-------------------|----------------------------------|
+| Docker Desktop    | https://docker.com/products/docker-desktop/ |
+| jq                | `brew install jq`                |
+| Go 1.22+          | https://go.dev/dl/               |
+| OpenRouter API key | Get one at https://openrouter.ai/keys |
+
+### Quick start
+
+```bash
+make test-integration-openclaw-openrouter-setup
+make test-integration-openclaw
+make test-integration-openclaw-teardown
+```
+
+The setup script resolves the OpenRouter API key in this order: an exported
+`OPENROUTER_API_KEY` env var, then `OPENROUTER_API_KEY` in the repo-root `.env`
+file (gitignored), then an interactive prompt. So you can either:
+
+```bash
+# Put it in .env (copy .env.example and fill in your key) — picked up automatically
+cp .env.example .env && $EDITOR .env
+
+# ...or export it for the session
+export OPENROUTER_API_KEY=...
+```
+
+### Choosing a different model
+
+```bash
+MODEL=deepseek/deepseek-v3.1 make test-integration-openclaw-openrouter-setup
+```
+
+The model defaults to `deepseek/deepseek-v4-flash`. Pass any OpenRouter model
+slug via `MODEL`. To change it permanently, edit
+`test/integration/openclaw.openrouter.json` and update
+`models.providers.openrouter.models[0].id` and
+`agents.defaults.model.primary` (use `openrouter/<slug>` for the routing key),
+then re-run `make test-integration-openclaw-openrouter-setup`.
+
+---
+
 ## Echo model (CI, zero cost)
 
 For CI and offline smoke tests there is no remote model and no API charge.
@@ -156,7 +223,7 @@ that the client still negotiates, pairs, and chats against each.
 
 ## What the setup scripts do
 
-There are two setup scripts that share the same gateway, state directory,
+There are several setup scripts that share the same gateway, state directory,
 and device-pairing flow but differ in their inference provider:
 
 - `setup-openclaw-ollama.sh` — checks Docker/jq/Go/Ollama, starts Ollama
@@ -164,17 +231,33 @@ and device-pairing flow but differ in their inference provider:
 - `setup-openclaw-bedrock.sh` — checks Docker/jq/Go, requires
   `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, and seeds
   `openclaw.bedrock.json`.
+- `setup-openclaw-openrouter.sh` — checks Docker/jq/Go, requires an
+  `OPENROUTER_API_KEY` (prompts if unset), and seeds
+  `openclaw.openrouter.json`.
+- `setup-openclaw-echo.sh` — checks Docker/jq/Go, starts the zero-cost
+  echomodel stub, and seeds `openclaw.echo.json` (used by CI).
 
-After the provider-specific prep, both scripts:
+After the provider-specific prep, every script shares the same pairing flow
+(factored into `lib/openclaw-pair.sh`):
 
 1. **Start the OpenClaw gateway** in Docker via `docker-compose.yml`.
-2. **Pair the local device** using this flow:
-   - Seeds the gateway token as the device token for the first connect.
-   - Connects once to register the device (rejected with `NOT_PAIRED` — expected).
-   - Approves the pending device via `openclaw devices approve <requestId>`.
-   - Rotates the device token via `openclaw devices rotate` to get a proper credential.
-   - Verifies the connection with the new device token.
-3. **Write `.env`** with `OPENCLAW_GATEWAY_URL=http://localhost:18789`.
+2. **Pair the local device** exactly the way a real user does from lucinate's
+   "Pairing required" screen:
+   - Seeds the gateway token as the device token so the first connect is
+     authorised.
+   - Connects once requesting the client's default operator scopes (including
+     `operator.admin`) — rejected with `NOT_PAIRED` while the gateway records a
+     pending request carrying those scopes.
+   - Approves the pending request as the gateway **owner**: `openclaw devices
+     approve <requestId>` run with no `--url`/`--token` uses the gateway's local
+     owner authority, which can grant `operator.admin`. (Connecting as a WS
+     client with `--token` cannot — an unapproved operator can't approve itself.)
+   - Reconnects to verify and persist the issued, admin-scoped device token.
+3. **Write `integration.env`** with `OPENCLAW_GATEWAY_URL=http://localhost:18789`.
+   No `OPENCLAW_OPERATOR_SCOPES` override is needed — the device is paired with
+   the full default scope set, so the tests exercise the same scopes a real
+   install has, including the `operator.admin` the gateway requires for agent
+   create/delete.
 
 After setup, the device identity at `~/.lucinate/identity/localhost_18789/` is paired with
 the test gateway. If you had an existing device token (from a production
@@ -182,7 +265,7 @@ gateway), it is backed up to `device-token.backup` and restored on teardown.
 
 ## What `teardown-openclaw.sh` does
 
-A single teardown script handles both providers — they share gateway
+A single teardown script handles all providers — they share gateway
 container, state directory, and device identity:
 
 1. Stops and removes the gateway container.
@@ -220,31 +303,25 @@ docker compose -f test/integration/docker-compose.yml logs gateway
 
 ### Device pairing fails
 
-The setup script runs the full register → approve → rotate flow. If it fails,
-you can step through it manually:
+The setup script registers the device, then approves it as the gateway owner.
+If it fails, you can step through it manually:
 
 ```bash
-GW_URL="ws://127.0.0.1:18789/ws"
-GW_TOKEN="lucinate"
 COMPOSE="test/integration/docker-compose.yml"
 
-# 1. List pending devices (JSON structure: {"pending":[...], "paired":[...]})
-docker compose -f "$COMPOSE" exec -T gateway \
-    openclaw devices list --json --token "$GW_TOKEN" --url "$GW_URL"
+# 1. List pending devices (owner context — no --token/--url).
+#    JSON structure: {"pending":[...], "paired":[...]}
+docker compose -f "$COMPOSE" exec -T gateway openclaw devices list --json
 
-# 2. Approve the pending device using its requestId
-docker compose -f "$COMPOSE" exec -T gateway \
-    openclaw devices approve <requestId> --token "$GW_TOKEN" --url "$GW_URL"
+# 2. Approve the pending device as the gateway owner using its requestId.
+#    Omit --url/--token so the CLI uses local owner authority — it prints a
+#    "gateway connect failed" line, then approves via a local fallback. (Passing
+#    --token/--url instead connects as an unprivileged WS client and deadlocks:
+#    an unapproved operator cannot approve itself.)
+docker compose -f "$COMPOSE" exec -T gateway openclaw devices approve <requestId>
 
-# 3. Rotate to get a proper device token (use the deviceId from step 1)
-docker compose -f "$COMPOSE" exec -T gateway \
-    openclaw devices rotate --device <deviceId> --role operator \
-    --scope operator.read --scope operator.write \
-    --scope operator.admin --scope operator.approvals \
-    --json --token "$GW_TOKEN" --url "$GW_URL"
-
-# 4. Save the returned .token value
-echo -n "<token>" > ~/.lucinate/identity/localhost_18789/device-token
+# 3. Reconnect from the host to confirm and persist the issued device token
+OPENCLAW_GATEWAY_URL=http://localhost:18789 go run test/integration/pair/main.go
 ```
 
 ### Ollama not reachable from Docker

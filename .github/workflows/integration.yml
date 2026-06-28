@@ -1,6 +1,6 @@
 name: Integration (openclaw)
 
-# Smoke-tests the gateway connection (protocol negotiation, setup-code pairing,
+# Smoke-tests the gateway connection (protocol negotiation, device pairing,
 # and a chat round-trip) against a matrix of OpenClaw gateway versions, using a
 # zero-cost local echo model so no remote provider or API key is needed.
 

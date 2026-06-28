@@ -24,12 +24,8 @@ BACKUP_FILE="$IDENTITY_DIR/device-token.backup"
 ECHO_PID_FILE="$SCRIPT_DIR/echomodel.pid"
 
 GATEWAY_URL="http://localhost:18789"
-GATEWAY_WS_URL="ws://127.0.0.1:18789/ws"
+GATEWAY_TOKEN="lucinate"
 ECHO_PORT="${ECHO_PORT:-18080}"
-# The setup-code bootstrap profile grants read/write/approvals but not admin,
-# so the issued device token is bounded to those scopes. Request the matching
-# set on connect — asking for operator.admin is rejected as a scope mismatch.
-OPERATOR_SCOPES="operator.read,operator.write,operator.approvals"
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -42,17 +38,10 @@ check_prereq() {
     command -v "$1" &>/dev/null || fail "$1 is not installed. $2"
 }
 
-# Decodes the bootstrapToken from a base64url-encoded `openclaw qr` setup
-# code, whose payload is JSON {url, bootstrapToken}.
-setup_code_token() {
-    local code="$1" b64
-    b64="${code//-/+}"; b64="${b64//_//}"
-    # Pad to a multiple of 4. A `printf '=%.0s' $(seq ...)` approach adds a
-    # stray '=' when no padding is needed, which GNU base64 (Linux/CI) rejects
-    # even though BSD base64 (macOS) tolerates it.
-    while [ $(( ${#b64} % 4 )) -ne 0 ]; do b64="${b64}="; done
-    printf '%s' "$b64" | base64 -d 2>/dev/null | jq -r '.bootstrapToken // empty'
-}
+# Shared register + owner-approval device pairing (pair_device,
+# write_integration_env). BACKUP_FILE/IDENTITY_DIR etc. are consumed there.
+# shellcheck source=test/integration/lib/openclaw-pair.sh
+source "$SCRIPT_DIR/lib/openclaw-pair.sh"
 
 # --- Prerequisites ---------------------------------------------------------
 
@@ -101,72 +90,10 @@ for i in $(seq 1 60); do
 done
 ok "Gateway is healthy"
 
-# --- Device pairing (setup-code bootstrap) ---------------------------------
+# --- Device pairing (register + owner approval) ----------------------------
 
-info "Pairing device with test gateway (setup-code bootstrap)"
-mkdir -p "$IDENTITY_DIR"
-if [ -f "$IDENTITY_DIR/device-token" ]; then
-    cp "$IDENTITY_DIR/device-token" "$BACKUP_FILE"
-    rm "$IDENTITY_DIR/device-token"
-    ok "Backed up existing device token"
-fi
-
-info "Minting setup code"
-# /healthz can report live before the gateway is ready to mint a setup code,
-# so retry a few times and surface the CLI's stderr if it never succeeds. Use
-# `if out=$(...)` (set -e safe) rather than an assignment + `|| true`, and pass
-# HOME so the CLI finds the gateway config regardless of how `compose exec`
-# propagates the service environment.
-SETUP_CODE=""
-QR_ERR="$(mktemp)"
-for attempt in 1 2 3 4 5; do
-    if out=$(docker compose -f "$COMPOSE_FILE" exec -T -e HOME=/home/node gateway \
-        openclaw qr --setup-code-only --url "$GATEWAY_WS_URL" </dev/null 2>"$QR_ERR"); then
-        SETUP_CODE=$(printf '%s' "$out" | tr -d '\r\n')
-        [ -n "$SETUP_CODE" ] && break
-    fi
-    warn "Attempt $attempt: setup-code mint not ready, retrying..."
-    [ "$attempt" -lt 5 ] && sleep 3
-done
-if [ -z "$SETUP_CODE" ]; then
-    warn "openclaw qr stderr:"
-    sed 's/^/    /' "$QR_ERR" >&2 || true
-    rm -f "$QR_ERR"
-    fail "Failed to mint setup code. Logs: docker compose -f $COMPOSE_FILE logs gateway"
-fi
-rm -f "$QR_ERR"
-BOOTSTRAP_TOKEN="$(setup_code_token "$SETUP_CODE")"
-[ -n "$BOOTSTRAP_TOKEN" ] || fail "Failed to decode bootstrap token from setup code."
-ok "Setup code minted"
-
-info "Establishing device via bootstrap token"
-if OPENCLAW_GATEWAY_URL="$GATEWAY_URL" OPENCLAW_BOOTSTRAP_TOKEN="$BOOTSTRAP_TOKEN" \
-    OPENCLAW_OPERATOR_SCOPES="$OPERATOR_SCOPES" \
-    go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /'; then
-    ok "Device established"
-else
-    fail "Bootstrap connect failed. Logs: docker compose -f $COMPOSE_FILE logs gateway"
-fi
-[ -s "$IDENTITY_DIR/device-token" ] || fail "No device token was issued during bootstrap."
-
-info "Verifying connection"
-if OPENCLAW_GATEWAY_URL="$GATEWAY_URL" OPENCLAW_OPERATOR_SCOPES="$OPERATOR_SCOPES" \
-    go run "$SCRIPT_DIR/pair/main.go" 2>&1 | sed 's/^/    /'; then
-    ok "Device paired and verified"
-else
-    fail "Connection failed. Logs: docker compose -f $COMPOSE_FILE logs gateway"
-fi
-
-# --- Write integration.env for test runs ----------------------------------
-
-info "Writing test integration.env"
-cat > "$SCRIPT_DIR/integration.env" <<EOF
-OPENCLAW_GATEWAY_URL=$GATEWAY_URL
-# The setup-code bootstrap profile grants read/write/approvals but not admin,
-# so the device token is bounded to those scopes. Request the matching set.
-OPENCLAW_OPERATOR_SCOPES=$OPERATOR_SCOPES
-EOF
-ok "Wrote test/integration/integration.env"
+pair_device
+write_integration_env
 
 echo ""
 info "OpenClaw (echo model) integration test environment is ready"

@@ -458,7 +458,7 @@ func (c *Client) grantedScopes() []string {
 // requireAdminScope fails fast, before an admin-only RPC, when the connection
 // was demonstrably granted a scope set without operator.admin. The most common
 // cause is OPENCLAW_OPERATOR_SCOPES bounding the requested scopes below admin —
-// for example a leftover integration-test .env picked up by godotenv from the
+// for example a stray value left in a .env and picked up by godotenv from the
 // working directory — so the message points there. When the granted set is
 // unknown (older gateway, no hello auth) it returns nil and lets the RPC
 // surface the gateway's own error, which adminScopeHint then annotates.
@@ -473,7 +473,7 @@ func (c *Client) requireAdminScope(op string) error {
 		}
 	}
 	return fmt.Errorf("%s requires the operator.admin scope, but this connection was granted only [%s]. "+
-		"Check that OPENCLAW_OPERATOR_SCOPES is not bounding scopes below admin (e.g. a leftover .env from the integration tests), then reconnect",
+		"Check that OPENCLAW_OPERATOR_SCOPES is not bounding scopes below admin (e.g. a stray value in a .env), then reconnect",
 		op, strings.Join(scopes, ", "))
 }
 
@@ -485,7 +485,7 @@ func adminScopeHint(err error) error {
 	if err == nil || !strings.Contains(err.Error(), string(protocol.ScopeOperatorAdmin)) {
 		return err
 	}
-	return fmt.Errorf("%w (check that OPENCLAW_OPERATOR_SCOPES is not bounding scopes below admin, e.g. a leftover .env from the integration tests, then reconnect)", err)
+	return fmt.Errorf("%w (check that OPENCLAW_OPERATOR_SCOPES is not bounding scopes below admin, e.g. a stray value in a .env, then reconnect)", err)
 }
 
 // DeleteAgent removes an agent via the gateway API. deleteFiles is

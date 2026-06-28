@@ -52,6 +52,10 @@ test-integration-openclaw-ollama-setup:
 test-integration-openclaw-bedrock-setup:
 	./test/integration/setup-openclaw-bedrock.sh
 
+.PHONY: test-integration-openclaw-openrouter-setup
+test-integration-openclaw-openrouter-setup:
+	./test/integration/setup-openclaw-openrouter.sh
+
 .PHONY: test-integration-openclaw
 test-integration-openclaw:
 	go test -tags integration -count=1 -v ./internal/tui/

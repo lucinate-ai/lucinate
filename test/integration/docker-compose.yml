@@ -1,8 +1,8 @@
 services:
   gateway:
-    # Pin a known-good gateway version by default. `:latest` has broken the
-    # setup-code bootstrap (NOT_PAIRED) in the past, so the local scripts need a
-    # stable pin. CI overrides this via OPENCLAW_IMAGE to sweep its version matrix.
+    # Pin a known-good gateway version by default. `:latest` has broken device
+    # pairing (NOT_PAIRED) in the past, so the local scripts need a stable pin.
+    # CI overrides this via OPENCLAW_IMAGE to sweep its version matrix.
     image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.5.28}
     user: "${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}"
     ports:
@@ -24,6 +24,9 @@ services:
       AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY:-}"
       AWS_SESSION_TOKEN: "${AWS_SESSION_TOKEN:-}"
       AWS_REGION: "${AWS_REGION:-us-east-1}"
+      # OpenRouter API key — only needed for the OpenRouter provider. An empty
+      # value is ignored by the gateway when OpenRouter is not configured.
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18789/healthz || exit 1"]
       interval: 5s

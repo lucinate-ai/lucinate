@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 #
 # Sets up the local OpenClaw integration test environment with the
-# AWS Bedrock provider:
+# OpenRouter provider:
 #   1. Checks prerequisites
-#   2. Starts the OpenClaw gateway in Docker (configured for Bedrock)
+#   2. Starts the OpenClaw gateway in Docker (configured for OpenRouter)
 #   3. Pairs the local device identity with the test gateway
 #
 # Prerequisites:
 #   - Docker Desktop running
 #   - jq installed (brew install jq)
-#   - AWS credentials: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+#   - An OpenRouter API key (https://openrouter.ai/keys). Provide it via the
+#     OPENROUTER_API_KEY env var, or the script will prompt for it.
 #
 # Usage:
-#   ./test/integration/setup-openclaw-bedrock.sh [--model MODEL]
+#   ./test/integration/setup-openclaw-openrouter.sh [--model MODEL]
 #
 set -euo pipefail
 
@@ -21,7 +22,7 @@ COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 IDENTITY_DIR="$HOME/.lucinate/identity/localhost_18789"
 BACKUP_FILE="$IDENTITY_DIR/device-token.backup"
 
-MODEL="${MODEL:-zai.glm-5}"
+MODEL="${MODEL:-deepseek/deepseek-v4-flash}"
 GATEWAY_URL="http://localhost:18789"
 GATEWAY_WS_URL="ws://127.0.0.1:18789/ws"
 GATEWAY_TOKEN="lucinate"
@@ -58,9 +59,33 @@ check_prereq docker "Install Docker Desktop: https://www.docker.com/products/doc
 check_prereq jq     "Install jq: brew install jq"
 check_prereq go     "Install Go: https://go.dev/dl/"
 
-[ -n "${AWS_ACCESS_KEY_ID:-}" ]     || fail "AWS_ACCESS_KEY_ID is not set"
-[ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || fail "AWS_SECRET_ACCESS_KEY is not set"
-ok "AWS credentials found (region: ${AWS_REGION:-us-east-1})"
+# An OpenRouter API key is required. Resolution order, mirroring how the Go
+# tests pick up their own env files via godotenv (an existing env var wins):
+#   1. OPENROUTER_API_KEY already exported in the environment.
+#   2. The repo-root .env file (gitignored — holds the real key locally).
+#   3. Interactive prompt (hidden input).
+ENV_FILE="$SCRIPT_DIR/../../.env"
+if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -f "$ENV_FILE" ]; then
+    # Extract just the value rather than sourcing the whole file, so we don't
+    # execute arbitrary content. Tolerates an optional `export ` prefix and
+    # surrounding single/double quotes.
+    env_key="$(sed -nE 's/^[[:space:]]*(export[[:space:]]+)?OPENROUTER_API_KEY=["'\'']?([^"'\'']*)["'\'']?[[:space:]]*$/\2/p' "$ENV_FILE" | tail -n1)"
+    if [ -n "$env_key" ]; then
+        OPENROUTER_API_KEY="$env_key"
+        ok "Loaded OPENROUTER_API_KEY from .env"
+    fi
+fi
+if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+    warn "OPENROUTER_API_KEY is not set"
+    if [ -t 0 ]; then
+        read -rsp "    Enter your OpenRouter API key (https://openrouter.ai/keys): " OPENROUTER_API_KEY
+        echo
+    fi
+    [ -n "${OPENROUTER_API_KEY:-}" ] || \
+        fail "OPENROUTER_API_KEY is required. Get one at https://openrouter.ai/keys"
+fi
+export OPENROUTER_API_KEY
+ok "OpenRouter API key found"
 
 ok "All prerequisites found"
 
@@ -73,7 +98,7 @@ STATE_DIR="$SCRIPT_DIR/state"
 # device skips the pending-registration step the script relies on.
 rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
-cp "$SCRIPT_DIR/openclaw.bedrock.json" "$STATE_DIR/openclaw.json"
+cp "$SCRIPT_DIR/openclaw.openrouter.json" "$STATE_DIR/openclaw.json"
 
 # Substitute the model name in the config template.
 sed -i.bak "s|__MODEL__|${MODEL}|g" "$STATE_DIR/openclaw.json"
@@ -94,14 +119,14 @@ write_integration_env
 # --- Done ------------------------------------------------------------------
 
 echo ""
-info "OpenClaw (Bedrock) integration test environment is ready"
+info "OpenClaw (OpenRouter) integration test environment is ready"
 echo ""
-echo "  Provider: bedrock"
+echo "  Provider: openrouter"
 echo "  Gateway:  $GATEWAY_URL"
-echo "  Model:    amazon-bedrock/$MODEL"
+echo "  Model:    openrouter/$MODEL"
 echo "  Identity: $IDENTITY_DIR"
 echo ""
-echo "  To list available Bedrock models:"
+echo "  To list available OpenRouter models:"
 echo "    docker compose -f $COMPOSE_FILE exec -T gateway \\"
 echo "      openclaw models list --json \\"
 echo "      --token $GATEWAY_TOKEN --url $GATEWAY_WS_URL"
