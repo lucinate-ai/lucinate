@@ -209,6 +209,141 @@ func TestAppModel_DisableExitKeysSwallowsCtrlC(t *testing.T) {
 	}
 }
 
+// TestAppModel_OnExitRoutesQuitToHost: when the host supplies OnExit, the
+// program must hand quit requests to it rather than calling tea.Quit —
+// tea.Quit would freeze the host's view on the last frame. Exercises all
+// four quit paths: ctrl+c, q on a navigation screen, /quit, and the Quit
+// action.
+func TestAppModel_OnExitRoutesQuitToHost(t *testing.T) {
+	store := &config.Connections{}
+
+	newModel := func(exited *bool) AppModel {
+		return NewApp(nil, AppOptions{
+			Store:           store,
+			BackendFactory:  func(*config.Connection) (backend.Backend, error) { return nil, nil },
+			DisableExitKeys: true, // host can't be dismissed by tea.Quit...
+			OnExit:          func() { *exited = true },
+		})
+	}
+
+	// runExit asserts the cmd fires OnExit and emits no tea.QuitMsg.
+	runExit := func(t *testing.T, name string, cmd tea.Cmd, exited *bool) {
+		t.Helper()
+		if cmd == nil {
+			t.Fatalf("%s: expected a command", name)
+		}
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(tea.QuitMsg); ok {
+				t.Fatalf("%s: OnExit hosts must not emit tea.Quit", name)
+			}
+		}
+		if !*exited {
+			t.Fatalf("%s: expected OnExit to be invoked", name)
+		}
+	}
+
+	t.Run("ctrl+c", func(t *testing.T) {
+		var exited bool
+		m := newModel(&exited)
+		_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+		runExit(t, "ctrl+c", cmd, &exited)
+	})
+
+	t.Run("q on navigation screen", func(t *testing.T) {
+		var exited bool
+		m := newModel(&exited)
+		// The entry view is the agent/connections picker — a navigation
+		// screen with no focused text input, so q quits.
+		_, cmd := m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+		runExit(t, "q", cmd, &exited)
+	})
+
+	t.Run("/quit via requestExitMsg", func(t *testing.T) {
+		var exited bool
+		m := newModel(&exited)
+		_, cmd := m.Update(requestExitMsg{})
+		runExit(t, "requestExitMsg", cmd, &exited)
+	})
+
+	t.Run("Quit action", func(t *testing.T) {
+		var exited bool
+		m := newModel(&exited)
+		_, cmd := m.Update(TriggerActionMsg{ID: "quit"})
+		runExit(t, "quit action", cmd, &exited)
+	})
+}
+
+// TestAppModel_RequestExitMsgRouting: the message /quit emits resolves
+// per host. The CLI quits via tea.Quit; a host that can't self-terminate
+// gets no command and a user-facing notice instead of a dead loop.
+func TestAppModel_RequestExitMsgRouting(t *testing.T) {
+	store := &config.Connections{}
+	factory := func(*config.Connection) (backend.Backend, error) { return nil, nil }
+
+	// CLI: requestExitMsg becomes tea.Quit.
+	cli := NewApp(nil, AppOptions{Store: store, BackendFactory: factory})
+	_, cmd := cli.Update(requestExitMsg{})
+	if cmd == nil {
+		t.Fatal("CLI: expected a quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("CLI: expected tea.QuitMsg, got %T", cmd())
+	}
+
+	// No-exit host in chat: no command, but a notice is appended so the
+	// user isn't left wondering why /quit did nothing.
+	noExit := NewApp(nil, AppOptions{Store: store, BackendFactory: factory, DisableExitKeys: true})
+	noExit.state = viewChat
+	before := len(noExit.chatModel.messages)
+	next, cmd := noExit.Update(requestExitMsg{})
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(tea.QuitMsg); ok {
+				t.Fatal("no-exit host must not emit tea.Quit")
+			}
+		}
+	}
+	got := next.(AppModel).chatModel.messages
+	if len(got) != before+1 {
+		t.Fatalf("expected a notice message appended, got %d (was %d)", len(got), before)
+	}
+	if last := got[len(got)-1]; last.role != "system" || last.content != exitUnavailableNotice {
+		t.Fatalf("unexpected notice message: %+v", last)
+	}
+}
+
+// TestAppModel_QuitActionExposedOnlyForHostDrivenExit: the Quit action is
+// an embedder affordance — it should appear when (and only when) the host
+// can act on it. The CLI (tea.Quit) and a no-exit host both leave it off.
+func TestAppModel_QuitActionExposedOnlyForHostDrivenExit(t *testing.T) {
+	store := &config.Connections{}
+	factory := func(*config.Connection) (backend.Backend, error) { return nil, nil }
+
+	hasQuit := func(actions []Action) bool {
+		for _, a := range actions {
+			if a.ID == "quit" {
+				return true
+			}
+		}
+		return false
+	}
+
+	cli := NewApp(nil, AppOptions{Store: store, BackendFactory: factory})
+	if hasQuit(cli.Actions()) {
+		t.Error("CLI should not expose a Quit action")
+	}
+
+	noExit := NewApp(nil, AppOptions{Store: store, BackendFactory: factory, DisableExitKeys: true})
+	if hasQuit(noExit.Actions()) {
+		t.Error("a host that can't terminate should not expose a Quit action")
+	}
+
+	hostExit := NewApp(nil, AppOptions{Store: store, BackendFactory: factory, DisableExitKeys: true, OnExit: func() {}})
+	if !hasQuit(hostExit.Actions()) {
+		t.Error("an OnExit host should expose a Quit action on the navigation screen")
+	}
+}
+
 // TestAppModel_TabAdvancesFocusInConnectionsForm: end-to-end check
 // that Tab in the connections form actually advances focus when
 // routed through AppModel.Update. This guards against the value-vs-

@@ -97,6 +97,14 @@ type GatewayEventMsg protocol.Event
 // goBackMsg signals the AppModel to return to agent selection.
 type goBackMsg struct{}
 
+// requestExitMsg asks the AppModel to honour a user quit request
+// (/quit, /exit, the Quit action). Views emit it instead of tea.Quit
+// so the AppModel can apply the host-appropriate exit policy in one
+// place: terminate via the host callback, fall back to tea.Quit, or —
+// on a host whose OS forbids self-termination — surface a notice
+// rather than tearing down the TUI loop behind a still-mounted view.
+type requestExitMsg struct{}
+
 // modelSwitchedMsg is returned after switching models.
 type modelSwitchedMsg struct {
 	modelID string

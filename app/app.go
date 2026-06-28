@@ -170,6 +170,22 @@ type RunOptions struct {
 	// terminal that can't otherwise dismiss it, leaves this false.
 	DisableExitKeys bool
 
+	// OnExit, if non-nil, is invoked when the user requests a quit
+	// (/quit, the Quit action, q on a navigation screen, ctrl+c). It
+	// makes the host responsible for teardown instead of the program
+	// calling tea.Quit itself, which only stops the render loop — fine
+	// for a CLI returning to its shell, but on an embedder whose own
+	// surface (a window, a terminal view) outlives the loop it would
+	// leave a frozen final frame on screen. Such embedders set OnExit to
+	// a callback that closes that surface (and whose teardown path then
+	// calls Program.Quit); the program keeps rendering normally until
+	// that happens. When set it takes precedence over DisableExitKeys,
+	// re-enabling the quit affordances but routing them to the host.
+	// The CLI leaves it nil and relies on tea.Quit. Runs from a tea.Cmd
+	// goroutine — embedders that touch UI on a main thread should
+	// trampoline accordingly.
+	OnExit func()
+
 	// BrightCursor pins the chat composer's textarea cursor on-frame to
 	// ANSI 15 (bright white) instead of Bubbles' default ANSI 7 (light
 	// grey). Bubbles renders the on-frame as `Style.Reverse(true)` over
@@ -314,6 +330,7 @@ func New(opts RunOptions) (*Program, error) {
 		HideInputArea:         opts.HideInputArea,
 		HideActionHints:       opts.HideActionHints,
 		DisableExitKeys:       opts.DisableExitKeys,
+		OnExit:                opts.OnExit,
 		BrightCursor:          opts.BrightCursor,
 		OnInputFocusChanged:   opts.OnInputFocusChanged,
 		OnActionsChanged:      opts.OnActionsChanged,

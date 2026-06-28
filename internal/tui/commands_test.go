@@ -53,6 +53,11 @@ func TestSlashCommand_Quit(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected a quit cmd")
 	}
+	// /quit defers the exit policy to the AppModel rather than calling
+	// tea.Quit itself, so the cmd carries a requestExitMsg.
+	if _, ok := cmd().(requestExitMsg); !ok {
+		t.Fatalf("expected requestExitMsg, got %T", cmd())
+	}
 }
 
 func TestSlashCommand_Exit(t *testing.T) {
@@ -63,6 +68,9 @@ func TestSlashCommand_Exit(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected a quit cmd")
+	}
+	if _, ok := cmd().(requestExitMsg); !ok {
+		t.Fatalf("expected requestExitMsg, got %T", cmd())
 	}
 }
 
