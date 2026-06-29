@@ -5,6 +5,8 @@ name: Integration (openclaw)
 # zero-cost local echo model so no remote provider or API key is needed.
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
