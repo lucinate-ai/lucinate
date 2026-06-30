@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         gateway:
-          - "2026.4.29" # protocol v3
+          - "2026.5.7"  # protocol v3 (latest v3 release; earlier v3 builds can't grant operator.admin on pairing)
           - "2026.5.28" # protocol v4
     env:
       OPENCLAW_IMAGE: ghcr.io/openclaw/openclaw:${{ matrix.gateway }}
