@@ -18,8 +18,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Sweep both gateway WS protocol versions. Each entry is the gateway
+        # image tag the smoke test runs against. Keep exactly one protocol-v3
+        # and one protocol-v4 pin. When bumping these:
+        #   - v3 leg must stay on a protocol-v3 build. Protocol bumped to v4 at
+        #     2026.5.12, so the v3 ceiling is 2026.5.11. It must ALSO support
+        #     admin-scoped device pairing: the CLI only requests/grants
+        #     operator.admin on `devices approve` from 2026.5.3 onward, so the
+        #     usable v3 window is 2026.5.3–2026.5.7 (2026.5.7 is the newest).
+        #     Older builds (e.g. 2026.4.29) fail setup with NOT_PAIRED /
+        #     "missing scope: operator.admin" — see lib/openclaw-pair.sh.
+        #   - v4 leg can be any current protocol-v4 release.
         gateway:
-          - "2026.5.7"  # protocol v3 (latest v3 release; earlier v3 builds can't grant operator.admin on pairing)
+          - "2026.5.7"  # protocol v3 (newest v3 build that supports admin pairing)
           - "2026.5.28" # protocol v4
     env:
       OPENCLAW_IMAGE: ghcr.io/openclaw/openclaw:${{ matrix.gateway }}

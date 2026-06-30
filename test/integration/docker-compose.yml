@@ -1,8 +1,10 @@
 services:
   gateway:
-    # Pin a known-good gateway version by default. `:latest` has broken device
-    # pairing (NOT_PAIRED) in the past, so the local scripts need a stable pin.
-    # CI overrides this via OPENCLAW_IMAGE to sweep its version matrix.
+    # Default to a known-good protocol-v4 gateway for local runs; this matches
+    # the v4 leg of CI's matrix. `:latest` has broken device pairing
+    # (NOT_PAIRED) in the past, so the local scripts need a stable pin. CI
+    # overrides OPENCLAW_IMAGE to also sweep the protocol-v3 leg — see the
+    # version-pinning notes in .github/workflows/integration.yml.
     image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.5.28}
     user: "${OPENCLAW_UID:-1000}:${OPENCLAW_GID:-1000}"
     ports:
