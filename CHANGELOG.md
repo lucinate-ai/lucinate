@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-06-30
+### Added
+- feat: add OnExit callback for host-driven quit
+
+### Changed
+- ci: pin v3 integration leg to 2026.5.7 for admin pairing
+- ci: run integration tests on push to main
+- docs(ci): document gateway version pins in integration config
+- test(integration): pair openclaw with admin scopes and add openrouter variant
+
 ## [1.19.0] - 2026-06-25
 ### Added
 - feat: add ask subcommand with configurable defaults
