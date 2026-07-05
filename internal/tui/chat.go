@@ -15,6 +15,7 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/a3tai/openclaw-go/protocol"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/client"
@@ -152,6 +153,9 @@ type chatModel struct {
 	viewport           viewport.Model
 	textarea           textarea.Model
 	messages           []chatMessage
+	inline             bool // PROTOTYPE (LUCINATE_INLINE=1): render finalised turns into the terminal's native scrollback instead of an alt-screen viewport, so the terminal owns scrolling and selection; see docs/inline-scrollback.md
+	committedCount     int  // inline mode: number of leading m.messages rows already emitted to scrollback; also the start index of the still-live tail rendered in View
+	turnTailFloor      int  // inline mode: the max live-tail height seen during the current turn; the tail is padded up to this so it never SHRINKS mid-turn (ephemeral rows, dropped placeholders), which would jump the input up. Reset to 0 when the tail empties (turn committed / idle)
 	backend            backend.Backend
 	connName           string // active connection name, rendered in the header bar
 	sessionKey         string
@@ -462,6 +466,7 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 
 	return chatModel{
 		viewport:        vp,
+		inline:          inlineScrollbackEnabled(),
 		textarea:        ta,
 		backend:         b,
 		connName:        connName,
@@ -634,6 +639,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case historyLoadedMsg:
 		m.historyLoading = false
+		var commitCmd tea.Cmd
 		switch {
 		case msg.err != nil:
 			m.appendMessage(chatMessage{
@@ -642,23 +648,54 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			})
 		case len(msg.messages) > 0:
 			lastTs := lastTimestampMs(msg.messages)
-			// Server-imported rows keep gen=0 (the chatMessage zero
-			// value) so any subsequent refresh treats them as
-			// history-side and replaces them cleanly.
-			hist := append(msg.messages, chatMessage{role: "separator", timestampMs: lastTs})
-			m.messages = append(hist, m.messages...)
-			m.recordCanonical(msg.messages)
+			if m.inline {
+				// Inline mode keeps m.messages aligned with the
+				// server-canonical set (no client-only separator row, which a
+				// later refresh drops and would misalign the spill watermark),
+				// and spills the whole loaded history to scrollback so the
+				// input sits at the bottom of the flow with history above it.
+				m.messages = append(msg.messages, m.messages...)
+				m.recordCanonical(msg.messages)
+				commitCmd = m.commitLoadedHistory(msg.messages, lastTs)
+			} else {
+				// Server-imported rows keep gen=0 (the chatMessage zero
+				// value) so any subsequent refresh treats them as
+				// history-side and replaces them cleanly.
+				hist := append(msg.messages, chatMessage{role: "separator", timestampMs: lastTs})
+				m.messages = append(hist, m.messages...)
+				m.recordCanonical(msg.messages)
+			}
 		}
 		m.updateViewport()
+		// Inline mode: after spilling history to scrollback, force a clean
+		// repaint. Entering inline chat from the alt-screen picker leaves the
+		// inline renderer with stale frame state, so the first frame is corrupt
+		// (missing input border, ghosted status bar) until the next resize.
+		// Sequencing the window-size round-trip *after* the history commit means
+		// the renderer erases and repaints once the scrollback is in place.
+		var seq []tea.Cmd
+		if commitCmd != nil {
+			seq = append(seq, commitCmd)
+		}
+		if m.inline {
+			seq = append(seq, tea.RequestWindowSize)
+		}
 		// If a caller pre-seeded pendingMessages (e.g. `lucinate chat`
 		// passing an auto-submit message), drain it now so the user
 		// turn is appended *after* the history scrollback — matching
 		// what they'd see typing it themselves.
 		if len(m.pendingMessages) > 0 && !m.sending {
 			m.sending = true
-			return m, m.drainQueue()
+			seq = append(seq, m.drainQueue())
 		}
-		return m, nil
+		switch len(seq) {
+		case 0:
+			return m, nil
+		case 1:
+			return m, seq[0]
+		default:
+			return m, tea.Sequence(seq...)
+		}
 
 	case agentSwitchFailedMsg:
 		m.appendMessage(chatMessage{role: "system", errMsg: msg.err.Error()})
@@ -738,6 +775,10 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		} else {
 			m.sessionKey = msg.newSessionKey
 			m.messages = nil
+			// Inline mode: the wiped rows are already in scrollback and
+			// can't be unscrolled; reset the watermark so the fresh row
+			// indexes from zero rather than underflowing the live tail.
+			m.committedCount = 0
 			m.appendMessage(chatMessage{role: "system", content: "Session cleared. Starting fresh."})
 		}
 		m.updateViewport()
@@ -784,6 +825,12 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			m.mergeHistoryRefresh(msg.messages, msg.boundary)
 			m.recordCanonical(msg.messages)
 			m.updateViewport()
+			// Inline mode keeps the finished turn LIVE (not spilled here).
+			// Spilling it would shrink the live region, and Bubble Tea's
+			// top-anchored inline renderer pulls the input up by the turn's
+			// height and leaves dead rows at the bottom. reflowInline (run from
+			// AppModel.Update) spills the OLDEST turns only once the accumulated
+			// tail would overflow the screen.
 		}
 		// History refresh fires after each completed turn — pull a
 		// fresh prompt-token snapshot so the % keeps up with the
@@ -1337,7 +1384,21 @@ func (m *chatModel) setSize(w, h int) {
 	m.updateViewport()
 }
 
-func (m chatModel) View() string {
+// chatChrome holds the rendered non-transcript UI pieces shared by the
+// alt-screen and inline layouts: the header/status bar, completion menu, help
+// line, routine status, notifications, and the input box.
+type chatChrome struct {
+	header        string
+	menu          string
+	help          string
+	routineStatus string
+	notifications string
+	input         string
+}
+
+// buildChrome renders the chrome once so View and the inline budget math agree
+// on both content and height.
+func (m chatModel) buildChrome() chatChrome {
 	left := " lucinate"
 	if m.connName != "" {
 		left += " · " + m.connName
@@ -1395,6 +1456,14 @@ func (m chatModel) View() string {
 	if headerColor != "" {
 		hdrStyle = hdrStyle.Background(lipgloss.Color(headerColor))
 	}
+	// Truncate to the content width (terminal width minus the style's own
+	// padding) first: lipgloss's Width() *wraps* over-long content — including
+	// content pushed over by padding — to a second row, which in inline mode
+	// inflates the frame height past the terminal and ghosts the previous
+	// frame. The status bar must stay exactly one row.
+	if avail := m.width - hdrStyle.GetHorizontalFrameSize(); ansi.StringWidth(title) > avail {
+		title = ansi.Truncate(title, avail, "")
+	}
 	header := hdrStyle.
 		Width(m.width).
 		Render(title)
@@ -1445,36 +1514,148 @@ func (m chatModel) View() string {
 
 	routineStatus := ""
 	if line := m.routineStatusLine(); line != "" {
-		routineStatus = m.routineStatusStyle().Width(m.width).Render(line)
+		rs := m.routineStatusStyle()
+		if avail := m.width - rs.GetHorizontalFrameSize(); ansi.StringWidth(line) > avail {
+			line = ansi.Truncate(line, avail, "")
+		}
+		routineStatus = rs.Width(m.width).Render(line)
 	}
-	notifications := m.renderNotifications()
+
+	// Only render the composer when it's shown — hideInput hosts (native
+	// input surfaces) leave the textarea zero-valued, and its View() panics
+	// on a zero value.
+	var input string
+	if !m.hideInput {
+		input = borderStyle.
+			Width(m.width - 4).
+			Render(m.textarea.View())
+	}
+
+	return chatChrome{
+		header:        header,
+		menu:          menu,
+		help:          help,
+		routineStatus: routineStatus,
+		notifications: m.renderNotifications(),
+		input:         input,
+	}
+}
+
+func (m chatModel) View() string {
+	if m.inline {
+		return m.inlineView()
+	}
+
+	c := m.buildChrome()
 
 	if m.hideInput {
-		parts := []string{header, m.viewport.View()}
-		if notifications != "" {
-			parts = append(parts, notifications)
+		parts := []string{c.header, m.viewport.View()}
+		if c.notifications != "" {
+			parts = append(parts, c.notifications)
 		}
-		if routineStatus != "" {
-			parts = append(parts, routineStatus)
+		if c.routineStatus != "" {
+			parts = append(parts, c.routineStatus)
 		}
-		parts = append(parts, help)
+		parts = append(parts, c.help)
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
 
-	input := borderStyle.
-		Width(m.width - 4).
-		Render(m.textarea.View())
-
-	parts := []string{header, m.viewport.View()}
-	if menu != "" {
-		parts = append(parts, menu)
+	parts := []string{c.header, m.viewport.View()}
+	if c.menu != "" {
+		parts = append(parts, c.menu)
 	}
-	if notifications != "" {
-		parts = append(parts, notifications)
+	if c.notifications != "" {
+		parts = append(parts, c.notifications)
 	}
-	if routineStatus != "" {
-		parts = append(parts, routineStatus)
+	if c.routineStatus != "" {
+		parts = append(parts, c.routineStatus)
 	}
-	parts = append(parts, input, help)
+	parts = append(parts, c.input, c.help)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// aboveInputBlock returns the content rendered above the input in inline mode —
+// the live transcript tail, then the completion menu, notifications, and routine
+// status — joined top to bottom. The menu/notifications/routine bits sit at the
+// bottom of the block (just above the input); the tail is above them.
+func (m chatModel) aboveInputBlock(c chatChrome) string {
+	var parts []string
+	if tail := m.renderLiveTail(); tail != "" {
+		parts = append(parts, tail)
+	}
+	if c.menu != "" {
+		parts = append(parts, c.menu)
+	}
+	if c.notifications != "" {
+		parts = append(parts, c.notifications)
+	}
+	if c.routineStatus != "" {
+		parts = append(parts, c.routineStatus)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+}
+
+// aboveInputHeight is the current rendered height of aboveInputBlock. Powers the
+// input-stability floor (see updateInlineFloor).
+func (m chatModel) aboveInputHeight() int {
+	if s := m.aboveInputBlock(m.buildChrome()); s != "" {
+		return lipgloss.Height(s)
+	}
+	return 0
+}
+
+// inlineView renders the inline layout: the content above the input (tail +
+// menu + notifications), then the input, help, and the status bar as the last
+// row. The live region stays small — finished turns are spilled to the
+// terminal's own scrollback, where native scroll and selection apply — so it
+// flows at the bottom of the output without fighting the spill.
+//
+// The above-input block is held at its activity high-water height (turnTailFloor)
+// so the input doesn't jump up when the tail or completion menu shrinks, and
+// clipped if it would exceed the screen. Every line is clamped to the terminal
+// width so a wrapped line can't inflate the frame height and ghost the previous
+// frame.
+// inlineMaxAbove is the number of screen rows available above the input for the
+// live tail and menu — the terminal height minus the fixed lower chrome (input,
+// help, status bar) and one spare row to avoid a bottom-edge scroll.
+func (m chatModel) inlineMaxAbove() int {
+	c := m.buildChrome()
+	lowerH := lipgloss.Height(c.header)
+	if !m.hideInput {
+		lowerH += lipgloss.Height(c.input) + lipgloss.Height(c.help)
+	}
+	if h := m.height - lowerH - 1; h > 0 {
+		return h
+	}
+	return 1
+}
+
+func (m chatModel) inlineView() string {
+	// Guard the pre-size first frame (WindowSizeMsg not yet delivered): rendering
+	// at zero width/height produces negative-width styles and garbage.
+	if m.width < 10 || m.height < 3 {
+		return ""
+	}
+
+	c := m.buildChrome()
+
+	var lower []string
+	if !m.hideInput {
+		lower = append(lower, c.input, c.help)
+	}
+	lower = append(lower, c.header) // status bar: the very last row
+	lowerStr := lipgloss.JoinVertical(lipgloss.Left, lower...)
+
+	maxAbove := m.inlineMaxAbove()
+	floor := m.turnTailFloor
+	if floor > maxAbove {
+		floor = maxAbove
+	}
+	above := fitAbove(m.aboveInputBlock(c), floor, maxAbove)
+
+	frame := lowerStr
+	if above != "" {
+		frame = above + "\n" + lowerStr
+	}
+	return clampToWidth(frame, m.width)
 }

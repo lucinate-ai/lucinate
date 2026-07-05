@@ -1007,7 +1007,13 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 	case viewChat:
 		var cmd tea.Cmd
 		m.chatModel, cmd = m.chatModel.Update(msg)
-		return m, cmd
+		// Inline scrollback: spill the oldest finished turns to native
+		// scrollback once the live tail overflows the screen, and track the
+		// above-input high-water height so the input holds steady when content
+		// shrinks. Both no-op unless inline mode is on.
+		spill := m.chatModel.reflowInline()
+		m.chatModel.updateInlineFloor()
+		return m, tea.Batch(cmd, spill)
 
 	case viewSessions:
 		var cmd tea.Cmd
@@ -1242,6 +1248,14 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView("")
 	}
 	v.AltScreen = true
+	// Inline scrollback prototype: the chat view renders into the normal
+	// screen buffer so the terminal owns scrolling and text selection.
+	// Other views (pickers, config, connection list) stay full-screen. On
+	// exit from a modal, Bubble Tea restores the normal buffer with the
+	// committed transcript intact.
+	if m.state == viewChat && m.chatModel.inline {
+		v.AltScreen = false
+	}
 	if m.mouseCapture {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
