@@ -361,6 +361,13 @@ func (m chatModel) renderCompletionMenu() (string, int) {
 // of the "menu hidden" baseline; this method reapplies the menu's
 // footprint on top of that baseline whenever menu state changes.
 func (m *chatModel) applyLayout() {
+	// Preserve a bottom-anchored transcript across the height change. When the
+	// completion menu (or a notification / routine bar) opens the viewport
+	// shrinks and when it closes it grows again; without re-anchoring, a grown
+	// viewport keeps its old scroll offset and strands the transcript scrolled
+	// up with blank space beneath it. Only re-anchor when already at the bottom,
+	// so a deliberate scroll-up is left alone.
+	wasAtBottom := m.viewport.AtBottom()
 	h := m.baseViewportHeight - m.menuRowsToRender()
 	if m.activeRoutine != nil {
 		h--
@@ -370,6 +377,9 @@ func (m *chatModel) applyLayout() {
 		h = 1
 	}
 	m.viewport.SetHeight(h)
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 // refreshCompletionMenu recomputes the menu state from the current
