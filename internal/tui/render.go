@@ -78,15 +78,6 @@ func (m *chatModel) updateViewport() {
 		}
 	}
 
-	// Render queued messages that haven't been sent yet — shown as dim/italic
-	// shadows to distinguish them from confirmed messages.
-	for _, text := range m.pendingMessages {
-		b.WriteString("\n")
-		prefixIndent, wrapWidth := m.writePrefix(&b, pendingPrefixStyle, "You")
-		body := wordWrap(text, wrapWidth)
-		b.WriteString(pendingBodyStyle.Render(indentMultiline(body, prefixIndent)))
-	}
-
 	content := b.String()
 
 	// Cache the rendered lines for mouse selection (hit-testing + copy) and
@@ -447,6 +438,38 @@ func (m *chatModel) renderToolActivity() string {
 // empty.
 func (m *chatModel) toolStripHeight() int {
 	s := m.renderToolActivity()
+	if s == "" {
+		return 0
+	}
+	return lipgloss.Height(s)
+}
+
+// renderPendingMessages builds the queued-message footer: each not-yet-sent
+// message as a dim/italic "You:" shadow, clearly distinct from confirmed
+// turns. Rendered as a fixed region below the tool-activity strip and above
+// the input (rather than in the scrollable transcript) so a user's queued
+// input stays pinned just above where they typed it while a turn streams.
+// Returns "" when the queue is empty.
+func (m *chatModel) renderPendingMessages() string {
+	if len(m.pendingMessages) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, text := range m.pendingMessages {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		prefixIndent, wrapWidth := m.writePrefix(&b, pendingPrefixStyle, "You")
+		body := wordWrap(text, wrapWidth)
+		b.WriteString(pendingBodyStyle.Render(indentMultiline(body, prefixIndent)))
+	}
+	return b.String()
+}
+
+// pendingHeight reports the rendered row count of the queued-message footer,
+// so applyLayout can reserve space for it. 0 when the queue is empty.
+func (m *chatModel) pendingHeight() int {
+	s := m.renderPendingMessages()
 	if s == "" {
 		return 0
 	}

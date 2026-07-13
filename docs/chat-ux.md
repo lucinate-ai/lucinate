@@ -122,7 +122,7 @@ The mechanism is a generation counter:
 Practical consequences:
 
 - Rows imported from `chat.history` carry `gen=0` (the chatMessage zero value), so any subsequent refresh treats them as history-side and replaces them cleanly.
-- Tool cards from the *just-finalised* turn are lost on refresh — the gateway's history view doesn't model them. Tool cards for the *current* (next) turn survive because they're tagged with the new gen at append time.
+- Tool activity is not part of `m.messages` at all (it lives in `chatModel.activeTools`, rendered in the [strip](#tool-activity-strip)), so the merge neither preserves nor wipes it — it's reset per turn independently.
 - Empty `final` acks (the gateway ping that arrives before any real content) intentionally do NOT bump the gen, because no turn has actually completed.
 
 Tests pin the contract: `TestMergeHistoryRefresh_PreservesLiveTail`, `TestMergeHistoryRefresh_NoLiveTail`, `TestHandleEvent_FinalBumpsGen`, `TestHandleEvent_FinalEmptyAckDoesNotBumpGen`.

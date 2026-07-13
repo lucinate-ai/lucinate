@@ -308,12 +308,35 @@ func TestUpdateViewport_PlaceholderYieldsToPendingMessage(t *testing.T) {
 
 	m.updateViewport()
 
+	// The loading placeholder is suppressed while a message is queued...
 	view := ansi.Strip(m.viewport.View())
 	if strings.Contains(view, "Loading conversation history") {
 		t.Errorf("placeholder should yield to a queued message; got %q", view)
 	}
-	if !strings.Contains(view, "queued before history loaded") {
-		t.Errorf("queued message should still render; got %q", view)
+	// ...and the queued message renders in the footer, not the transcript.
+	if strings.Contains(view, "queued before history loaded") {
+		t.Errorf("queued message should render in the footer, not the viewport; got %q", view)
+	}
+	footer := ansi.Strip(m.renderPendingMessages())
+	if !strings.Contains(footer, "queued before history loaded") {
+		t.Errorf("queued message should render in the pending footer; got %q", footer)
+	}
+}
+
+// The queued-message footer shows each not-yet-sent message; empty queue → "".
+func TestRenderPendingMessages(t *testing.T) {
+	m := &chatModel{width: 80, agentName: "test"}
+	if got := m.renderPendingMessages(); got != "" {
+		t.Errorf("empty queue should render nothing, got %q", got)
+	}
+
+	m.pendingMessages = []string{"first queued", "second queued"}
+	footer := ansi.Strip(m.renderPendingMessages())
+	if !strings.Contains(footer, "first queued") || !strings.Contains(footer, "second queued") {
+		t.Errorf("footer should list every queued message, got %q", footer)
+	}
+	if h := m.pendingHeight(); h < 2 {
+		t.Errorf("two queued messages should reserve at least 2 rows, got %d", h)
 	}
 }
 

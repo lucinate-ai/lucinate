@@ -882,6 +882,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.textarea.CursorEnd()
 				m.exitHistoryBrowse()
 				m.refreshCompletionMenu()
+				m.applyLayout()
 				m.updateViewport()
 				return m, nil
 			}
@@ -1019,6 +1020,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.textarea.Reset()
 				m.refreshCompletionMenu()
 				m.pendingMessages = append(m.pendingMessages, text)
+				m.applyLayout()
 				m.updateViewport()
 				m.viewport.GotoBottom()
 				return m, nil
@@ -1245,6 +1247,9 @@ func (m *chatModel) cancelTurn() tea.Cmd {
 		}
 	}
 	m.notify("Cancelled.")
+	// The queue was just cleared; reflow so the viewport reclaims the
+	// footer rows the queued shadows occupied.
+	m.applyLayout()
 	m.updateViewport()
 	return func() tea.Msg {
 		err := b.ChatAbort(context.Background(), sessionKey, runID)
@@ -1297,6 +1302,9 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 
 	text := m.pendingMessages[0]
 	m.pendingMessages = m.pendingMessages[1:]
+	// The queued-message footer just shrank by one; reflow so the viewport
+	// reclaims that row whichever send path we take below.
+	m.applyLayout()
 
 	if strings.HasPrefix(text, "!!") {
 		command := strings.TrimSpace(text[2:])
@@ -1497,6 +1505,7 @@ func (m chatModel) View() string {
 	}
 	notifications := m.renderNotifications()
 	toolStrip := m.renderToolActivity()
+	pending := m.renderPendingMessages()
 
 	if m.hideInput {
 		parts := []string{header, m.viewport.View()}
@@ -1508,6 +1517,9 @@ func (m chatModel) View() string {
 		}
 		if toolStrip != "" {
 			parts = append(parts, toolStrip)
+		}
+		if pending != "" {
+			parts = append(parts, pending)
 		}
 		parts = append(parts, help)
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -1527,8 +1539,14 @@ func (m chatModel) View() string {
 	if routineStatus != "" {
 		parts = append(parts, routineStatus)
 	}
+	// Tool activity, then the queued-message footer directly above the
+	// input — so the order reads transcript → what's running → what's
+	// queued next → the input box.
 	if toolStrip != "" {
 		parts = append(parts, toolStrip)
+	}
+	if pending != "" {
+		parts = append(parts, pending)
 	}
 	parts = append(parts, input, help)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)

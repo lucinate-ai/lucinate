@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+- fix(tui): render queued messages in a footer below the tool-activity strip (directly above the input) instead of at the bottom of the scrollable transcript
+
 ### Fixed
 - fix(tui): stop streamed assistant text repeating after each tool call by moving tool activity into an ephemeral strip above the input instead of inline scrollback rows
 
