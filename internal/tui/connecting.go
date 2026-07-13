@@ -41,6 +41,13 @@ type connectingModel struct {
 	tokenInput textinput.Model
 	authErr    error
 
+	// resolving is set once the user commits a recovery choice (submit
+	// token, clear/reset identity, retry pairing) and the store+connect
+	// round-trip is dispatched. While set, the modal ignores further
+	// input so a double-tap can't dispatch the mutation twice. Reset on
+	// re-entry (enterAuthModal) when a retry lands back on this modal.
+	resolving bool
+
 	width  int
 	height int
 
@@ -68,6 +75,9 @@ func (m *connectingModel) enterAuthModal(conn *config.Connection, b backend.Back
 	m.backend = b
 	m.authErr = err
 	m.authNeed = need
+	// A retry that failed again re-enters this same model instance;
+	// clear the in-flight guard so the reopened modal is interactive.
+	m.resolving = false
 	switch need {
 	case authRecoveryTokenMismatch:
 		m.subState = subStateAuthMismatchPrompt
@@ -100,6 +110,10 @@ func (m connectingModel) Update(msg tea.Msg) (connectingModel, tea.Cmd) {
 		return m.handleKey(key)
 	}
 	if m.subState == subStateAuthTokenPrompt {
+		if m.resolving {
+			// Submit is in flight; freeze the field.
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.tokenInput, cmd = m.tokenInput.Update(msg)
 		return m, cmd
@@ -108,12 +122,20 @@ func (m connectingModel) Update(msg tea.Msg) (connectingModel, tea.Cmd) {
 }
 
 func (m connectingModel) handleKey(msg tea.KeyPressMsg) (connectingModel, tea.Cmd) {
+	if m.resolving {
+		// A recovery choice is already committed and its store+connect
+		// round-trip is in flight; ignore further input until the
+		// result lands (success transitions away, a repeat failure
+		// re-enters via enterAuthModal which clears the flag).
+		return m, nil
+	}
 	switch m.subState {
 	case subStatePairingRequired:
 		switch msg.String() {
 		case "enter", "r":
 			b := m.backend
 			conn := m.connection
+			m.resolving = true
 			return m, func() tea.Msg {
 				return authResolvedMsg{connection: conn, backend: b}
 			}
@@ -131,6 +153,7 @@ func (m connectingModel) handleKey(msg tea.KeyPressMsg) (connectingModel, tea.Cm
 		case "1", "enter":
 			b := m.backend
 			conn := m.connection
+			m.resolving = true
 			return m, func() tea.Msg {
 				if auth, ok := b.(backend.DeviceTokenAuth); ok {
 					if err := auth.ClearToken(); err != nil {
@@ -142,6 +165,7 @@ func (m connectingModel) handleKey(msg tea.KeyPressMsg) (connectingModel, tea.Cm
 		case "2":
 			b := m.backend
 			conn := m.connection
+			m.resolving = true
 			return m, func() tea.Msg {
 				if auth, ok := b.(backend.DeviceTokenAuth); ok {
 					if err := auth.ResetIdentity(); err != nil {
@@ -169,6 +193,7 @@ func (m connectingModel) handleKey(msg tea.KeyPressMsg) (connectingModel, tea.Cm
 			b := m.backend
 			conn := m.connection
 			need := m.authNeed
+			m.resolving = true
 			return m, func() tea.Msg {
 				// Dispatch on the modal's recovery type rather than
 				// on backend interface assertion: a single backend
@@ -376,6 +401,9 @@ func (m connectingModel) viewPairingRequired() string {
 	writeLine("  approve command. Run that command, then press Enter to retry.")
 
 	footer := helpStyle.Render("  Enter: retry | Esc: cancel")
+	if m.resolving {
+		footer = statusStyle.Render("  Retrying...")
+	}
 
 	if m.height <= 0 {
 		return titleLine + body.String() + "\n" + footer
@@ -407,6 +435,9 @@ func (m connectingModel) viewAuthToken() string {
 	tokenEnd := lineCount - 1
 
 	footer := helpStyle.Render("  Enter: submit | Esc: cancel")
+	if m.resolving {
+		footer = statusStyle.Render("  Submitting...")
+	}
 
 	if m.height <= 0 {
 		return titleLine + body.String() + "\n" + footer

@@ -640,6 +640,12 @@ func (m selectModel) TriggerAction(id string) (selectModel, tea.Cmd) {
 }
 
 func (m selectModel) handleCreateKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
+	if m.creating {
+		// Create RPC in flight; ignore all input. The call has
+		// already left, so there's nothing to cancel — mirror
+		// handleConfirmDeleteKey's freeze while m.deleting.
+		return m, nil
+	}
 	switch msg.String() {
 	case "esc":
 		m.subState = subStateList
@@ -649,9 +655,6 @@ func (m selectModel) handleCreateKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd)
 		return m, m.switchFocus()
 
 	case "enter":
-		if m.creating {
-			return m, nil
-		}
 		name := m.nameInput.Value()
 		m.nameValidMsg = validateName(name)
 		if m.nameValidMsg != "" {
@@ -717,6 +720,12 @@ func (m selectModel) updateConfirmDelete(msg tea.Msg) (selectModel, tea.Cmd) {
 }
 
 func (m selectModel) updateCreateForm(msg tea.Msg) (selectModel, tea.Cmd) {
+	if m.creating {
+		// Freeze the inputs while the create RPC is in flight so
+		// cursor blink / paste / etc. can't mutate the form mid-commit
+		// — matches updateConfirmDelete's guard on m.deleting.
+		return m, nil
+	}
 	prevName := m.nameInput.Value()
 
 	var cmd tea.Cmd
