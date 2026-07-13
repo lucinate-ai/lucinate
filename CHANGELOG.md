@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-07-13
+### Added
+- feat: default mouse capture on with in-app transcript selection (#171)
+
+### Changed
+- build(deps): bump charm.land/bubbles/v2 from 2.1.0 to 2.1.1
+- build(deps): bump charm.land/bubbletea/v2 from 2.0.7 to 2.0.8
+- build(deps): bump charm.land/lipgloss/v2 from 2.0.4 to 2.0.5
+- build(deps): bump golang.org/x/mod from 0.37.0 to 0.38.0
+- build(deps): bump golang.org/x/net from 0.39.0 to 0.55.0
+
+### Fixed
+- fix: re-anchor chat viewport when the completion menu opens or closes (#168)
+
 ## [1.20.0] - 2026-06-30
 ### Added
 - feat: add OnExit callback for host-driven quit
