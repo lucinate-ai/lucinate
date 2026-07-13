@@ -1503,15 +1503,32 @@ func (m chatModel) View() string {
 	if line := m.routineStatusLine(); line != "" {
 		routineStatus = m.routineStatusStyle().Width(m.width).Render(line)
 	}
-	notifications := m.renderNotifications()
+	// Notifications split by kind: informational ones (e.g. "copied … to
+	// clipboard") pin to the top just below the header; error ones drop to
+	// the very bottom, below the queued-message footer and just above the
+	// input, next to where the user will act on them.
+	infoNotifications := m.renderInfoNotifications()
+	errorNotifications := m.renderErrorNotifications()
 	toolStrip := m.renderToolActivity()
 	pending := m.renderPendingMessages()
 
+	// The View is assembled top→bottom in this region order:
+	//   header
+	//   info notifications   (top, below the status bar)
+	//   viewport             (the scrollable transcript)
+	//   completion menu
+	//   routine status
+	//   tool-activity strip  (what's running)
+	//   queued messages      (what's next)
+	//   error notifications  (bottommost, below the queue)
+	//   input
+	//   help
 	if m.hideInput {
-		parts := []string{header, m.viewport.View()}
-		if notifications != "" {
-			parts = append(parts, notifications)
+		parts := []string{header}
+		if infoNotifications != "" {
+			parts = append(parts, infoNotifications)
 		}
+		parts = append(parts, m.viewport.View())
 		if routineStatus != "" {
 			parts = append(parts, routineStatus)
 		}
@@ -1521,6 +1538,9 @@ func (m chatModel) View() string {
 		if pending != "" {
 			parts = append(parts, pending)
 		}
+		if errorNotifications != "" {
+			parts = append(parts, errorNotifications)
+		}
 		parts = append(parts, help)
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
@@ -1529,24 +1549,25 @@ func (m chatModel) View() string {
 		Width(m.width - 4).
 		Render(m.textarea.View())
 
-	parts := []string{header, m.viewport.View()}
+	parts := []string{header}
+	if infoNotifications != "" {
+		parts = append(parts, infoNotifications)
+	}
+	parts = append(parts, m.viewport.View())
 	if menu != "" {
 		parts = append(parts, menu)
-	}
-	if notifications != "" {
-		parts = append(parts, notifications)
 	}
 	if routineStatus != "" {
 		parts = append(parts, routineStatus)
 	}
-	// Tool activity, then the queued-message footer directly above the
-	// input — so the order reads transcript → what's running → what's
-	// queued next → the input box.
 	if toolStrip != "" {
 		parts = append(parts, toolStrip)
 	}
 	if pending != "" {
 		parts = append(parts, pending)
+	}
+	if errorNotifications != "" {
+		parts = append(parts, errorNotifications)
 	}
 	parts = append(parts, input, help)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
