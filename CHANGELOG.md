@@ -5,16 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.22.0] - 2026-07-13
 ### Added
-- feat(tui): filter the agent picker by name or ID — press `/` to fuzzy-filter the list, `esc` to clear
-
-### Changed
-- fix(tui): render queued messages in a footer below the tool-activity strip (directly above the input) instead of at the bottom of the scrollable transcript
-- fix(tui): pin informational notifications (e.g. "copied … to clipboard") to the top below the header and drop error notifications to the bottommost row below the queued messages
+- feat(tui): add filtering to the agent picker (#179)
+- feat(tui): bare `/model` now reports current model instead of error (#175)
+- feat(tui): rename Config screen to Settings, rebind shortcut to "s" (#180)
+- feat(tui): split notifications - info at top, errors at the bottom (#176)
 
 ### Fixed
-- fix(tui): stop streamed assistant text repeating after each tool call by moving tool activity into an ephemeral strip above the input instead of inline scrollback rows
+- fix(tui): send qualified provider/model ref when switching models (#178)
+- fix(tui): stop streamed text repeating after each tool call (#174)
+- fix: freeze form inputs while create/auth mutations are in flight (#173)
+
+### Other
+- change(tui): default delete-agent files toggle to "keep files" (#177)
 
 ## [1.21.0] - 2026-07-13
 ### Added
