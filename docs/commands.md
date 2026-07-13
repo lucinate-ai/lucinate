@@ -30,6 +30,7 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/header <hex>` | Set the chat header background for the current agent to a hex colour (e.g. `#4FC3F7`, `#F0C`); persisted per agent across runs — see below |
 | `/header reset` | Restore the default header colour for the current agent (also accepts `default` or `off`) |
 | `/help`, `/commands` | Print static help text; appends skill count if any are loaded |
+| `/model` | Report the model in use for the current session |
 | `/model <name>` | Switch model — see below |
 | `/models` | Open the model picker (filter as you type) |
 | `/mouse` | Report the current mouse-capture state |
@@ -57,7 +58,7 @@ Backend-only commands render a "not available on this connection" system message
 
 ### /model
 
-`handleModelCommand()` requires a name argument; bare `/model` emits an inline hint pointing at `/models`. With a name it calls `client.ModelsList()` to retrieve available models from the gateway, fuzzy-matches against model IDs and names (exact match first, then substring), then calls `client.SessionPatchModel(sessionKey, modelID)` and updates `m.modelID` in the header. `/models` (plural) opens the picker via `showModelPickerMsg`.
+`handleModelCommand()` reports the current model for the active session when called with no argument (falling back to `gateway default` when `m.modelID` is empty), pointing the user at `/models` and `/model <name>` to change it. With a name it calls `client.ModelsList()` to retrieve available models from the gateway, fuzzy-matches against model IDs and names (exact match first, then substring), then calls `client.SessionPatchModel(sessionKey, modelID)` and updates `m.modelID` in the header. `/models` (plural) opens the picker via `showModelPickerMsg`.
 
 ### /stats
 
