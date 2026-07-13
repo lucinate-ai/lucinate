@@ -4,10 +4,14 @@ The cron browser (`internal/tui/crons.go`) lets users list, inspect, run, edit, 
 
 ## Entry points
 
-`/crons` and `/crons all` are the only entry points. The chat view's slash-command handler (`internal/tui/commands.go`) type-asserts the active backend against `backend.CronBackend`:
+There are two entry points, both emitting `showCronsMsg{filterAgentID, filterLabel}`:
 
-- Assertion fails → `"/crons is not available on this connection"` system message, no view transition (same pattern as `/compact` on Hermes).
-- Assertion succeeds → `showCronsMsg{filterAgentID, filterLabel}` is emitted. With `/crons` the filter is the chat's current agent; `/crons all` clears the filter so jobs across every agent are listed.
+- **From chat** — `/crons` and `/crons all`. The slash-command handler (`internal/tui/commands.go`) type-asserts the active backend against `backend.CronBackend`:
+  - Assertion fails → `"/crons is not available on this connection"` system message, no view transition (same pattern as `/compact` on Hermes).
+  - Assertion succeeds → the message is emitted. With `/crons` the filter is the chat's current agent; `/crons all` clears the filter so jobs across every agent are listed.
+- **From the agent picker** — the `k: View crons` action (`internal/tui/select.go`), gated on the same `backend.CronBackend` assertion so it only appears for OpenClaw connections. No agent is selected on the picker, so it always opens **unfiltered** (`filterAgentID: ""`, like `/crons all`). `k` is repurposed from the list's vim-style up-navigation (which is dropped in `newSelectModel`, keeping `↑`).
+
+The `AppModel` records the opening view in `cronsReturn` so `esc`/Back returns there — chat for `/crons`, the picker for the picker action (mirrors `configReturn`).
 
 ## Capability surface
 
@@ -45,7 +49,7 @@ The list view loads on `Init()` via `loadJobs()`, which calls `CronsList(Enabled
 - **Line 1**: bold name + dim relative-time chip (`in 8h`, `due`, `—`).
 - **Line 2**: chips for session target (`main`/`isolated`), wake mode (`now`/`heartbeat`), agent ID, and a status badge (`ok`/`error`/`disabled`/`idle`).
 
-`enter` opens detail; `r` refreshes; `n` opens the create form; `d` opens the create form pre-populated from the highlighted job (the duplicate flow — see [Duplicate flow](#duplicate-flow)); `esc` emits `goBackFromCronsMsg{}` to return to chat.
+`enter` opens detail; `r` refreshes; `n` opens the create form; `d` opens the create form pre-populated from the highlighted job (the duplicate flow — see [Duplicate flow](#duplicate-flow)); `esc` emits `goBackFromCronsMsg{}` to return to the view that opened the browser (chat, or the agent picker — see [Entry points](#entry-points)).
 
 ## Detail substate
 

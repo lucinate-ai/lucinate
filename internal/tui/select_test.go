@@ -352,6 +352,65 @@ func TestSelectModel_ConnectionsActionOnlyInManagedMode(t *testing.T) {
 	}
 }
 
+// TestSelectModel_ViewCronsActionRequiresCronBackend: the "view crons"
+// option only appears when the connection supports crons (OpenClaw), since
+// crons are a gateway capability.
+func TestSelectModel_ViewCronsActionRequiresCronBackend(t *testing.T) {
+	// No backend → no cron capability → action hidden.
+	noCron := newSelectModel(nil, false, false, nil, false, "")
+	if hasAction(noCron, "view-crons") {
+		t.Errorf("expected no view-crons action without a CronBackend, got %+v", noCron.Actions())
+	}
+
+	// A CronBackend-capable backend → action present with key 'v'.
+	withCron := newSelectModel(newFakeBackend(), false, false, nil, false, "")
+	acts := withCron.Actions()
+	var found *Action
+	for i := range acts {
+		if acts[i].ID == "view-crons" {
+			found = &acts[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected view-crons action with a CronBackend, got %+v", acts)
+	}
+	if found.Key != "k" {
+		t.Errorf("expected key 'k', got %q", found.Key)
+	}
+}
+
+// TestSelectModel_KUnboundFromListUpNav: `k` is repurposed as the View
+// crons shortcut, so it must no longer be part of the list's up-navigation
+// binding — the ↑ arrow still scrolls up, but `k` does not.
+func TestSelectModel_KUnboundFromListUpNav(t *testing.T) {
+	m := newSelectModel(newFakeBackend(), false, false, nil, false, "")
+	for _, key := range m.list.KeyMap.CursorUp.Keys() {
+		if key == "k" {
+			t.Errorf("`k` should be unbound from list up-navigation, got keys %v", m.list.KeyMap.CursorUp.Keys())
+		}
+	}
+}
+
+// TestSelectModel_ViewCronsTriggersUnfilteredCrons: from the picker no agent
+// is selected, so the action must open the browser across all agents.
+func TestSelectModel_ViewCronsTriggersUnfilteredCrons(t *testing.T) {
+	m := newSelectModel(newFakeBackend(), false, false, nil, false, "")
+	_, cmd := m.TriggerAction("view-crons")
+	if cmd == nil {
+		t.Fatal("expected a cmd from the view-crons action")
+	}
+	msg, ok := cmd().(showCronsMsg)
+	if !ok {
+		t.Fatalf("expected showCronsMsg, got %T", cmd())
+	}
+	if msg.filterAgentID != "" {
+		t.Errorf("expected unfiltered crons (empty filterAgentID), got %q", msg.filterAgentID)
+	}
+	if msg.filterLabel != "all agents" {
+		t.Errorf("expected filterLabel 'all agents', got %q", msg.filterLabel)
+	}
+}
+
 // hasAction reports whether the picker currently exposes an action
 // with the given ID. Used by the delete-flow tests to verify the
 // confirm-delete action toggles correctly with the typed-name match.

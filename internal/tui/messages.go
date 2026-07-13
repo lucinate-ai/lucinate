@@ -17,6 +17,7 @@ type chatMessage struct {
 	streaming     bool
 	awaitingDelta bool // true for the pre-response spinner placeholder, before any delta arrives
 	pending       bool // system-row in-progress marker; the renderer appends a spinner glyph until cleared
+	confirmPrompt bool // system-row holding a y/n confirmation question; removed once the user answers
 	errMsg        string
 	rendered      bool  // true if content has been glamour-rendered (contains ANSI codes)
 	timestampMs   int64 // unix millis; only used by "separator" rows to label resume time
@@ -189,6 +190,13 @@ type chatAgentNamesLoadedMsg struct {
 // chatRoutineNamesLoadedMsg delivers routine names to the chat model for
 // `/routine <TAB>` completion.
 type chatRoutineNamesLoadedMsg struct {
+	names []string
+}
+
+// chatCronNamesLoadedMsg delivers cron job names to the chat model for
+// `/cron <TAB>` completion. Unlike routines (local files), these come from
+// a CronsList round-trip, so the slice is a startup snapshot.
+type chatCronNamesLoadedMsg struct {
 	names []string
 }
 
@@ -447,6 +455,24 @@ type cronJobSavedMsg struct {
 type cronJobRemovedMsg struct {
 	jobID string
 	err   error
+}
+
+// cronResolveMsg carries the outcome of resolving a `/cron <name>` argument
+// against the gateway cron list. matches holds every job the query matched
+// (Names are not unique, so zero, one, or many are all possible); err is set
+// when the CronsList call itself failed.
+type cronResolveMsg struct {
+	query   string
+	matches []protocol.CronJob
+	err     error
+}
+
+// chatCronRanMsg is returned after a `/cron <name>` confirmation triggers a
+// run. It is deliberately distinct from cronJobRanMsg (which cronsModel
+// consumes) so the chat model owns its own result row and can name the job.
+type chatCronRanMsg struct {
+	jobName string
+	err     error
 }
 
 // updateCheckDoneMsg carries the outcome of the startup update check.

@@ -59,6 +59,7 @@ type fakeBackend struct {
 	cronRuns        []protocol.CronRunLogEntry
 	cronListErr     error
 	cronRunsErr     error
+	cronRunErr      error
 	lastCronAdd       *protocol.CronAddParams
 	lastCronUpdate    *protocol.CronUpdateParams
 	lastCronUpdateRaw map[string]any
@@ -238,7 +239,7 @@ func (f *fakeBackend) CronRemove(ctx context.Context, jobID string) error {
 func (f *fakeBackend) CronRun(ctx context.Context, jobID string, force bool) error {
 	f.lastCronRunID = jobID
 	f.lastCronRunForce = force
-	return nil
+	return f.cronRunErr
 }
 
 // Compile-time assertions.
