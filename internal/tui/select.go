@@ -144,9 +144,11 @@ type selectModel struct {
 	deleting          bool
 	deleteErr         error
 	// keepFiles is the user's "preserve content / destroy content"
-	// toggle. False (the default) maps to backend.DeleteAgentParams
-	// DeleteFiles=true — i.e. the destructive option is the default,
-	// but the user still has to type the agent name to fire it.
+	// toggle. True (the default) maps to backend.DeleteAgentParams
+	// DeleteFiles=false — i.e. the non-destructive option is the
+	// default, so a mistaken confirmation preserves the agent's file
+	// content. The user has to toggle it off (and type the agent name)
+	// to destroy content.
 	keepFiles bool
 
 	// Terminal dimensions, mirrored from setSize so the create/confirm
@@ -306,9 +308,9 @@ func (m *selectModel) initCreateForm() tea.Cmd {
 // initConfirmDelete prepares the delete-confirm substate from the
 // passed-in item. The display name and ID are snapshotted at entry
 // so a list re-render mid-flight cannot resolve to the wrong agent.
-// keepFiles defaults to false (destructive); the user has to actively
-// type the name to fire either path, so they're not one keystroke
-// away from data loss.
+// keepFiles defaults to true (non-destructive): the user has to
+// actively toggle it off to destroy file content, so a mistaken
+// confirmation preserves the agent's files.
 func (m *selectModel) initConfirmDelete(item agentItem) tea.Cmd {
 	display := item.agent.Name
 	if display == "" {
@@ -319,7 +321,7 @@ func (m *selectModel) initConfirmDelete(item agentItem) tea.Cmd {
 	m.pendingDeleteName = display
 	m.deleting = false
 	m.deleteErr = nil
-	m.keepFiles = false
+	m.keepFiles = true
 
 	m.confirmInput = textinput.New()
 	m.confirmInput.CharLimit = 64
@@ -475,7 +477,7 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 		m.pendingDeleteName = ""
 		m.deleting = false
 		m.deleteErr = nil
-		m.keepFiles = false
+		m.keepFiles = true
 		m.loading = true
 		return m, m.loadAgents()
 
@@ -619,7 +621,7 @@ func (m selectModel) TriggerAction(id string) (selectModel, tea.Cmd) {
 		m.pendingDeleteName = ""
 		m.deleting = false
 		m.deleteErr = nil
-		m.keepFiles = false
+		m.keepFiles = true
 		return m, nil
 	case "toggle-keep-files":
 		m.keepFiles = !m.keepFiles

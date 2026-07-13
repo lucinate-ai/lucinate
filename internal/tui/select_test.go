@@ -419,8 +419,8 @@ func TestSelectModel_TriggerDeleteEntersConfirmSubstate(t *testing.T) {
 	if m.pendingDeleteName != "Alpha Agent" {
 		t.Errorf("pendingDeleteName = %q, want %q", m.pendingDeleteName, "Alpha Agent")
 	}
-	if m.keepFiles {
-		t.Error("keepFiles should default to false (destructive)")
+	if !m.keepFiles {
+		t.Error("keepFiles should default to true (non-destructive)")
 	}
 	if m.deleting {
 		t.Error("deleting should be false at substate entry")
@@ -499,26 +499,26 @@ func TestSelectModel_ToggleKeepFilesFlipsState(t *testing.T) {
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 	m, _ = m.TriggerAction("delete-agent")
 
-	if m.keepFiles {
-		t.Fatal("expected keepFiles=false at entry")
+	if !m.keepFiles {
+		t.Fatal("expected keepFiles=true at entry")
 	}
 
 	m, _ = m.TriggerAction("toggle-keep-files")
-	if !m.keepFiles {
-		t.Error("expected keepFiles=true after first toggle")
+	if m.keepFiles {
+		t.Error("expected keepFiles=false after first toggle")
 	}
 
 	// Action label should now read the inverse — i.e. the button
-	// offers to flip back to "Delete files".
+	// offers to flip back to "Keep files".
 	for _, a := range m.Actions() {
-		if a.ID == "toggle-keep-files" && a.Label != "Delete files" {
-			t.Errorf("toggle label = %q, want %q", a.Label, "Delete files")
+		if a.ID == "toggle-keep-files" && a.Label != "Keep files" {
+			t.Errorf("toggle label = %q, want %q", a.Label, "Keep files")
 		}
 	}
 
 	m, _ = m.TriggerAction("toggle-keep-files")
-	if m.keepFiles {
-		t.Error("expected keepFiles=false after second toggle")
+	if !m.keepFiles {
+		t.Error("expected keepFiles=true after second toggle")
 	}
 }
 
@@ -593,8 +593,8 @@ func TestSelectModel_ToggleKeepFilesViaTabKey(t *testing.T) {
 	m, _ = m.TriggerAction("delete-agent")
 
 	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab})
-	if !m.keepFiles {
-		t.Error("expected tab key to toggle keepFiles")
+	if m.keepFiles {
+		t.Error("expected tab key to toggle keepFiles off from its default")
 	}
 }
 
@@ -605,7 +605,7 @@ func TestSelectModel_DeleteCmdPassesKeepFilesChoice(t *testing.T) {
 	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
 	m, _ = m.TriggerAction("delete-agent")
 	m.confirmInput.SetValue("Alpha")
-	// Toggle to keep files.
+	// Toggle off the default (keep files) to opt into destroying files.
 	m, _ = m.TriggerAction("toggle-keep-files")
 
 	m, cmd := m.TriggerAction("confirm-delete")
@@ -626,8 +626,35 @@ func TestSelectModel_DeleteCmdPassesKeepFilesChoice(t *testing.T) {
 	if got.AgentID != "alpha" {
 		t.Errorf("AgentID = %q, want alpha", got.AgentID)
 	}
-	if got.DeleteFiles {
-		t.Error("expected DeleteFiles=false (keepFiles=true was set)")
+	if !got.DeleteFiles {
+		t.Error("expected DeleteFiles=true (keepFiles was toggled off)")
+	}
+}
+
+// TestSelectModel_DeleteCmdDefaultsToKeepFiles verifies the default,
+// untouched toggle flows through to a non-destructive backend call:
+// DeleteFiles=false. This is the safety default — confirming without
+// touching the toggle must preserve the agent's file content.
+func TestSelectModel_DeleteCmdDefaultsToKeepFiles(t *testing.T) {
+	fb := newFakeBackend()
+	fb.caps.AgentManagement = true
+	m := newSelectModel(fb, false, false, nil, false, "")
+	m = loadAgents(m, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+	m, _ = m.TriggerAction("delete-agent")
+	m.confirmInput.SetValue("Alpha")
+
+	// No toggle — accept the default (keep files).
+	m, cmd := m.TriggerAction("confirm-delete")
+	if cmd == nil {
+		t.Fatal("expected a cmd from confirm-delete")
+	}
+	_ = cmd()
+
+	if len(fb.deletedAgents) != 1 {
+		t.Fatalf("expected 1 DeleteAgent call, got %d", len(fb.deletedAgents))
+	}
+	if fb.deletedAgents[0].DeleteFiles {
+		t.Error("expected DeleteFiles=false by default (keep files)")
 	}
 }
 
