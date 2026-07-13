@@ -4,10 +4,22 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 )
+
+// hasConfirmPrompt reports whether any row is a lingering confirmation
+// prompt (the "(y/n)" question row).
+func hasConfirmPrompt(msgs []chatMessage) bool {
+	for _, msg := range msgs {
+		if msg.confirmPrompt {
+			return true
+		}
+	}
+	return false
+}
 
 // nonCronBackend embeds the backend.Backend interface (left nil) so it
 // satisfies chatModel.backend without implementing backend.CronBackend —
@@ -288,5 +300,55 @@ func TestMatchingCronNames(t *testing.T) {
 	m.cronNames = nil
 	if got := m.matchingCronNames("d"); got != nil {
 		t.Errorf("no loaded names should return nil, got %v", got)
+	}
+}
+
+func TestRemoveConfirmPrompt(t *testing.T) {
+	m := newSlashTestModel()
+	m.messages = []chatMessage{
+		{role: "user", content: "hi"},
+		{role: "system", content: "Run cron job \"X\" now? (y/n)", confirmPrompt: true},
+	}
+	m.removeConfirmPrompt()
+	if hasConfirmPrompt(m.messages) {
+		t.Error("confirm-prompt row was not removed")
+	}
+	if len(m.messages) != 1 || m.messages[0].content != "hi" {
+		t.Errorf("expected only the user row to remain, got %+v", m.messages)
+	}
+	// No-op when there is no prompt row.
+	m.removeConfirmPrompt()
+	if len(m.messages) != 1 {
+		t.Errorf("removeConfirmPrompt should be a no-op with no prompt row, got %d rows", len(m.messages))
+	}
+}
+
+// TestCron_AnsweringConfirmationRemovesPrompt covers the reported bug:
+// after the cron confirmation is shown, answering it (either `n` to
+// cancel or `y` to confirm) must clear pendingConfirm AND drop the
+// lingering "(y/n)" prompt row from the transcript.
+func TestCron_AnsweringConfirmationRemovesPrompt(t *testing.T) {
+	for _, answer := range []string{"n", "y"} {
+		t.Run("answer_"+answer, func(t *testing.T) {
+			m := newSlashTabTestModel() // real textarea so the enter path reads input
+
+			resolved, _ := m.Update(cronResolveMsg{query: "Daily report", matches: sampleJobs()[:1]})
+			if resolved.pendingConfirm == nil {
+				t.Fatal("expected pendingConfirm to be set")
+			}
+			if !hasConfirmPrompt(resolved.messages) {
+				t.Fatal("expected a confirm-prompt row to be appended")
+			}
+
+			resolved.textarea.SetValue(answer)
+			done, _ := resolved.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+			if done.pendingConfirm != nil {
+				t.Errorf("answer %q: pendingConfirm should be cleared", answer)
+			}
+			if hasConfirmPrompt(done.messages) {
+				t.Errorf("answer %q: the confirm-prompt row should be removed", answer)
+			}
+		})
 	}
 }

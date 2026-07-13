@@ -264,8 +264,9 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			},
 		}
 		m.appendMessage(chatMessage{
-			role:    "system",
-			content: m.pendingConfirm.prompt,
+			role:          "system",
+			content:       m.pendingConfirm.prompt,
+			confirmPrompt: true,
 		})
 		m.updateViewport()
 		return true, nil
@@ -291,8 +292,9 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			},
 		}
 		m.appendMessage(chatMessage{
-			role:    "system",
-			content: m.pendingConfirm.prompt,
+			role:          "system",
+			content:       m.pendingConfirm.prompt,
+			confirmPrompt: true,
 		})
 		m.updateViewport()
 		return true, nil

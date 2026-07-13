@@ -396,6 +396,19 @@ func (m *chatModel) replacePendingSystem(replacement chatMessage) {
 	m.appendMessage(replacement)
 }
 
+// removeConfirmPrompt drops the confirmation-prompt system row (the one
+// carrying the "(y/n)" question) once the user has answered, so the
+// question doesn't linger in the transcript after the pending action is
+// confirmed or cancelled. No-op if no such row is present.
+func (m *chatModel) removeConfirmPrompt() {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].confirmPrompt {
+			m.messages = append(m.messages[:i], m.messages[i+1:]...)
+			return
+		}
+	}
+}
+
 // recordCanonical forwards a canonical-history slice to the active
 // recorder, if one is attached. No-op when /record is off. Errors
 // from the underlying file write are surfaced as a one-shot system
@@ -835,7 +848,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 					}
 				},
 			}
-			m.appendMessage(chatMessage{role: "system", content: prompt})
+			m.appendMessage(chatMessage{role: "system", content: prompt, confirmPrompt: true})
 		}
 		m.updateViewport()
 		return m, nil
@@ -1069,6 +1082,9 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.refreshCompletionMenu()
 				confirm := m.pendingConfirm
 				m.pendingConfirm = nil
+				// The question has been answered, so drop its prompt row —
+				// otherwise the "(y/n)" line lingers as if still pending.
+				m.removeConfirmPrompt()
 				lower := strings.ToLower(text)
 				if lower == "y" || lower == "yes" {
 					m.notify("Confirmed.")
