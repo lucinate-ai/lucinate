@@ -166,6 +166,7 @@ Type these in the chat input. As soon as you type `/`, a menu shows every matchi
 | `/settings` | Open settings (also `/config`) |
 | `/connections` | Switch backend connection |
 | `/crons` | List and manage gateway cron jobs (default: filter by current agent; `/crons all` shows global) — OpenClaw only |
+| `/cron <name>` | Run a named cron job now, after a y/n confirmation — OpenClaw only |
 | `/header <hex>` | Set the chat header background for the current agent to a hex colour (e.g. `#4FC3F7`); the override sticks to that agent and persists across runs. Bare `/header` reports the current agent's value, `/header reset` restores the default. |
 | `/models` | Open the model picker (filter as you type) |
 | `/model <name>` | Switch model (fuzzy match) |

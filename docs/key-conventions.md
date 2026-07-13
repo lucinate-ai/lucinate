@@ -20,6 +20,7 @@ The conventions are descriptive of what is in the code today (`internal/tui/cron
 | `a` | Toggle agent filter | crons list (only when filtering by agent) |
 | `c` | Connections | agent picker (when management surface allows it) |
 | `s` | Settings (open the settings screen) | connections list, agent picker (managed mode) |
+| `k` | View crons (open the cron browser, all agents) | agent picker (OpenClaw only) |
 | `Space` | Toggle (boolean config item) | config view, Ask-defaults sub-screen |
 
 A few of these warrant explanation:
@@ -28,6 +29,7 @@ A few of these warrant explanation:
 - **`r` lowercase / `R` uppercase.** Lowercase = refresh (always available); uppercase = retry (only after an error). Where retry isn't applicable, only `r` is bound. Don't reverse this — terminals that don't reliably report shift would land on the wrong action.
 - **`!` for run-now**, not `R` (uppercase). The case-sensitive `r`/`R` pair was easy to misfire on terminals that drop shift on letters; `!` is unambiguous.
 - **`T` for transcript** stays uppercase because lowercase `t` is already toggle in the same view.
+- **`k` for View crons in the agent picker** is a deliberate deviation from the `k`/`j` list-navigation convention below. The picker is the one place a user can reach the (unfiltered) cron browser before entering chat, and `k` is mnemonic-free enough to spare. To keep the convention honest the picker drops `k` from the list's up-navigation binding (so `k` no longer scrolls up there — `↑` still does), rather than shadowing it and leaving the footer advertising a key that does two things.
 
 ## Confirms
 
@@ -45,7 +47,7 @@ Confirm prompts are always one substate (e.g. `cronSubConfirmDelete`, `routinesS
 |---|---|
 | `Esc` | Back / cancel |
 | `Enter` | Select / submit |
-| `Up` / `Down` (or `k` / `j`) | Move within a list |
+| `Up` / `Down` (or `k` / `j`) | Move within a list (in the agent picker `k` is View crons — see above — so only `↑` moves up there) |
 | `Left` / `Right` (or `h` / `l`) | Decrease / increase numeric config items |
 | `Tab` / `Shift+Tab` | Cycle focus within a form |
 
