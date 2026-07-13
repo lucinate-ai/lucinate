@@ -168,7 +168,7 @@ func (m *configModel) applyToPrefs() {
 func (m configModel) View() string {
 	var b strings.Builder
 
-	header := headerStyle.Render(" Config ")
+	header := headerStyle.Render(" Settings ")
 	b.WriteString(header)
 	b.WriteString("\n\n")
 

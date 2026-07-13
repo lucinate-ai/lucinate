@@ -19,7 +19,7 @@ The conventions are descriptive of what is in the code today (`internal/tui/cron
 | `!` | Run now | crons detail |
 | `a` | Toggle agent filter | crons list (only when filtering by agent) |
 | `c` | Connections | agent picker (when management surface allows it) |
-| `,` | Config (open the preferences screen) | connections list, agent picker (managed mode) |
+| `s` | Settings (open the settings screen) | connections list, agent picker (managed mode) |
 | `Space` | Toggle (boolean config item) | config view, Ask-defaults sub-screen |
 
 A few of these warrant explanation:

@@ -137,9 +137,9 @@ The mouse works too: **wheel scrolls the history**, and **click-drag selects
 text** — it lands on your clipboard the moment you let go. Prefer your
 terminal's native selection? `/mouse off` hands the mouse back.
 
-### Preferences
+### Settings
 
-Use `/config` to open the preferences view. Settings are persisted to `~/.lucinate/config.json`.
+Use `/settings` to open the settings view (also reachable as `/config`). Your settings are persisted to `~/.lucinate/config.json`.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -149,7 +149,7 @@ Use `/config` to open the preferences view. Settings are persisted to `~/.lucina
 | Connect timeout | 15s | Per-attempt deadline for the initial connect and each reconnect (range 5–300s — bump it for slow local LLMs) |
 | Ask command defaults | — | Connection, agent, session, and detach values pre-filled for `lucinate ask`. Opens a sub-screen (`Enter`); leave a field blank to keep requiring it on the command line. |
 
-In the config view, use `Space` to toggle checkboxes, `←`/`→` to adjust numeric values, and `Enter` to open a sub-screen like **Ask command defaults**. The preferences screen is also reachable from the connections and agent lists with `,`.
+In the settings view, use `Space` to toggle checkboxes, `←`/`→` to adjust numeric values, and `Enter` to open a sub-screen like **Ask command defaults**. The settings screen is also reachable from the connections and agent lists with `s`.
 
 ## Commands
 
@@ -163,7 +163,7 @@ Type these in the chat input. As soon as you type `/`, a menu shows every matchi
 | `/cancel` | Cancel the in-progress response (also: `Esc`) |
 | `/clear` | Clear chat display |
 | `/compact` | Compact session context — server-side on OpenClaw, local summarisation pass on OpenAI-compatible backends (with confirmation) |
-| `/config` | Open preferences |
+| `/settings` | Open settings (also `/config`) |
 | `/connections` | Switch backend connection |
 | `/crons` | List and manage gateway cron jobs (default: filter by current agent; `/crons all` shows global) — OpenClaw only |
 | `/header <hex>` | Set the chat header background for the current agent to a hex colour (e.g. `#4FC3F7`); the override sticks to that agent and persists across runs. Bare `/header` reports the current agent's value, `/header reset` restores the default. |
@@ -295,7 +295,7 @@ Typing `-c my-con -a main` on every call gets old. `lucinate ask` is `send` with
 lucinate ask "what's on my plate today?"
 ```
 
-Set the defaults once in the TUI under `/config` → **Ask command defaults**. Any flag you pass still wins — `lucinate ask -a other "…"` overrides the saved agent for that one call — and leaving a field blank in the config screen keeps requiring it on the command line.
+Set the defaults once in the TUI under `/settings` → **Ask command defaults**. Any flag you pass still wins — `lucinate ask -a other "…"` overrides the saved agent for that one call — and leaving a field blank in the settings screen keeps requiring it on the command line.
 
 For the lifecycle, the default-session rule, embedding `app.Send` from Go, the detach contract, and the `ask` alias, see [docs/one-shot.md](docs/one-shot.md).
 
@@ -338,7 +338,7 @@ LUCINATE_OPENAI_DEFAULT_MODEL=llama3.2   # optional
 Other knobs:
 
 ```sh
-LUCINATE_DISABLE_UPDATE_CHECK=1          # opt out of the daily update check, regardless of the toggle in /config
+LUCINATE_DISABLE_UPDATE_CHECK=1          # opt out of the daily update check, regardless of the toggle in /settings
 
 LUCINATE_LOG_LEVEL=warn                  # debug | info | warn (default) | error
 LUCINATE_LOG_FILE=/path/to/lucinate.log  # path to log file. TUI defaults to <os-tempdir>/lucinate-events.log; non-TUI subcommands default to stderr

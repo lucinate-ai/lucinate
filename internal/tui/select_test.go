@@ -752,6 +752,47 @@ func TestSelectModel_ConnectionsActionEmitsShowConnections(t *testing.T) {
 	}
 }
 
+func TestSelectModel_SettingsActionBinding(t *testing.T) {
+	// Config is exposed only in managed mode, labelled "Settings" and
+	// bound to the unshifted "s" key (see key-conventions.md — Shift+letter
+	// pairs misfire on terminals that drop shift). The action ID stays
+	// "config" as a stable dispatch identifier.
+	legacy := newSelectModel(nil, false, false, nil, false, "")
+	for _, a := range legacy.Actions() {
+		if a.ID == "config" {
+			t.Errorf("legacy mode should not expose the settings action, got %+v", legacy.Actions())
+		}
+	}
+
+	managed := newSelectModel(nil, false, true, nil, false, "")
+	var found *Action
+	for i, a := range managed.Actions() {
+		if a.ID == "config" {
+			found = &managed.Actions()[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("managed mode should expose the settings action, got %+v", managed.Actions())
+	}
+	if found.Key != "s" {
+		t.Errorf("expected key %q, got %q", "s", found.Key)
+	}
+	if found.Label != "Settings" {
+		t.Errorf("expected label %q, got %q", "Settings", found.Label)
+	}
+}
+
+func TestSelectModel_SettingsActionEmitsShowConfig(t *testing.T) {
+	m := newSelectModel(nil, false, true, nil, false, "")
+	_, cmd := m.TriggerAction("config")
+	if cmd == nil {
+		t.Fatal("expected cmd from settings action")
+	}
+	if _, ok := cmd().(showConfigMsg); !ok {
+		t.Errorf("expected showConfigMsg, got %T", cmd())
+	}
+}
+
 func TestSelectModel_AutoPickName_MatchesByName(t *testing.T) {
 	m := newSelectModel(nil, false, false, nil, false, "Scout")
 

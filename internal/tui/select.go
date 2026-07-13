@@ -579,9 +579,15 @@ func (m selectModel) Actions() []Action {
 	}
 	if m.showConnections {
 		actions = append(actions, Action{ID: "connections", Label: "Connections", Key: "c"})
-		// Config is gated on the same managed-mode flag as Connections;
-		// it's also reachable from chat and the connections list.
-		actions = append(actions, Action{ID: "config", Label: "Config", Key: ","})
+		// Settings is gated on the same managed-mode flag as Connections;
+		// it's also reachable from chat and the connections list. Key is
+		// "s" (settings): an unshifted mnemonic, per key-conventions.md's
+		// rule against relying on Shift for letters (terminals that drop
+		// shift would misfire onto the wrong action). The old comma binding
+		// was the macOS ⌘,-idiom and collided with vi's motion-repeat key
+		// in this vi-flavoured list. The action ID stays "config" — it's a
+		// stable identifier embedders and tests dispatch on.
+		actions = append(actions, Action{ID: "config", Label: "Settings", Key: "s"})
 	}
 	return actions
 }

@@ -144,9 +144,9 @@ type AppModel struct {
 	brightCursor     bool
 	managed          bool
 
-	// configReturn records the view that opened the config screen so
-	// Esc / Back returns there rather than always to chat. The config
-	// screen is reachable from chat (/config), the connections list,
+	// configReturn records the view that opened the settings screen so
+	// Esc / Back returns there rather than always to chat. The settings
+	// screen is reachable from chat (/settings), the connections list,
 	// and the agent list, none of which share a fixed parent.
 	configReturn viewState
 

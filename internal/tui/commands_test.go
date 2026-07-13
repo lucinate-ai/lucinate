@@ -543,18 +543,22 @@ func TestAgentNameHint_NoAgentsLoaded(t *testing.T) {
 	}
 }
 
-func TestSlashCommand_Config(t *testing.T) {
-	m := newSlashTestModel()
-	handled, cmd := m.handleSlashCommand("/config")
-	if !handled {
-		t.Fatal("expected /config to be handled")
-	}
-	if cmd == nil {
-		t.Fatal("expected a cmd from /config")
-	}
-	msg := cmd()
-	if _, ok := msg.(showConfigMsg); !ok {
-		t.Errorf("expected showConfigMsg, got %T", msg)
+func TestSlashCommand_Settings(t *testing.T) {
+	// /settings is the primary command; /config is kept as a
+	// backward-compatible alias. Both must open the settings screen.
+	for _, cmdName := range []string{"/settings", "/config"} {
+		m := newSlashTestModel()
+		handled, cmd := m.handleSlashCommand(cmdName)
+		if !handled {
+			t.Fatalf("expected %s to be handled", cmdName)
+		}
+		if cmd == nil {
+			t.Fatalf("expected a cmd from %s", cmdName)
+		}
+		msg := cmd()
+		if _, ok := msg.(showConfigMsg); !ok {
+			t.Errorf("%s: expected showConfigMsg, got %T", cmdName, msg)
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 # Connections and backends
 
-A connection is a saved target lucinate can connect to (URL + type + auth identity). The list is persisted to `~/.lucinate/connections.json` and managed through the connections picker (`viewConnections`) — accessible as the entry view on first run, via `/connections` mid-session, or via the **Connections** action on the agent picker. The picker also exposes a **Config** action (key `,`) that opens the preferences screen without leaving the pre-chat flow.
+A connection is a saved target lucinate can connect to (URL + type + auth identity). The list is persisted to `~/.lucinate/connections.json` and managed through the connections picker (`viewConnections`) — accessible as the entry view on first run, via `/connections` mid-session, or via the **Connections** action on the agent picker. The picker also exposes a **Settings** action (key `s`) that opens the settings screen without leaving the pre-chat flow.
 
 ## Connection types
 
