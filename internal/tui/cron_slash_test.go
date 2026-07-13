@@ -352,3 +352,79 @@ func TestCron_AnsweringConfirmationRemovesPrompt(t *testing.T) {
 		})
 	}
 }
+
+func TestCompleteCronName(t *testing.T) {
+	m := newSlashTestModel()
+	m.cronNames = []string{"Daily report", "Deploy", "Nightly"}
+
+	if got := m.completeCronName("dep"); got != "Deploy" {
+		t.Errorf("completeCronName(dep) = %q, want Deploy", got)
+	}
+	// Case-insensitive, preserving the stored casing.
+	if got := m.completeCronName("DA"); got != "Daily report" {
+		t.Errorf("completeCronName(DA) = %q, want Daily report", got)
+	}
+	if got := m.completeCronName("zzz"); got != "" {
+		t.Errorf("completeCronName(zzz) = %q, want empty", got)
+	}
+}
+
+func TestCronNameHint(t *testing.T) {
+	m := newSlashTestModel()
+	m.cronNames = []string{"Daily report"}
+
+	// The ghost hint completes the tail of the matched name.
+	value := "/cron Dai"
+	if token, suffix := m.cronNameHint(value, len(value)); token != "Dai" || suffix != "ly report" {
+		t.Errorf("cronNameHint = (%q, %q), want (Dai, \"ly report\")", token, suffix)
+	}
+	// No hint off a /cron line.
+	if token, suffix := m.cronNameHint("hello", len("hello")); token != "" || suffix != "" {
+		t.Errorf("expected no hint off a /cron line, got (%q, %q)", token, suffix)
+	}
+	// No hint when the prefix matches nothing.
+	if token, suffix := m.cronNameHint("/cron zzz", len("/cron zzz")); token != "" || suffix != "" {
+		t.Errorf("expected no hint for a non-matching prefix, got (%q, %q)", token, suffix)
+	}
+}
+
+func TestLoadCronNames(t *testing.T) {
+	// A CronBackend yields the job names via CronsList.
+	m := newSlashTestModel()
+	m.backend.(*fakeBackend).cronJobs = sampleJobs()
+	cmd := m.loadCronNames()
+	if cmd == nil {
+		t.Fatal("expected a load cmd for a CronBackend")
+	}
+	msg, ok := cmd().(chatCronNamesLoadedMsg)
+	if !ok {
+		t.Fatalf("expected chatCronNamesLoadedMsg, got %T", cmd())
+	}
+	if want := []string{"Daily report", "Other agent thing"}; strings.Join(msg.names, ",") != strings.Join(want, ",") {
+		t.Errorf("names = %v, want %v", msg.names, want)
+	}
+
+	// A non-cron backend is a no-op (nil cmd, tolerated by tea.Batch).
+	noCron := newSlashTestModel()
+	noCron.backend = nonCronBackend{}
+	if cmd := noCron.loadCronNames(); cmd != nil {
+		t.Error("expected nil cmd for a non-CronBackend")
+	}
+
+	// A list error degrades to empty names rather than crashing.
+	errModel := newSlashTestModel()
+	fake := errModel.backend.(*fakeBackend)
+	fake.cronJobs = sampleJobs()
+	fake.cronListErr = errString("gateway down")
+	errCmd := errModel.loadCronNames()
+	if errCmd == nil {
+		t.Fatal("expected a cmd even when the list call errors")
+	}
+	errMsg, ok := errCmd().(chatCronNamesLoadedMsg)
+	if !ok {
+		t.Fatalf("expected chatCronNamesLoadedMsg on error, got %T", errCmd())
+	}
+	if len(errMsg.names) != 0 {
+		t.Errorf("expected no names on a list error, got %v", errMsg.names)
+	}
+}
