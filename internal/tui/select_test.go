@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/a3tai/openclaw-go/protocol"
 	"github.com/charmbracelet/x/ansi"
@@ -949,6 +950,164 @@ func TestSelectModel_SelectingViewRendersLoading(t *testing.T) {
 	// navigating.
 	if strings.Contains(view, "Beta") {
 		t.Errorf("expected list to be hidden while selecting, got:\n%s", view)
+	}
+}
+
+func TestSelectModel_FilterKeyEntersFilteringState(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+	)
+	if m.filtering() {
+		t.Fatal("filter should be inactive before pressing /")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+
+	if !m.filtering() {
+		t.Error("expected `/` to open the list filter (filtering state)")
+	}
+}
+
+// TestSelectModel_FilterCapturesActionKeys guards the regression the
+// handleKey filter-state branch exists to prevent: while the filter is
+// focused, a letter that doubles as an action shortcut (`n` = new-agent)
+// must type into the filter rather than trigger the action.
+func TestSelectModel_FilterCapturesActionKeys(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m.allowAgentManagement = true
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "nova", Name: "Nova"},
+	)
+	m, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if !m.filtering() {
+		t.Fatal("setup: expected filtering state after /")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+
+	if m.subState == subStateCreate {
+		t.Error("`n` while filtering must not open the create form")
+	}
+	if !m.filtering() {
+		t.Error("expected to remain in filtering state after typing")
+	}
+	if got := m.list.FilterInput.Value(); got != "n" {
+		t.Errorf("filter input = %q, want %q (keystroke should reach the filter)", got, "n")
+	}
+}
+
+// TestSelectModel_FilterHidesActionHints verifies the action shortcuts
+// (n/d/c) are withdrawn while the filter is focused, since their keys
+// are captured as filter text and advertising them would mislead.
+func TestSelectModel_FilterHidesActionHints(t *testing.T) {
+	m := newSelectModel(nil, false, true, nil, false, "")
+	m.allowAgentManagement = true
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+	)
+	if len(m.Actions()) == 0 {
+		t.Fatal("setup: expected actions before filtering")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+
+	if got := m.Actions(); len(got) != 0 {
+		t.Errorf("expected no actions while filtering, got %+v", got)
+	}
+}
+
+func TestSelectModel_FilterNarrowsList(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+		protocol.AgentSummary{ID: "gamma", Name: "Gamma"},
+	)
+	if len(m.list.VisibleItems()) != 3 {
+		t.Fatalf("setup: expected 3 visible agents, got %d", len(m.list.VisibleItems()))
+	}
+
+	m.list.SetFilterText("beta")
+
+	vis := m.list.VisibleItems()
+	if len(vis) != 1 {
+		t.Fatalf("expected filter to narrow to 1 agent, got %d", len(vis))
+	}
+	if item, ok := vis[0].(agentItem); !ok || item.agent.ID != "beta" {
+		t.Errorf("visible agent = %+v, want beta", vis[0])
+	}
+}
+
+// TestSelectModel_FilterMatchesByID exercises the FilterValue haystack:
+// concatenating name and ID lets a query hit the raw agent ID even when
+// the display name shares no characters with it.
+func TestSelectModel_FilterMatchesByID(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "id-scout", Name: "Reconnaissance"},
+		protocol.AgentSummary{ID: "id-pilot", Name: "Navigator"},
+	)
+
+	m.list.SetFilterText("scout")
+
+	vis := m.list.VisibleItems()
+	if len(vis) != 1 {
+		t.Fatalf("expected 1 match filtering by ID substring, got %d", len(vis))
+	}
+	if item, _ := vis[0].(agentItem); item.agent.ID != "id-scout" {
+		t.Errorf("matched %+v, want id-scout", vis[0])
+	}
+}
+
+// TestSelectModel_EnterSelectsFilteredAgent verifies the type-to-narrow
+// then Enter-picks-in-one-keystroke flow: Enter selects the highlighted
+// match instead of the bubbles default (apply-filter) while typing.
+func TestSelectModel_EnterSelectsFilteredAgent(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+		protocol.AgentSummary{ID: "gamma", Name: "Gamma"},
+	)
+	m.list.SetFilterText("beta")
+	// SetFilterText lands in FilterApplied; return to Filtering to mirror
+	// pressing Enter while still typing the query.
+	m.list.SetFilterState(list.Filtering)
+
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if !m.selecting {
+		t.Fatal("expected Enter to select the filtered agent")
+	}
+	if m.selectingName != "Beta" {
+		t.Errorf("selectingName = %q, want Beta", m.selectingName)
+	}
+}
+
+// TestComputeWantsInput_FilteringAgentList ensures a focused agent-list
+// filter counts as wanting input, so the app-level q-to-quit shortcut
+// and the embedder keyboard signal yield to filter typing.
+func TestComputeWantsInput_FilteringAgentList(t *testing.T) {
+	sm := newSelectModel(nil, false, false, nil, false, "")
+	sm = loadAgents(sm,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+	)
+
+	m := AppModel{state: viewSelect}
+	m.selectModel = sm
+	if m.computeWantsInput() {
+		t.Fatal("plain list navigation should not want input")
+	}
+
+	sm.list.SetFilterState(list.Filtering)
+	m.selectModel = sm
+	if !m.computeWantsInput() {
+		t.Error("expected computeWantsInput=true while the agent filter is focused")
 	}
 }
 
