@@ -556,10 +556,14 @@ func (m *chatModel) handleModelCommand(text string) (bool, tea.Cmd) {
 		if match == nil {
 			return modelSwitchedMsg{err: fmt.Errorf("no model matching %q", query)}
 		}
-		if err := b.SessionPatchModel(context.Background(), sessionKey, match.ID); err != nil {
+		// Patch with the qualified "<provider>/<id>" reference the
+		// gateway expects — match.ID alone is provider-local and gets
+		// rejected as "model not allowed" (see qualifiedModelRef).
+		modelRef := qualifiedModelRef(*match)
+		if err := b.SessionPatchModel(context.Background(), sessionKey, modelRef); err != nil {
 			return modelSwitchedMsg{err: err}
 		}
-		return modelSwitchedMsg{modelID: match.ID}
+		return modelSwitchedMsg{modelID: modelRef}
 	}
 }
 

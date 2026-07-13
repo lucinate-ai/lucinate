@@ -30,6 +30,24 @@ func (i modelItem) FilterValue() string {
 	return strings.Join(parts, " ")
 }
 
+// qualifiedModelRef returns the fully-qualified "<provider>/<id>" model
+// reference the gateway expects for sessions.patch. models.list reports
+// a provider-local id (e.g. "deepseek/deepseek-v4-pro") alongside a
+// separate provider (e.g. "openrouter"), but the session model and the
+// agent's configured model.primary are the qualified form
+// ("openrouter/deepseek/deepseek-v4-pro"). Sending the bare id makes the
+// gateway reject the switch with "model not allowed: <id>".
+//
+// Backends that don't populate Provider (openai, hermes) keep the bare
+// id unchanged. The prefix guard is idempotent, so an already-qualified
+// id from a future gateway isn't double-prefixed.
+func qualifiedModelRef(mc protocol.ModelChoice) string {
+	if mc.Provider == "" || strings.HasPrefix(mc.ID, mc.Provider+"/") {
+		return mc.ID
+	}
+	return mc.Provider + "/" + mc.ID
+}
+
 // modelDelegate renders each model row in the picker.
 type modelDelegate struct{}
 
@@ -165,10 +183,13 @@ func (m modelPickerModel) Update(msg tea.Msg) (modelPickerModel, tea.Cmd) {
 		m.list.SetItems(items)
 		// Pre-select the active model so Enter on an empty filter
 		// picks "the one you already have" rather than a surprising
-		// jump to the top of the list.
+		// jump to the top of the list. currentModelID is the qualified
+		// "<provider>/<id>" reference (from agent.Model.Primary), so
+		// match it against the qualified ref; the bare-id fallback keeps
+		// backends without a provider (openai, hermes) working.
 		if m.currentModelID != "" {
 			for idx, mc := range msg.models {
-				if mc.ID == m.currentModelID {
+				if qualifiedModelRef(mc) == m.currentModelID || mc.ID == m.currentModelID {
 					m.list.Select(idx)
 					break
 				}
@@ -196,7 +217,7 @@ func (m modelPickerModel) handleKey(msg tea.KeyPressMsg) (modelPickerModel, tea.
 	// when the whole point of the view is type-then-pick.
 	if msg.String() == "enter" && !m.loading && m.err == nil {
 		if item, ok := m.list.SelectedItem().(modelItem); ok {
-			modelID := item.model.ID
+			modelID := qualifiedModelRef(item.model)
 			b := m.backend
 			sessionKey := m.sessionKey
 			switchCmd := func() tea.Msg {
