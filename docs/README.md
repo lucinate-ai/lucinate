@@ -21,7 +21,7 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 | [shell-execution.md](shell-execution.md) | `!` local exec and `!!` remote exec with two-phase approval |
 | [export-and-recording.md](export-and-recording.md) | `/record` and `/export` transcripts: canonical-history tap, dedup, file layout, lifecycle |
 | [skills.md](skills.md) | Skill file format, discovery, catalog injection, activation |
-| [chat-ux.md](chat-ux.md) | Input key bindings, streaming animation, thinking levels, header bar, history depth |
+| [chat-ux.md](chat-ux.md) | Input key bindings, mouse scrolling and in-app selection, streaming animation, thinking levels, header bar, history depth |
 | [message-rendering.md](message-rendering.md) | Message roles, `System:` prefix convention, history cleanup, markdown rendering |
 | [key-conventions.md](key-conventions.md) | Cross-view keyboard conventions: action keys, confirms, navigation, form keys, reserved keys |
 | [logging.md](logging.md) | `internal/logging` design: `LUCINATE_LOG_*` env vars, destination rule, TUI-safety constraints |

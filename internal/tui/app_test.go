@@ -528,8 +528,9 @@ func TestAppModel_EscFromCrons_NoTranscriptLeavesChatUntouched(t *testing.T) {
 // TestAppModel_MouseMode_TogglesCaptureAndView verifies the /mouse
 // command path: a mouseModeMsg flips the authoritative mouseCapture flag,
 // View() emits MouseModeCellMotion only when capture is on, and the chat
-// model gets a feedback row. Capture must default off so click-drag runs
-// the terminal's native selection (lucinate-ai/lucinate#14).
+// model gets a feedback row. NewApp defaults capture ON (wheel scrolls,
+// in-app selection copies — see selection.go); /mouse off remains the
+// opt-out that hands click-drag back to the terminal's native selection.
 func TestAppModel_MouseMode_TogglesCaptureAndView(t *testing.T) {
 	m := AppModel{state: viewChat}
 	// hideInput skips the textarea render so View() doesn't touch the
@@ -537,8 +538,10 @@ func TestAppModel_MouseMode_TogglesCaptureAndView(t *testing.T) {
 	// after the per-view switch and is independent of the chat body.
 	m.chatModel = chatModel{viewport: viewport.New(), hideInput: true}
 
+	// Zero-value model starts with capture off; the NewApp default (on) is
+	// covered by TestNewApp_MouseCaptureDefaultsOn.
 	if got := m.View(); got.MouseMode != tea.MouseModeNone {
-		t.Fatalf("default MouseMode = %v, want MouseModeNone (selection must work out of the box)", got.MouseMode)
+		t.Fatalf("zero-value MouseMode = %v, want MouseModeNone", got.MouseMode)
 	}
 
 	on, _ := m.update(mouseModeMsg{action: "on"})

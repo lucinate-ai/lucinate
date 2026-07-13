@@ -7,10 +7,13 @@
 | Enter | Send message — or, on empty input with an active routine, advance the routine ([routines.md](routines.md)) |
 | Alt+Enter | Insert newline |
 | Ctrl+W | Delete word backward |
-| Up arrow (empty input) | Recall last sent message for editing |
+| Up arrow (empty input) | Recall the last queued message for editing, or start a bash-style walk back through previously sent messages |
+| Down arrow (while walking) | Walk forward again; at the newest entry, clear the input |
 | Tab | Open slash menu, extend to longest common prefix, then cycle |
 | Shift+Tab | While slash-menu is cycling: cycle backward through candidates. Otherwise, with an active routine: cycle the routine's mode (auto ↔ manual) |
 | Page Up / Page Down | Scroll message history |
+| Mouse wheel | Scroll message history — see [Scrolling, selection, and the mouse](#scrolling-selection-and-the-mouse) |
+| Mouse click-drag | Select transcript text; copies to the clipboard on release |
 | Esc | Cancel in-progress response — or, with an active routine, end the routine and (if streaming) cancel the turn |
 
 Alt+Enter is configured via `ta.KeyMap.InsertNewline.SetKeys("alt+enter")` in `chat.go`. Shift+Enter is not supported — `ReportAllKeysAsEscapeCodes` is disabled to preserve shifted punctuation input.
@@ -18,6 +21,8 @@ Alt+Enter is configured via `ta.KeyMap.InsertNewline.SetKeys("alt+enter")` in `c
 ## Message recall
 
 When the textarea is empty and the user presses Up arrow, the last entry in `m.pendingMessages` is popped and inserted into the textarea with the cursor at the end. This allows editing and resending a recently queued message without retyping it.
+
+With no queued messages, Up starts a bash-style walk back through previously submitted user messages (`historyBrowseIndex` / `historyBrowseValue` in `chat.go`): repeated Up steps older, Down steps newer, and reaching the newest entry clears the input. The walk ends as soon as the recalled text is edited — Up/Down then revert to ordinary cursor movement within multi-line content. Because mouse capture is on by default, the terminal never synthesises arrow keys from the wheel, so scrolling can't accidentally trigger a walk (see [Scrolling, selection, and the mouse](#scrolling-selection-and-the-mouse)).
 
 ## Streaming animation
 
@@ -126,6 +131,30 @@ Tests pin the contract: `TestMergeHistoryRefresh_PreservesLiveTail`, `TestMergeH
 
 Each (re)connect attempt has a per-attempt deadline applied to the WebSocket / HTTP handshake. The default is 15 seconds; the range is 5–300 seconds via `/config` ("Connect timeout"). The configured value is loaded by `app.DefaultBackendFactory` (`app/factory.go`) for every backend dispatch, so the same setting governs the initial connect and the supervisor's reconnect attempts. Bump it when targeting a slow local LLM that cold-starts on first request.
 
-## Scrolling
+## Scrolling, selection, and the mouse
 
-The message history is a Bubble Tea viewport. Mouse wheel events are forwarded to the viewport directly. Page Up/Down and arrow keys scroll when the input is not the active focus. New messages are anchored to the bottom via `GotoBottom()` after each update.
+The message history is a Bubble Tea viewport. Mouse capture (SGR cell-motion
+tracking) is **on by default**, which makes the three core interactions
+coexist cleanly:
+
+- **Wheel / trackpad scrolls the history.** Wheel events are forwarded to the
+  viewport directly. Because tracking is on, the terminal never translates the
+  wheel into arrow keys, so scrolling can't collide with input recall. If
+  you've scrolled up, new streaming output does not yank you back down; new
+  messages re-anchor to the bottom only when you're already there
+  (`GotoBottom()` after each update).
+- **Click-drag selects and copies.** Dragging over the transcript draws a
+  reverse-video highlight; on release the selected text is copied to the
+  clipboard (both OSC 52 through the terminal and the OS clipboard directly),
+  with a "Copied …" confirmation row. Implemented in
+  `internal/tui/selection.go`. Selections are char-precise, span multiple
+  lines, auto-scroll when dragged past the viewport edge, and strip styling
+  from the copied text.
+- **Up/Down remain input recall.** The bash-style walk through previously
+  submitted messages (and queued-message editing) owns the arrow keys
+  exclusively; scrolling never reaches them.
+
+Page Up/Down still scroll a page at a time. `/mouse off` opts out of capture,
+handing click-drag back to the terminal's native selection at the cost of
+wheel scrolling (the previous default behaviour); `/mouse on` restores the
+default.

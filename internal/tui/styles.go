@@ -33,6 +33,11 @@ var (
 			Foreground(accent).
 			Bold(true)
 
+	// In-app mouse selection highlight. Reverse video, like a terminal's
+	// native selection; applied over ANSI-stripped text so the highlight
+	// overrides inner styling (see applySelectionHighlight).
+	selectionStyle = lipgloss.NewStyle().Reverse(true)
+
 	// Input area border.
 	inputBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).

@@ -152,6 +152,9 @@ type chatModel struct {
 	viewport           viewport.Model
 	textarea           textarea.Model
 	messages           []chatMessage
+	sel                selectionState // in-app mouse drag selection over the transcript; see selection.go
+	selLines           []string       // rendered content lines (styled, unpadded, pre-highlight); rebuilt by updateViewport; the hit-test and copy source for the selection
+	viewportTopPad     int            // blank rows updateViewport prepends to bottom-anchor short content; hit-testing subtracts it
 	backend            backend.Backend
 	connName           string // active connection name, rendered in the header bar
 	sessionKey         string
@@ -1115,6 +1118,22 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
 		m.updateViewport()
 		return m, spinnerTickCmd()
+
+	// In-app mouse selection over the transcript (see selection.go). These
+	// return early so the events never reach the textarea or the viewport;
+	// wheel events are a distinct message type and keep their existing path
+	// through the passToViewport gate below.
+	case tea.MouseClickMsg:
+		m.handleMouseClick(msg)
+		return m, nil
+
+	case tea.MouseMotionMsg:
+		m.handleMouseMotion(msg)
+		return m, nil
+
+	case tea.MouseReleaseMsg:
+		cmd := m.handleMouseRelease(msg)
+		return m, cmd
 	}
 
 	// Update sub-components.

@@ -32,6 +32,10 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/help`, `/commands` | Print static help text; appends skill count if any are loaded |
 | `/model <name>` | Switch model — see below |
 | `/models` | Open the model picker (filter as you type) |
+| `/mouse` | Report the current mouse-capture state |
+| `/mouse on` | Enable mouse capture (the default): wheel scrolls history, click-drag selects and copies — see [chat-ux.md](chat-ux.md#scrolling-selection-and-the-mouse) |
+| `/mouse off` | Disable capture, handing click-drag back to the terminal's native selection (wheel scrolling stops) |
+| `/mouse toggle` | Flip the capture state |
 | `/record` | Show whether transcript capture is on, and where it's writing |
 | `/record on` | Begin streaming canonical conversation messages to a transcript file — see below |
 | `/record off` | Stop the active recording and report the file path |
