@@ -307,18 +307,37 @@ func TestSlashCommand_Skills_Populated(t *testing.T) {
 	}
 }
 
-func TestSlashCommand_Model_BareEmitsHint(t *testing.T) {
+func TestSlashCommand_Model_BareReportsCurrentModel(t *testing.T) {
 	m := newSlashTestModel()
+	m.modelID = "claude-opus-4-8"
 	handled, cmd := m.handleSlashCommand("/model")
 	if !handled {
 		t.Fatal("expected /model to be handled")
 	}
 	if cmd != nil {
-		t.Error("expected bare /model to return no cmd (inline error only)")
+		t.Error("expected bare /model to return no cmd (inline report only)")
 	}
 	last := m.messages[len(m.messages)-1]
-	if last.role != "system" || !strings.Contains(last.errMsg, "/models") {
-		t.Errorf("expected hint pointing at /models, got: %+v", last)
+	if last.role != "system" || last.errMsg != "" {
+		t.Errorf("expected a system content row, got: %+v", last)
+	}
+	if !strings.Contains(last.content, "claude-opus-4-8") {
+		t.Errorf("expected current model in report, got: %q", last.content)
+	}
+}
+
+func TestSlashCommand_Model_BareWithoutModelReportsDefault(t *testing.T) {
+	m := newSlashTestModel()
+	handled, _ := m.handleSlashCommand("/model")
+	if !handled {
+		t.Fatal("expected /model to be handled")
+	}
+	last := m.messages[len(m.messages)-1]
+	if last.role != "system" || last.errMsg != "" {
+		t.Errorf("expected a system content row, got: %+v", last)
+	}
+	if !strings.Contains(last.content, "gateway default") {
+		t.Errorf("expected gateway-default fallback, got: %q", last.content)
 	}
 }
 

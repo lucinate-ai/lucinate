@@ -75,6 +75,7 @@ const helpBody = `/quit, /exit — quit lucinate
 /header <hex> — set chat header background to a hex colour (e.g. #112233 or #F0C)
 /header reset — restore the default header colour
 /models — open model picker (filter as you type)
+/model — show the model in use for this session
 /model <name> — switch model directly
 /mouse on|off — mouse capture (on, the default: wheel scrolls history, drag selects & copies; off: native terminal selection)
 /record on|off — toggle live transcript capture for this session (bare /record shows state)
@@ -515,14 +516,19 @@ func (m *chatModel) handleAgentCommand(text string) (bool, tea.Cmd) {
 	return true, m.gateNavigation("Switching agents", switchCmd)
 }
 
-// handleModelCommand handles `/model <name>`. Bare `/model` is an error —
-// `/models` opens the picker.
+// handleModelCommand handles `/model` and `/model <name>`. Bare `/model`
+// reports the model in use for the active session; `/models` opens the
+// picker to change it.
 func (m *chatModel) handleModelCommand(text string) (bool, tea.Cmd) {
 	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
 	if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" {
+		model := m.modelID
+		if model == "" {
+			model = "gateway default"
+		}
 		m.appendMessage(chatMessage{
-			role:   "system",
-			errMsg: "/model requires a name — use /models to open the picker",
+			role:    "system",
+			content: fmt.Sprintf("Model: %s\nUse /models to open the picker, or /model <name> to switch.", model),
 		})
 		m.updateViewport()
 		return true, nil
