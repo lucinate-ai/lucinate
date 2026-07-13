@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -566,72 +567,134 @@ func TestLastTimestampMs(t *testing.T) {
 	}
 }
 
-func TestRenderToolCard_Running(t *testing.T) {
-	vp := viewport.New()
-	vp.SetWidth(80)
-	vp.SetHeight(10)
+// While the turn is in flight the strip lists each tool; a running one
+// animates on the shared spinner frame and shows its argument summary.
+func TestRenderToolActivity_ExpandedRunning(t *testing.T) {
 	m := &chatModel{
-		viewport:  vp,
-		width:     80,
-		agentName: "main",
-		messages: []chatMessage{
-			{role: "tool", toolName: "search", toolCallID: "tc1", toolArgsLine: `query="hello"`, toolState: "running"},
+		width:   80,
+		sending: true,
+		activeTools: []toolActivity{
+			{name: "search", callID: "tc1", argsLine: `query="hello"`, state: "running"},
 		},
 	}
-	m.updateViewport()
-	view := ansi.Strip(m.viewport.View())
+	view := ansi.Strip(m.renderToolActivity())
 	if !strings.Contains(view, "search") {
-		t.Errorf("rendered view missing tool name: %q", view)
+		t.Errorf("strip missing tool name: %q", view)
 	}
 	if !strings.Contains(view, `query="hello"`) {
-		t.Errorf("rendered view missing args summary: %q", view)
+		t.Errorf("strip missing args summary: %q", view)
 	}
 	if !strings.Contains(view, spinnerFrames[0]) {
-		t.Errorf("running tool card should render the spinner frame, got: %q", view)
+		t.Errorf("running entry should render the spinner frame, got: %q", view)
 	}
 }
 
-func TestRenderToolCard_Success(t *testing.T) {
-	vp := viewport.New()
-	vp.SetWidth(80)
-	vp.SetHeight(10)
+// A resolved tool shows a static ✓ while the turn is still in flight.
+func TestRenderToolActivity_ExpandedSuccess(t *testing.T) {
 	m := &chatModel{
-		viewport:  vp,
-		width:     80,
-		agentName: "main",
-		messages: []chatMessage{
-			{role: "tool", toolName: "search", toolCallID: "tc1", toolState: "success"},
+		width:   80,
+		sending: true,
+		activeTools: []toolActivity{
+			{name: "search", callID: "tc1", state: "success"},
 		},
 	}
-	m.updateViewport()
-	view := ansi.Strip(m.viewport.View())
+	view := ansi.Strip(m.renderToolActivity())
 	if !strings.Contains(view, "✓") {
-		t.Errorf("success tool card should render ✓, got: %q", view)
+		t.Errorf("success entry should render ✓, got: %q", view)
 	}
 	if !strings.Contains(view, "search") {
-		t.Errorf("rendered view missing tool name: %q", view)
+		t.Errorf("strip missing tool name: %q", view)
 	}
 }
 
-func TestRenderToolCard_Error(t *testing.T) {
-	vp := viewport.New()
-	vp.SetWidth(80)
-	vp.SetHeight(10)
+// A failed tool renders ✖ and carries its one-line error detail.
+func TestRenderToolActivity_ExpandedError(t *testing.T) {
 	m := &chatModel{
-		viewport:  vp,
-		width:     80,
-		agentName: "main",
-		messages: []chatMessage{
-			{role: "tool", toolName: "read", toolCallID: "tc1", toolState: "error", toolError: "file not found"},
+		width:   80,
+		sending: true,
+		activeTools: []toolActivity{
+			{name: "read", callID: "tc1", state: "error", errText: "file not found"},
 		},
 	}
-	m.updateViewport()
-	view := ansi.Strip(m.viewport.View())
+	view := ansi.Strip(m.renderToolActivity())
 	if !strings.Contains(view, "✖") {
-		t.Errorf("error tool card should render ✖, got: %q", view)
+		t.Errorf("error entry should render ✖, got: %q", view)
 	}
 	if !strings.Contains(view, "file not found") {
-		t.Errorf("error tool card should include error detail, got: %q", view)
+		t.Errorf("error entry should include error detail, got: %q", view)
+	}
+}
+
+// Once the turn is idle and every tool resolved, the strip collapses to a
+// single summary line grouping calls by name with counts.
+func TestRenderToolActivity_SummaryOnCompletion(t *testing.T) {
+	m := &chatModel{
+		width:   80,
+		sending: false,
+		activeTools: []toolActivity{
+			{name: "search", callID: "t1", state: "success"},
+			{name: "search", callID: "t2", state: "success"},
+			{name: "read", callID: "t3", state: "success"},
+		},
+	}
+	view := ansi.Strip(m.renderToolActivity())
+	if !strings.Contains(view, "✓ called") {
+		t.Errorf("summary should start with '✓ called', got: %q", view)
+	}
+	if !strings.Contains(view, "search ×2") {
+		t.Errorf("summary should group repeated calls, got: %q", view)
+	}
+	if !strings.Contains(view, "read") {
+		t.Errorf("summary should list each distinct tool, got: %q", view)
+	}
+}
+
+// A failed call in a completed turn flips the summary glyph to ✖ and tallies
+// the failure alongside the count.
+func TestRenderToolActivity_SummaryWithFailure(t *testing.T) {
+	m := &chatModel{
+		width:   80,
+		sending: false,
+		activeTools: []toolActivity{
+			{name: "fetch", callID: "t1", state: "success"},
+			{name: "fetch", callID: "t2", state: "error", errText: "boom"},
+		},
+	}
+	view := ansi.Strip(m.renderToolActivity())
+	if !strings.Contains(view, "✖ called") {
+		t.Errorf("summary with a failure should use ✖, got: %q", view)
+	}
+	if !strings.Contains(view, "fetch ×2 (1 failed)") {
+		t.Errorf("summary should tally failures, got: %q", view)
+	}
+}
+
+// When more tools ran than the strip can show, the oldest fold into a single
+// "…N earlier" line so the newest (still running) stay visible.
+func TestRenderToolActivity_ExpandedOverflow(t *testing.T) {
+	var tools []toolActivity
+	for i := 0; i < maxToolStripRows+3; i++ {
+		tools = append(tools, toolActivity{name: fmt.Sprintf("t%d", i), state: "success"})
+	}
+	tools[len(tools)-1].state = "running"
+	m := &chatModel{width: 80, sending: true, activeTools: tools}
+	view := ansi.Strip(m.renderToolActivity())
+	if lines := strings.Count(view, "\n") + 1; lines > maxToolStripRows {
+		t.Errorf("strip rendered %d rows, want ≤ %d", lines, maxToolStripRows)
+	}
+	if !strings.Contains(view, "earlier") {
+		t.Errorf("overflow strip should show an '…N earlier' line, got: %q", view)
+	}
+	if !strings.Contains(view, fmt.Sprintf("t%d", len(tools)-1)) {
+		t.Errorf("newest tool should stay visible, got: %q", view)
+	}
+}
+
+// No tools this turn → no strip.
+func TestRenderToolActivity_Empty(t *testing.T) {
+	m := &chatModel{width: 80}
+	if got := m.renderToolActivity(); got != "" {
+		t.Errorf("empty strip should render nothing, got: %q", got)
 	}
 }
 

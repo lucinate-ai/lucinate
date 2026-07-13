@@ -2,7 +2,7 @@
 
 Two slash commands let the user persist a session's conversation to disk: `/record` for live capture and `/export` for an after-the-fact dump. The implementation lives in `internal/tui/recorder.go` and the handlers in `internal/tui/commands.go`.
 
-Both commands draw from the same source: the canonical chat history the backend reports, never the streaming deltas. Streaming placeholders, tool cards, system rows (compact/reset notices, exec output, error banners) and the inline separators inserted at session resume are intentionally excluded — the transcript is meant to be the conversation as the gateway / OpenAI-compat backend would replay it, not as the TUI rendered it.
+Both commands draw from the same source: the canonical chat history the backend reports, never the streaming deltas. Streaming placeholders, the tool-activity strip, system rows (compact/reset notices, exec output, error banners) and the inline separators inserted at session resume are intentionally excluded — the transcript is meant to be the conversation as the gateway / OpenAI-compat backend would replay it, not as the TUI rendered it.
 
 ## Files on disk
 

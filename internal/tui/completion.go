@@ -373,6 +373,7 @@ func (m *chatModel) applyLayout() {
 		h--
 	}
 	h -= len(m.notifications)
+	h -= m.toolStripHeight()
 	if h < 1 {
 		h = 1
 	}

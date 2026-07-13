@@ -348,12 +348,22 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 				cmds = append(cmds, cmd)
 			}
 		}
+		// Reflow now that the turn has settled: with sending cleared the
+		// strip collapses from its expanded list to the one-line summary,
+		// so the viewport must grow to reclaim those rows. (A routine that
+		// auto-advanced already reset the strip and reflowed; this is a
+		// harmless recompute in that case.)
+		m.applyLayout()
+		m.updateViewport()
 		return tea.Batch(cmds...)
 
 	case "error":
 		slog.Debug("chat error", "message", chatEv.ErrorMessage)
 		m.runID = ""
 		m.finalisedRuns.add(chatEv.RunID)
+		// Drop the tool strip: a tool left mid-run would otherwise keep the
+		// spinner ticking forever and freeze a running glyph in the strip.
+		m.resetToolActivity()
 		attached := false
 		if len(m.messages) > 0 {
 			last := &m.messages[len(m.messages)-1]
@@ -392,6 +402,9 @@ func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 		slog.Debug("chat aborted")
 		m.runID = ""
 		m.finalisedRuns.add(chatEv.RunID)
+		// Same as the error branch — clear any mid-run tool so the strip
+		// and spinner don't stick after cancellation.
+		m.resetToolActivity()
 		attached := false
 		if len(m.messages) > 0 {
 			last := &m.messages[len(m.messages)-1]
@@ -468,57 +481,46 @@ func (m *chatModel) handleAgentEvent(ev protocol.Event) tea.Cmd {
 
 	switch td.Phase {
 	case "start":
-		// Freeze any currently streaming assistant message so subsequent
-		// chat deltas land on a fresh row after the tool card. Drop the
-		// pre-delta placeholder if it never received any text — leaving an
-		// empty assistant block above the tool card looks broken.
-		if len(m.messages) > 0 {
-			last := &m.messages[len(m.messages)-1]
-			if last.role == "assistant" && last.streaming {
-				if last.awaitingDelta && last.content == "" {
-					m.messages = m.messages[:len(m.messages)-1]
-				} else {
-					last.streaming = false
-					last.awaitingDelta = false
-				}
-			}
-		}
+		// Record the tool in the ephemeral activity strip rather than the
+		// message list. Keeping it off m.messages leaves the streaming
+		// assistant row intact, so the whole turn's cumulative deltas land
+		// on one row instead of being re-rendered from the top after every
+		// tool call. The streaming placeholder stays put — its spinner
+		// reads as "the agent is working" while the strip shows on what.
 		name := td.Name
 		if name == "" {
 			name = "tool"
 		}
-		m.appendMessage(chatMessage{
-			role:         "tool",
-			toolName:     name,
-			toolCallID:   td.ToolCallID,
-			toolArgsLine: summariseArgs(td.Args),
-			toolState:    "running",
+		m.activeTools = append(m.activeTools, toolActivity{
+			name:     name,
+			callID:   td.ToolCallID,
+			argsLine: summariseArgs(td.Args),
+			state:    "running",
 		})
+		m.applyLayout()
 		m.updateViewport()
 		return m.ensureSpinnerTicking()
 
 	case "update":
 		// Partial results are ignored in this pass; the running glyph keeps
-		// ticking and the final phase resolves the card. See the
+		// ticking and the final phase resolves the entry. See the
 		// expand/collapse follow-up for full output rendering.
 		return nil
 
 	case "result":
-		for i := range m.messages {
-			if m.messages[i].role != "tool" {
-				continue
-			}
-			if m.messages[i].toolCallID != td.ToolCallID {
+		for i := range m.activeTools {
+			if m.activeTools[i].callID != td.ToolCallID {
 				continue
 			}
 			if td.IsError {
-				m.messages[i].toolState = "error"
-				m.messages[i].toolError = extractToolErrorText(td.Result)
+				m.activeTools[i].state = "error"
+				m.activeTools[i].errText = extractToolErrorText(td.Result)
 			} else {
-				m.messages[i].toolState = "success"
+				m.activeTools[i].state = "success"
 			}
 			break
 		}
+		m.applyLayout()
 		m.updateViewport()
 		return nil
 	}

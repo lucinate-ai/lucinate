@@ -75,9 +75,6 @@ func (m *chatModel) updateViewport() {
 					b.WriteString(cursorStyle.Render(spinnerFrames[m.spinnerFrame%len(spinnerFrames)]))
 				}
 			}
-
-		case "tool":
-			b.WriteString(m.renderToolCard(msg, contentWidth))
 		}
 	}
 
@@ -419,42 +416,154 @@ func isTableLine(line string) bool {
 	return strings.ContainsRune(line, '│') || strings.ContainsRune(line, '─')
 }
 
-// renderToolCard renders a single inline tool-status line. Running cards
-// animate via the shared spinner frame; success and error states use static
-// glyphs.
-func (m *chatModel) renderToolCard(msg chatMessage, contentWidth int) string {
-	var glyph string
-	var lineStyle lipgloss.Style
-	switch msg.toolState {
-	case "success":
-		glyph = "✓"
-		lineStyle = toolSuccessStyle
-	case "error":
-		glyph = "✖"
-		lineStyle = errorStyle
-	default:
-		glyph = spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-		lineStyle = toolRunningStyle
-	}
+// maxToolStripRows bounds the height of the live tool-activity strip so a
+// turn that fans out many tools can't push the input off-screen. When there
+// are more, the oldest collapse into a single "…N earlier" line, keeping the
+// most recent (usually still-running) entries visible.
+const maxToolStripRows = 6
 
-	name := msg.toolName
+// renderToolActivity builds the ephemeral tool-activity strip shown above the
+// input. While the turn is in flight — or any tool is still running — each
+// tool is listed on its own line, running ones animating on the shared
+// spinner frame. Once the turn is idle and every tool has resolved, the strip
+// collapses to a single summary line so the transcript stays clean. Returns
+// "" when no tools ran this turn.
+func (m *chatModel) renderToolActivity() string {
+	if len(m.activeTools) == 0 {
+		return ""
+	}
+	width := m.width - 4
+	if width < 1 {
+		width = 1
+	}
+	if m.sending || m.anyToolRunning() {
+		return m.renderToolStripExpanded(width)
+	}
+	return m.renderToolSummary(width)
+}
+
+// toolStripHeight reports the rendered row count of the tool-activity strip,
+// so applyLayout can shrink the viewport to make room. 0 when the strip is
+// empty.
+func (m *chatModel) toolStripHeight() int {
+	s := m.renderToolActivity()
+	if s == "" {
+		return 0
+	}
+	return lipgloss.Height(s)
+}
+
+// renderToolStripExpanded lists the current turn's tools one per line. Entries
+// past maxToolStripRows are folded into a leading "…N earlier" summary so the
+// newest (typically running) tools stay on screen.
+func (m *chatModel) renderToolStripExpanded(width int) string {
+	tools := m.activeTools
+	var lines []string
+	if len(tools) > maxToolStripRows {
+		hidden := len(tools) - (maxToolStripRows - 1)
+		tools = tools[len(tools)-(maxToolStripRows-1):]
+		lines = append(lines, statusStyle.Render(truncateToWidth(fmt.Sprintf("  …%d earlier", hidden), width)))
+	}
+	for _, t := range tools {
+		lines = append(lines, renderToolLine(t, m.spinnerFrame, width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderToolLine formats one tool entry as a single truncated row: a state
+// glyph (animated while running), the tool name, its argument summary, and an
+// error detail when it failed.
+func renderToolLine(t toolActivity, frame, width int) string {
+	glyph, lineStyle := toolGlyphStyle(t, frame)
+	name := t.name
 	if name == "" {
 		name = "tool"
 	}
+	line := glyph + " " + name
+	if t.argsLine != "" {
+		line += " (" + t.argsLine + ")"
+	}
+	if t.state == "error" && t.errText != "" {
+		line += " — " + t.errText
+	}
+	return lineStyle.Render(truncateToWidth(line, width))
+}
 
-	var head strings.Builder
-	head.WriteString(glyph)
-	head.WriteString(" ")
-	head.WriteString(toolNameStyle.Render(name))
-	if msg.toolArgsLine != "" {
-		head.WriteString(" ")
-		head.WriteString("(")
-		head.WriteString(msg.toolArgsLine)
-		head.WriteString(")")
+// renderToolSummary collapses a completed turn's tools into one line, grouping
+// by name in first-seen order with call counts and any failure tally, e.g.
+// "✓ called web_search ×3, web_fetch ×2". The glyph turns to ✖ if any call
+// failed.
+func (m *chatModel) renderToolSummary(width int) string {
+	type group struct {
+		name  string
+		count int
+		errs  int
 	}
-	if msg.toolState == "error" && msg.toolError != "" {
-		head.WriteString(" — ")
-		head.WriteString(msg.toolError)
+	var order []*group
+	byName := map[string]*group{}
+	anyErr := false
+	for _, t := range m.activeTools {
+		g := byName[t.name]
+		if g == nil {
+			g = &group{name: t.name}
+			byName[t.name] = g
+			order = append(order, g)
+		}
+		g.count++
+		if t.state == "error" {
+			g.errs++
+			anyErr = true
+		}
 	}
-	return lineStyle.Render(wordWrap(head.String(), contentWidth))
+	var parts []string
+	for _, g := range order {
+		p := g.name
+		if p == "" {
+			p = "tool"
+		}
+		if g.count > 1 {
+			p += fmt.Sprintf(" ×%d", g.count)
+		}
+		if g.errs > 0 {
+			p += fmt.Sprintf(" (%d failed)", g.errs)
+		}
+		parts = append(parts, p)
+	}
+	glyph, lineStyle := "✓", toolSuccessStyle
+	if anyErr {
+		glyph, lineStyle = "✖", errorStyle
+	}
+	line := glyph + " called " + strings.Join(parts, ", ")
+	return lineStyle.Render(truncateToWidth(line, width))
+}
+
+// toolGlyphStyle maps a tool's state to its leading glyph and line style.
+// Running reuses the shared spinner frame so the strip animates in lockstep
+// with the streaming cursor.
+func toolGlyphStyle(t toolActivity, frame int) (string, lipgloss.Style) {
+	switch t.state {
+	case "success":
+		return "✓", toolSuccessStyle
+	case "error":
+		return "✖", errorStyle
+	default:
+		return spinnerFrames[frame%len(spinnerFrames)], toolRunningStyle
+	}
+}
+
+// truncateToWidth clips s to a rune width, appending an ellipsis when it
+// overflows, so a single strip row can never wrap and break the height
+// accounting. Operates on plain text — call before styling.
+func truncateToWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	return string(r[:width-1]) + "…"
 }

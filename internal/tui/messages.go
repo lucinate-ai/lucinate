@@ -10,7 +10,7 @@ import (
 
 // chatMessage represents a single message in the conversation.
 type chatMessage struct {
-	role          string // "user", "assistant", "system", "separator", or "tool"
+	role          string // "user", "assistant", "system", or "separator"
 	content       string
 	raw           string // original markdown source when rendered is true; used to re-render on resize
 	thinking      string // reasoning/intermediate thought content from the model
@@ -29,13 +29,21 @@ type chatMessage struct {
 	// history (via fetchHistory) leave this as the zero value, which
 	// reads as "older than any live turn" — i.e. always replaceable.
 	gen uint64
+}
 
-	// Tool fields populated only when role == "tool".
-	toolName     string
-	toolCallID   string
-	toolArgsLine string // single-line summary of the tool arguments
-	toolState    string // "running", "success", "error"
-	toolError    string // human-readable detail when toolState == "error"
+// toolActivity is one tool invocation tracked in the live tool-activity
+// strip rendered above the input while a turn is in flight. Tool calls are
+// kept off the message list — unlike the earlier inline tool cards — so
+// they no longer split the streaming assistant row. That split was what
+// made cumulative deltas (which carry the whole turn's text so far) render
+// from the top again after every tool call, duplicating everything before
+// it. On turn completion the strip collapses into a single summary line.
+type toolActivity struct {
+	name     string
+	callID   string
+	argsLine string // single-line summary of the tool arguments
+	state    string // "running", "success", "error"
+	errText  string // human-readable detail when state == "error"
 }
 
 // sessionStats holds token usage stats for display.
