@@ -195,6 +195,7 @@ type chatModel struct {
 	updateLatest       string // populated by AppModel when the startup check finds a newer release; rendered as a header badge
 	activeRoutine      *activeRoutine
 	recorder           *transcriptRecorder // non-nil while /record on is active; closed and cleared on /record off, session switch, or quit
+	activeTools        []toolActivity      // tools invoked during the current turn, in call order; rendered in the ephemeral strip above the input and cleared at the start of the next turn
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -207,14 +208,14 @@ func spinnerTickCmd() tea.Cmd {
 // a tool is in the running state, or a system row is in the pending state
 // (the spinner placeholder used by /compact and /reset while their actions
 // are in flight). The spinner tick keeps firing as long as any of these is
-// true so the streaming cursor, the tool-card glyph, and the system-row
+// true so the streaming cursor, the tool-strip glyph, and the system-row
 // pending glyph all animate.
 func (m *chatModel) hasStreamingMessage() bool {
+	if m.anyToolRunning() {
+		return true
+	}
 	for i := range m.messages {
 		if m.messages[i].streaming {
-			return true
-		}
-		if m.messages[i].role == "tool" && m.messages[i].toolState == "running" {
 			return true
 		}
 		if m.messages[i].role == "system" && m.messages[i].pending {
@@ -222,6 +223,31 @@ func (m *chatModel) hasStreamingMessage() bool {
 		}
 	}
 	return false
+}
+
+// anyToolRunning reports whether any tool in the current turn's activity
+// strip is still executing. Drives both the spinner tick and the strip's
+// expanded-vs-summary rendering choice.
+func (m *chatModel) anyToolRunning() bool {
+	for i := range m.activeTools {
+		if m.activeTools[i].state == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+// resetToolActivity clears the live tool strip and reflows the viewport to
+// reclaim its rows. Called from every turn-start path (interactive send,
+// queued drain, routine auto-advance) so the previous turn's summary line
+// does not bleed into the next turn, and from the error/aborted paths so a
+// tool left mid-run doesn't strand a spinning glyph.
+func (m *chatModel) resetToolActivity() {
+	if m.activeTools == nil {
+		return
+	}
+	m.activeTools = nil
+	m.applyLayout()
 }
 
 // appendMessage stamps the current gen counter onto msg and appends it
@@ -786,6 +812,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			// wholesale-replace would have wiped live state.
 			m.mergeHistoryRefresh(msg.messages, msg.boundary)
 			m.recordCanonical(msg.messages)
+			m.applyLayout()
 			m.updateViewport()
 		}
 		// History refresh fires after each completed turn — pull a
@@ -855,6 +882,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.textarea.CursorEnd()
 				m.exitHistoryBrowse()
 				m.refreshCompletionMenu()
+				m.applyLayout()
 				m.updateViewport()
 				return m, nil
 			}
@@ -992,6 +1020,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				m.textarea.Reset()
 				m.refreshCompletionMenu()
 				m.pendingMessages = append(m.pendingMessages, text)
+				m.applyLayout()
 				m.updateViewport()
 				m.viewport.GotoBottom()
 				return m, nil
@@ -1035,6 +1064,7 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 				}
 			}
 			m.appendMessage(chatMessage{role: "user", content: text})
+			m.resetToolActivity()
 			m.appendMessage(chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
 			m.sending = true
 			if ar := m.activeRoutine; ar != nil && ar.logger != nil {
@@ -1217,6 +1247,9 @@ func (m *chatModel) cancelTurn() tea.Cmd {
 		}
 	}
 	m.notify("Cancelled.")
+	// The queue was just cleared; reflow so the viewport reclaims the
+	// footer rows the queued shadows occupied.
+	m.applyLayout()
 	m.updateViewport()
 	return func() tea.Msg {
 		err := b.ChatAbort(context.Background(), sessionKey, runID)
@@ -1269,6 +1302,9 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 
 	text := m.pendingMessages[0]
 	m.pendingMessages = m.pendingMessages[1:]
+	// The queued-message footer just shrank by one; reflow so the viewport
+	// reclaims that row whichever send path we take below.
+	m.applyLayout()
 
 	if strings.HasPrefix(text, "!!") {
 		command := strings.TrimSpace(text[2:])
@@ -1301,6 +1337,7 @@ func (m *chatModel) drainQueueOpt(refresh bool) tea.Cmd {
 		}
 	}
 	m.appendMessage(chatMessage{role: "user", content: text})
+	m.resetToolActivity()
 	m.appendMessage(chatMessage{role: "assistant", streaming: true, awaitingDelta: true})
 	if ar := m.activeRoutine; ar != nil && ar.logger != nil {
 		ar.logger.WriteUser(text)
@@ -1467,6 +1504,8 @@ func (m chatModel) View() string {
 		routineStatus = m.routineStatusStyle().Width(m.width).Render(line)
 	}
 	notifications := m.renderNotifications()
+	toolStrip := m.renderToolActivity()
+	pending := m.renderPendingMessages()
 
 	if m.hideInput {
 		parts := []string{header, m.viewport.View()}
@@ -1475,6 +1514,12 @@ func (m chatModel) View() string {
 		}
 		if routineStatus != "" {
 			parts = append(parts, routineStatus)
+		}
+		if toolStrip != "" {
+			parts = append(parts, toolStrip)
+		}
+		if pending != "" {
+			parts = append(parts, pending)
 		}
 		parts = append(parts, help)
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -1493,6 +1538,15 @@ func (m chatModel) View() string {
 	}
 	if routineStatus != "" {
 		parts = append(parts, routineStatus)
+	}
+	// Tool activity, then the queued-message footer directly above the
+	// input — so the order reads transcript → what's running → what's
+	// queued next → the input box.
+	if toolStrip != "" {
+		parts = append(parts, toolStrip)
+	}
+	if pending != "" {
+		parts = append(parts, pending)
 	}
 	parts = append(parts, input, help)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)

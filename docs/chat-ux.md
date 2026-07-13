@@ -96,9 +96,9 @@ routine: demo — AUTO — sent: 5/10 — next: <40-char preview>
 
 `AUTO`/`MANUAL` reflects the controller's mode; `(paused)` is appended when `paused` is set. The row is sourced by `routineStatusLine()` and styled by `routineStatusStyle` in `routines_chat.go`. `applyLayout()` subtracts one from the viewport height when a routine is active, mirroring the notification-row accounting. See [routines.md](routines.md) for the full controller surface.
 
-## Tool call cards
+## Tool activity strip
 
-When the agent invokes a tool, an inline status card appears in the scrollback between assistant messages — name, one-line argument summary, and a state glyph that animates while running and resolves to ✓ or ✖. Lucinate opts into the `tool-events` capability on connect; backends without tool events (e.g. the OpenAI-compatible adapter) simply never emit them. Tool output bodies are not yet expandable — see [message-rendering.md](message-rendering.md#tool-call-cards) for the rendering contract and the open follow-up for an expand/collapse affordance.
+When the agent invokes a tool, it appears in an ephemeral strip above the input (not in the scrollback) — name, one-line argument summary, and a state glyph that animates while running and resolves to ✓ or ✖. Once the turn finishes the strip collapses to a one-line summary (`✓ called search ×3, read ×2`) that clears when the next turn begins. Lucinate opts into the `tool-events` capability on connect; backends without tool events (e.g. the OpenAI-compatible adapter) simply never emit them. Tool output bodies are not yet expandable — see [message-rendering.md](message-rendering.md#tool-activity-strip) for the rendering contract and the open follow-up for an expand/collapse affordance.
 
 ## History depth
 
@@ -110,7 +110,7 @@ See [sessions.md](sessions.md#lifecycle) for how history loading fits into the s
 
 ## Mid-turn history resync
 
-After a turn finalises, the chat view fetches `chat.history` from the gateway and merges it into `m.messages`. The merge is *not* a wholesale replacement — that would wipe live state (the next routine step's placeholder, an in-flight tool card, a system row the user just took an action on).
+After a turn finalises, the chat view fetches `chat.history` from the gateway and merges it into `m.messages`. The merge is *not* a wholesale replacement — that would wipe live state (the next routine step's placeholder, a system row the user just took an action on). (Tool activity lives outside `m.messages`, so it's untouched by the merge.)
 
 The mechanism is a generation counter:
 
@@ -122,7 +122,7 @@ The mechanism is a generation counter:
 Practical consequences:
 
 - Rows imported from `chat.history` carry `gen=0` (the chatMessage zero value), so any subsequent refresh treats them as history-side and replaces them cleanly.
-- Tool cards from the *just-finalised* turn are lost on refresh — the gateway's history view doesn't model them. Tool cards for the *current* (next) turn survive because they're tagged with the new gen at append time.
+- Tool activity is not part of `m.messages` at all (it lives in `chatModel.activeTools`, rendered in the [strip](#tool-activity-strip)), so the merge neither preserves nor wipes it — it's reset per turn independently.
 - Empty `final` acks (the gateway ping that arrives before any real content) intentionally do NOT bump the gen, because no turn has actually completed.
 
 Tests pin the contract: `TestMergeHistoryRefresh_PreservesLiveTail`, `TestMergeHistoryRefresh_NoLiveTail`, `TestHandleEvent_FinalBumpsGen`, `TestHandleEvent_FinalEmptyAckDoesNotBumpGen`.

@@ -164,6 +164,45 @@ func TestHandleEvent_DeltasAreCumulative(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_ToolCallDoesNotDuplicateAssistantText is the regression
+// guard for the delta-accumulation bug: the gateway streams the whole turn's
+// text cumulatively (each delta carries everything so far), and a mid-turn
+// tool call used to freeze the assistant row so the next delta landed on a
+// fresh one — re-rendering all the earlier text on top of the new segment.
+// Now tool calls stay off the message list, so the whole turn lands on a
+// single row whose content is just the last cumulative delta.
+func TestHandleEvent_ToolCallDoesNotDuplicateAssistantText(t *testing.T) {
+	m := newTestChatModel()
+	m.messages = []chatMessage{{role: "user", content: "hi"}}
+
+	// First text block streams (cumulative).
+	m.handleEvent(makeChatEvent("delta", "run1", 1, json.RawMessage(`"Block one."`)))
+	// A tool runs mid-turn.
+	m.handleEvent(makeAgentToolEvent("start", "search", "tc1", nil, nil, false))
+	m.handleEvent(makeAgentToolEvent("result", "search", "tc1", nil,
+		json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`), false))
+	// Second text block — the gateway resends the WHOLE turn cumulatively.
+	m.handleEvent(makeChatEvent("delta", "run1", 2, json.RawMessage(`"Block one.Block two."`)))
+
+	assistants := 0
+	content := ""
+	for _, msg := range m.messages {
+		if msg.role == "assistant" {
+			assistants++
+			content = msg.content
+		}
+	}
+	if assistants != 1 {
+		t.Fatalf("a mid-turn tool must not split the assistant row: got %d assistant rows", assistants)
+	}
+	if content != "Block one.Block two." {
+		t.Errorf("assistant content = %q, want %q (no duplicated prefix)", content, "Block one.Block two.")
+	}
+	if len(m.activeTools) != 1 || m.activeTools[0].state != "success" {
+		t.Errorf("expected one resolved tool in the strip, got %+v", m.activeTools)
+	}
+}
+
 func TestHandleEvent_DeltaIgnoredAfterFinalised(t *testing.T) {
 	m := newTestChatModel()
 	m.messages = []chatMessage{
@@ -327,12 +366,12 @@ func TestMergeHistoryRefresh_PreservesLiveTail(t *testing.T) {
 	m := newTestChatModel()
 	m.gen = 5
 	// Existing local state spans two turns: gen=4 (just finalised) and
-	// gen=5 (next routine step's placeholder + an in-flight tool card).
+	// gen=5 (next routine step's placeholder + an in-flight system row).
 	m.messages = []chatMessage{
 		{role: "user", content: "step 1", gen: 4},
 		{role: "assistant", content: "answer 1", gen: 4},
 		{role: "user", content: "step 2", gen: 5},
-		{role: "tool", toolName: "bash", toolState: "running", gen: 5},
+		{role: "system", content: "running on gateway...", pending: true, gen: 5},
 		{role: "assistant", streaming: true, awaitingDelta: true, gen: 5},
 	}
 	server := []chatMessage{
@@ -351,8 +390,8 @@ func TestMergeHistoryRefresh_PreservesLiveTail(t *testing.T) {
 	if tail[0].content != "step 2" || tail[0].gen != 5 {
 		t.Errorf("live tail step-2 user lost: %+v", tail[0])
 	}
-	if tail[1].role != "tool" || tail[1].toolState != "running" {
-		t.Errorf("live tail tool card lost: %+v", tail[1])
+	if tail[1].role != "system" || !tail[1].pending {
+		t.Errorf("live tail system row lost: %+v", tail[1])
 	}
 	if tail[2].role != "assistant" || !tail[2].awaitingDelta {
 		t.Errorf("live tail placeholder lost: %+v", tail[2])
@@ -1995,7 +2034,7 @@ func makeAgentToolEvent(phase, name, toolCallID string, args, result json.RawMes
 	return protocol.Event{EventName: protocol.EventAgent, Payload: payload}
 }
 
-func TestHandleAgentEvent_ToolStartFreezesStreamingAndAppendsCard(t *testing.T) {
+func TestHandleAgentEvent_ToolStartTracksActivityWithoutSplitting(t *testing.T) {
 	m := newTestChatModel()
 	m.messages = []chatMessage{
 		{role: "user", content: "search please"},
@@ -2005,31 +2044,36 @@ func TestHandleAgentEvent_ToolStartFreezesStreamingAndAppendsCard(t *testing.T) 
 	m.handleEvent(makeAgentToolEvent("start", "search", "tc-1",
 		json.RawMessage(`{"query":"hello"}`), nil, false))
 
-	if len(m.messages) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(m.messages))
+	// The streaming assistant row must stay intact — no freeze, no extra row —
+	// so the turn's cumulative deltas keep landing on it.
+	if len(m.messages) != 2 {
+		t.Fatalf("expected 2 messages (tool must not append a row), got %d", len(m.messages))
 	}
-	if m.messages[1].streaming {
-		t.Error("expected streaming assistant to be frozen on tool start")
+	if !m.messages[1].streaming {
+		t.Error("streaming assistant must not be frozen on tool start")
 	}
-	tool := m.messages[2]
-	if tool.role != "tool" {
-		t.Fatalf("expected role=tool, got %q", tool.role)
+	if m.messages[1].content != "Sure, searching" {
+		t.Errorf("assistant content changed to %q", m.messages[1].content)
 	}
-	if tool.toolName != "search" {
-		t.Errorf("toolName = %q, want %q", tool.toolName, "search")
+	if len(m.activeTools) != 1 {
+		t.Fatalf("expected 1 tracked tool, got %d", len(m.activeTools))
 	}
-	if tool.toolCallID != "tc-1" {
-		t.Errorf("toolCallID = %q, want %q", tool.toolCallID, "tc-1")
+	tool := m.activeTools[0]
+	if tool.name != "search" {
+		t.Errorf("name = %q, want %q", tool.name, "search")
 	}
-	if tool.toolState != "running" {
-		t.Errorf("toolState = %q, want running", tool.toolState)
+	if tool.callID != "tc-1" {
+		t.Errorf("callID = %q, want %q", tool.callID, "tc-1")
 	}
-	if !strings.Contains(tool.toolArgsLine, "query") || !strings.Contains(tool.toolArgsLine, "hello") {
-		t.Errorf("toolArgsLine = %q, want it to mention query=hello", tool.toolArgsLine)
+	if tool.state != "running" {
+		t.Errorf("state = %q, want running", tool.state)
+	}
+	if !strings.Contains(tool.argsLine, "query") || !strings.Contains(tool.argsLine, "hello") {
+		t.Errorf("argsLine = %q, want it to mention query=hello", tool.argsLine)
 	}
 }
 
-func TestHandleAgentEvent_ToolStartDropsEmptyPlaceholder(t *testing.T) {
+func TestHandleAgentEvent_ToolStartKeepsEmptyPlaceholder(t *testing.T) {
 	m := newTestChatModel()
 	m.messages = []chatMessage{
 		{role: "user", content: "hi"},
@@ -2038,45 +2082,50 @@ func TestHandleAgentEvent_ToolStartDropsEmptyPlaceholder(t *testing.T) {
 
 	m.handleEvent(makeAgentToolEvent("start", "search", "tc-1", nil, nil, false))
 
+	// The pre-delta placeholder stays put (its spinner reads as "working");
+	// the tool goes into the activity strip instead of a message row.
 	if len(m.messages) != 2 {
-		t.Fatalf("expected 2 messages (user + tool), got %d", len(m.messages))
+		t.Fatalf("expected 2 messages (placeholder preserved), got %d", len(m.messages))
 	}
-	if m.messages[1].role != "tool" {
-		t.Errorf("expected the empty placeholder to be replaced by a tool row, got %q", m.messages[1].role)
+	if m.messages[1].role != "assistant" || !m.messages[1].awaitingDelta {
+		t.Errorf("placeholder should be preserved, got %+v", m.messages[1])
+	}
+	if len(m.activeTools) != 1 {
+		t.Fatalf("expected the tool to be tracked in the strip, got %d", len(m.activeTools))
 	}
 }
 
 func TestHandleAgentEvent_ToolResultSuccessFlipsState(t *testing.T) {
 	m := newTestChatModel()
-	m.messages = []chatMessage{
-		{role: "tool", toolName: "search", toolCallID: "tc-1", toolState: "running"},
+	m.activeTools = []toolActivity{
+		{name: "search", callID: "tc-1", state: "running"},
 	}
 
 	m.handleEvent(makeAgentToolEvent("result", "search", "tc-1", nil,
 		json.RawMessage(`{"content":[{"type":"text","text":"ok"}]}`), false))
 
-	if m.messages[0].toolState != "success" {
-		t.Errorf("toolState = %q, want success", m.messages[0].toolState)
+	if m.activeTools[0].state != "success" {
+		t.Errorf("state = %q, want success", m.activeTools[0].state)
 	}
-	if m.messages[0].toolError != "" {
-		t.Errorf("toolError = %q, want empty on success", m.messages[0].toolError)
+	if m.activeTools[0].errText != "" {
+		t.Errorf("errText = %q, want empty on success", m.activeTools[0].errText)
 	}
 }
 
 func TestHandleAgentEvent_ToolResultErrorCarriesMessage(t *testing.T) {
 	m := newTestChatModel()
-	m.messages = []chatMessage{
-		{role: "tool", toolName: "read", toolCallID: "tc-2", toolState: "running"},
+	m.activeTools = []toolActivity{
+		{name: "read", callID: "tc-2", state: "running"},
 	}
 
 	result := json.RawMessage(`{"content":[{"type":"text","text":"file not found: /nope"}]}`)
 	m.handleEvent(makeAgentToolEvent("result", "read", "tc-2", nil, result, true))
 
-	if m.messages[0].toolState != "error" {
-		t.Errorf("toolState = %q, want error", m.messages[0].toolState)
+	if m.activeTools[0].state != "error" {
+		t.Errorf("state = %q, want error", m.activeTools[0].state)
 	}
-	if !strings.Contains(m.messages[0].toolError, "file not found") {
-		t.Errorf("toolError = %q, want it to mention 'file not found'", m.messages[0].toolError)
+	if !strings.Contains(m.activeTools[0].errText, "file not found") {
+		t.Errorf("errText = %q, want it to mention 'file not found'", m.activeTools[0].errText)
 	}
 }
 
@@ -2106,7 +2155,7 @@ func makeAgentToolEventForSession(sessionKey, phase, name, toolCallID string) pr
 // --- Session-key filtering for tool/agent events ---
 
 // TestHandleAgentEvent_ToolStart_DifferentSession_Ignored verifies that a
-// tool-start event from another session does not append a tool card or freeze
+// tool-start event from another session neither records activity nor disturbs
 // the current streaming assistant message.
 func TestHandleAgentEvent_ToolStart_DifferentSession_Ignored(t *testing.T) {
 	m := newTestChatModel()
@@ -2118,8 +2167,8 @@ func TestHandleAgentEvent_ToolStart_DifferentSession_Ignored(t *testing.T) {
 
 	m.handleEvent(makeAgentToolEventForSession("sess-B", "start", "search", "tc-1"))
 
-	if len(m.messages) != 2 {
-		t.Fatalf("expected 2 messages (foreign tool dropped), got %d", len(m.messages))
+	if len(m.activeTools) != 0 {
+		t.Fatalf("foreign tool start must not be tracked, got %d entries", len(m.activeTools))
 	}
 	if !m.messages[1].streaming {
 		t.Error("own streaming assistant should not be frozen by a foreign tool start")
@@ -2127,20 +2176,20 @@ func TestHandleAgentEvent_ToolStart_DifferentSession_Ignored(t *testing.T) {
 }
 
 // TestHandleAgentEvent_ToolResult_DifferentSession_Ignored verifies that a
-// tool-result event from another session does not flip the state of an
-// existing tool card belonging to the current session (e.g. when toolCallId
-// values collide across sessions).
+// tool-result event from another session does not flip the state of a strip
+// entry belonging to the current session (e.g. when toolCallId values collide
+// across sessions).
 func TestHandleAgentEvent_ToolResult_DifferentSession_Ignored(t *testing.T) {
 	m := newTestChatModel()
 	m.sessionKey = "sess-A"
-	m.messages = []chatMessage{
-		{role: "tool", toolName: "search", toolCallID: "tc-1", toolState: "running"},
+	m.activeTools = []toolActivity{
+		{name: "search", callID: "tc-1", state: "running"},
 	}
 
 	m.handleEvent(makeAgentToolEventForSession("sess-B", "result", "search", "tc-1"))
 
-	if m.messages[0].toolState != "running" {
-		t.Errorf("own tool card was modified by foreign session: state=%q", m.messages[0].toolState)
+	if m.activeTools[0].state != "running" {
+		t.Errorf("own tool entry was modified by foreign session: state=%q", m.activeTools[0].state)
 	}
 }
 
@@ -2153,8 +2202,8 @@ func TestHandleAgentEvent_ToolStart_MatchingSession_Processed(t *testing.T) {
 
 	m.handleEvent(makeAgentToolEventForSession("sess-A", "start", "search", "tc-1"))
 
-	if len(m.messages) != 1 || m.messages[0].role != "tool" {
-		t.Fatalf("expected tool card to be appended, got %+v", m.messages)
+	if len(m.activeTools) != 1 {
+		t.Fatalf("expected tool to be tracked, got %+v", m.activeTools)
 	}
 }
 
@@ -2167,8 +2216,8 @@ func TestHandleAgentEvent_ToolStart_EmptySessionKey_Processed(t *testing.T) {
 
 	m.handleEvent(makeAgentToolEventForSession("", "start", "search", "tc-1"))
 
-	if len(m.messages) != 1 || m.messages[0].role != "tool" {
-		t.Fatalf("expected tool card to be appended for empty sessionKey, got %+v", m.messages)
+	if len(m.activeTools) != 1 {
+		t.Fatalf("expected tool to be tracked for empty sessionKey, got %+v", m.activeTools)
 	}
 }
 

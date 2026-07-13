@@ -8,7 +8,8 @@ Each chat message has a role that determines how it is displayed in the TUI:
 - `assistant` — returned by the agent; rendered as markdown via Glamour.
 - `system` — local-only notices (errors, status, command output); shown in a muted style and never sent to the gateway.
 - `separator` — a dim divider row inserted between restored history and a new turn; labelled with the relative time of the most recent restored message (e.g. `Resumed from 2h ago`). The `timestampMs` field on `chatMessage` carries the unix-ms used by `formatSeparatorLabel`.
-- `tool` — inline status card for an in-flight or completed tool call from the agent. See [Tool call cards](#tool-call-cards).
+
+Tool calls are **not** message rows. They are tracked separately and rendered in an ephemeral strip above the input — see [Tool activity strip](#tool-activity-strip).
 
 ## Hiding injected content from history
 
@@ -37,25 +38,35 @@ Assistant messages are conditionally rendered with Glamour. `looksLikeMarkdown()
 
 The Glamour renderer is created in `setSize()` with a wrap width equal to the terminal width minus 4. `wordWrap()` in `render.go` is applied after rendering and preserves lines containing box-drawing characters (table borders) so they are not split.
 
-## Tool call cards
+## Tool activity strip
 
-When the agent invokes a tool, lucinate renders a single-line status card inline in the chat scrollback so the user can see what's running. Cards are driven by `agent` events with `stream == "tool"` from the gateway — declared via the `tool-events` capability on connect (see `internal/client/client.go`).
+When the agent invokes a tool, lucinate shows it in an ephemeral **activity strip** rendered directly above the input, not inline in the scrollback. The strip is driven by `agent` events with `stream == "tool"` from the gateway — declared via the `tool-events` capability on connect (see `internal/client/client.go`).
 
-Each card shows a state glyph, the tool name in bold, and a one-line argument summary:
+Tool calls are deliberately kept **off** the message list (`chatModel.activeTools`, a `[]toolActivity`). An earlier design appended a `role: "tool"` message per call, which froze the streaming assistant row so each subsequent tool split the reply onto a fresh row. Because the gateway streams the whole turn's text *cumulatively* (every delta carries all text so far), that split made each post-tool row re-render everything before it — the "delta accumulation / repeated content" bug. Keeping tools out of the message list leaves the streaming assistant row intact, so the whole turn lands on one row and the cumulative full-replace is correct.
+
+While a turn is in flight (or any tool is still running), the strip lists each tool on its own line — a state glyph, the tool name, and a one-line argument summary:
 
 ```
-⠋ search (query="hello world")
 ✓ search (query="hello world")
-✖ read (path="/missing") — file not found
+⠋ read (path="/big/file")
 ```
 
-The state glyph cycles through the same braille spinner as the streaming cursor (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) while the tool is running, then flips to `✓` on success or `✖` on error. Errors append a one-line message extracted from the tool result.
+The running glyph cycles through the same braille spinner as the streaming cursor (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`), then flips to `✓` on success or `✖` on error (errors append a one-line message extracted from the tool result). When more than `maxToolStripRows` tools have run, the oldest fold into a leading `…N earlier` line so the newest stay visible.
 
-The mapping from event payload to card lives in `handleAgentEvent` (`internal/tui/events.go`):
+Once the turn is idle and every tool has resolved, the strip collapses to a single summary line grouping calls by name, which persists until the next turn begins:
 
-- `phase: "start"` — freezes any currently streaming assistant row, then appends a new `chatMessage` with `role: "tool"` and `toolState: "running"`. If the streaming assistant is still the empty pre-delta placeholder, it's dropped instead of frozen so we don't render a blank assistant block above the card.
+```
+✓ called search ×3, read ×2
+✖ called fetch ×2 (1 failed)
+```
+
+The mapping from event payload to strip lives in `handleAgentEvent` (`internal/tui/events.go`):
+
+- `phase: "start"` — appends a `toolActivity{state: "running"}`. The streaming assistant row is left untouched.
 - `phase: "update"` — currently a no-op. Partial result streaming is deferred (see issue for expand/collapse output).
-- `phase: "result"` — finds the matching tool row by `toolCallId` and flips `toolState` to `"success"` or `"error"`.
+- `phase: "result"` — finds the matching entry by `callID` and flips its state to `"success"` or `"error"`.
+
+The strip is cleared at the start of each turn (`resetToolActivity`), and on error/aborted so a tool left mid-run can't strand a spinning glyph. Its rendered height is subtracted from the viewport in `applyLayout` (via `toolStripHeight`), the same way the completion menu and notification rows reserve space.
 
 The `summariseArgs` helper picks a human-readable key from the args object (priority order: `command`, `path`, `file`, `filePath`, `query`, `url`, `name`, `message`, `text`) or falls back to compact JSON, truncated to 80 runes.
 
@@ -66,3 +77,7 @@ The full output of a tool call is not currently rendered; only the header line i
 When the user sends a message, an empty assistant message with `streaming: true` is appended immediately so there is always something to animate (see [chat-ux.md](chat-ux.md#streaming-animation)). As delta events arrive, the message content is built up incrementally. If the final event arrives before any delta (e.g. an error), the placeholder message is removed from the display.
 
 The same spinner glyph also decorates *pending system rows* — `chatMessage.pending` flags a system message as in-flight, and the renderer appends the current spinner frame after the body. `/compact` and `/reset` use this to give visible feedback while their actions run; the result handler clears `pending` (or replaces the row entirely) once the outcome lands.
+
+## Queued-message footer
+
+Messages the user submits while a turn is streaming are held in `chatModel.pendingMessages` and rendered by `renderPendingMessages` as dim/italic `You:` shadows in a fixed footer **below** the tool-activity strip and directly above the input — not in the scrollable transcript. This keeps the reading order intuitive: transcript (what happened) → tool strip (what's running) → queued shadows (what's next) → the input box. Its height is reserved in `applyLayout` via `pendingHeight`, and `applyLayout` is re-run wherever the queue changes (enqueue, `drainQueue`, up-arrow recall, cancel) so the viewport reclaims the rows as the queue drains. Each queued message is dispatched in FIFO order by `drainQueue` once the in-flight turn finalises.
