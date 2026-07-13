@@ -52,7 +52,7 @@ type pendingNavConfirm struct {
 // hint surfaces the picker first, "/model" before "/models" likewise.
 // Tab now extends to the longest common prefix and the completion menu
 // shows every candidate, so the curated order no longer rules Tab.
-var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/export", "/help", "/header", "/model", "/models", "/mouse", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/settings", "/skills", "/stats", "/status", "/think"}
+var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/cron", "/exit", "/export", "/help", "/header", "/model", "/models", "/mouse", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/settings", "/skills", "/stats", "/status", "/think"}
 
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
@@ -70,6 +70,7 @@ const helpBody = `/quit, /exit — quit lucinate
 /settings — open settings (also: /config)
 /connections — switch gateway connection
 /crons — list and manage cron jobs (use /crons all for global)
+/cron <job name> — run a named cron job now (asks to confirm)
 /export — write the current session's canonical history to a transcript file (/export routine opens the routine form prefilled with the user prompts)
 /header — show current chat header colour
 /header <hex> — set chat header background to a hex colour (e.g. #112233 or #F0C)
@@ -439,6 +440,13 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return m.handleExportCommand(text)
 	}
 
+	// /cron <name> resolves a named gateway cron job and runs it after a
+	// y/n confirmation. Bare /cron is an error; /crons (plural) is handled
+	// by the switch above, so a "/cron " prefix never swallows it.
+	if command == "/cron" || strings.HasPrefix(command, "/cron ") {
+		return m.handleCronCommand(text)
+	}
+
 	// Slash-prefixed input that isn't a built-in: if the first token names a
 	// known skill, delegate to the regular send path so expandSkillReferences
 	// wraps it in a <local-agent-skill> envelope. Otherwise emit an
@@ -516,6 +524,81 @@ func (m *chatModel) handleAgentCommand(text string) (bool, tea.Cmd) {
 		}
 	}
 	return true, m.gateNavigation("Switching agents", switchCmd)
+}
+
+// handleCronCommand handles `/cron <name>`. Bare `/cron` is an error —
+// `/crons` opens the browser. Because resolving a name to a job ID needs a
+// CronsList round-trip, the work happens off the update loop: the returned
+// command lists jobs, matches the query, and dispatches a cronResolveMsg
+// that chatModel.Update turns into a confirmation prompt (or an error).
+func (m *chatModel) handleCronCommand(text string) (bool, tea.Cmd) {
+	cron, ok := m.backend.(backend.CronBackend)
+	if !ok {
+		m.appendMessage(chatMessage{
+			role:   "system",
+			errMsg: "/cron is not available on this connection",
+		})
+		m.updateViewport()
+		return true, nil
+	}
+	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
+	if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" {
+		m.appendMessage(chatMessage{
+			role:   "system",
+			errMsg: "/cron requires a job name — use /crons to browse jobs",
+		})
+		m.updateViewport()
+		return true, nil
+	}
+	query := strings.TrimSpace(parts[1])
+	return true, func() tea.Msg {
+		result, err := cron.CronsList(context.Background(), protocol.CronListParams{
+			Enabled: "all",
+			SortBy:  "nextRunAtMs",
+			SortDir: "asc",
+		})
+		if err != nil {
+			return cronResolveMsg{query: query, err: err}
+		}
+		return cronResolveMsg{query: query, matches: matchCronJobs(result.Jobs, query)}
+	}
+}
+
+// matchCronJobs resolves a user-typed query to cron jobs, tiered so a more
+// specific tier wins outright and only an empty tier falls through. It
+// returns every job in the winning tier: cron job Names are not unique, so
+// the caller must handle multiple matches (ambiguity), while an exact ID
+// always yields at most one (IDs are unique).
+//
+//	tier 1: exact, case-insensitive Name match
+//	tier 2: exact, case-insensitive ID match
+//	tier 3: substring match on Name or ID
+func matchCronJobs(jobs []protocol.CronJob, query string) []protocol.CronJob {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil
+	}
+	var byName, byID, bySubstr []protocol.CronJob
+	for _, j := range jobs {
+		name := strings.ToLower(j.Name)
+		id := strings.ToLower(j.ID)
+		switch {
+		case name == q:
+			byName = append(byName, j)
+		case id == q:
+			byID = append(byID, j)
+		case strings.Contains(name, q) || strings.Contains(id, q):
+			bySubstr = append(bySubstr, j)
+		}
+	}
+	switch {
+	case len(byName) > 0:
+		return byName
+	case len(byID) > 0:
+		return byID
+	default:
+		return bySubstr
+	}
 }
 
 // handleModelCommand handles `/model` and `/model <name>`. Bare `/model`
@@ -887,6 +970,55 @@ func (m *chatModel) routineNameHint(value string, cursorByte int) (token, suffix
 		return "", ""
 	}
 	match := m.completeRoutineName(prefix)
+	if match == "" || strings.EqualFold(match, prefix) {
+		return "", ""
+	}
+	return prefix, match[len(prefix):]
+}
+
+// findCronArgAt detects whether the cursor sits at the end of the argument
+// of `/cron <name>` on the current line. Mirrors findRoutineArgAt. The
+// trailing space in the sentinel keeps `/crons` from matching.
+func findCronArgAt(value string, byteOffset int) (start int, prefix string, ok bool) {
+	if byteOffset < 0 || byteOffset > len(value) {
+		return 0, "", false
+	}
+	if byteOffset < len(value) && value[byteOffset] != '\n' {
+		return 0, "", false
+	}
+	lineStart := byteOffset
+	for lineStart > 0 && value[lineStart-1] != '\n' {
+		lineStart--
+	}
+	const cmd = "/cron "
+	if byteOffset-lineStart < len(cmd) {
+		return 0, "", false
+	}
+	if !strings.EqualFold(value[lineStart:lineStart+len(cmd)], cmd) {
+		return 0, "", false
+	}
+	argStart := lineStart + len(cmd)
+	return argStart, value[argStart:byteOffset], true
+}
+
+// completeCronName returns the first cron job name matching the prefix.
+func (m *chatModel) completeCronName(prefix string) string {
+	lower := strings.ToLower(prefix)
+	for _, n := range m.cronNames {
+		if strings.HasPrefix(strings.ToLower(n), lower) {
+			return n
+		}
+	}
+	return ""
+}
+
+// cronNameHint returns the completion hint for `/cron <name>`.
+func (m *chatModel) cronNameHint(value string, cursorByte int) (token, suffix string) {
+	_, prefix, ok := findCronArgAt(value, cursorByte)
+	if !ok {
+		return "", ""
+	}
+	match := m.completeCronName(prefix)
 	if match == "" || strings.EqualFold(match, prefix) {
 		return "", ""
 	}

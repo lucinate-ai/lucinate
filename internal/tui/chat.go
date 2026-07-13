@@ -177,6 +177,7 @@ type chatModel struct {
 	skills             []agentSkill
 	agentNames         []string // populated asynchronously by loadAgentNames; powers /agent <TAB> completion
 	routineNames       []string // populated by loadRoutineNames; powers /routine <TAB> completion
+	cronNames          []string // populated by loadCronNames (OpenClaw only); powers /cron <TAB> completion
 	completion         completionMenuState
 	baseViewportHeight int // viewport height with the completion menu hidden; setSize updates it, applyLayout subtracts the menu's footprint when visible
 	spinnerFrame       int
@@ -522,7 +523,36 @@ func (m chatModel) Init() tea.Cmd {
 		func() tea.Msg { return skillsDiscoveredMsg{skills: discoverSkills()} },
 		m.loadAgentNames(),
 		loadRoutineNames(),
+		m.loadCronNames(),
 	)
+}
+
+// loadCronNames fetches cron job names for `/cron <TAB>` completion. It is a
+// no-op (nil cmd, tolerated by tea.Batch) on connections without cron
+// support, so non-OpenClaw backends pay nothing. The names are a startup
+// snapshot; `/cron <name>` always re-lists to resolve the actual run.
+func (m chatModel) loadCronNames() tea.Cmd {
+	cron, ok := m.backend.(backend.CronBackend)
+	if !ok {
+		return nil
+	}
+	return func() tea.Msg {
+		result, err := cron.CronsList(context.Background(), protocol.CronListParams{
+			Enabled: "all",
+			SortBy:  "nextRunAtMs",
+			SortDir: "asc",
+		})
+		if err != nil || result == nil {
+			return chatCronNamesLoadedMsg{}
+		}
+		names := make([]string, 0, len(result.Jobs))
+		for _, j := range result.Jobs {
+			if n := displayJobName(j); n != "" {
+				names = append(names, n)
+			}
+		}
+		return chatCronNamesLoadedMsg{names: names}
+	}
 }
 
 func (m chatModel) loadAgentNames() tea.Cmd {
@@ -772,6 +802,53 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case cronResolveMsg:
+		switch {
+		case msg.err != nil:
+			m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("cron lookup failed: %v", msg.err)})
+		case len(msg.matches) == 0:
+			m.appendMessage(chatMessage{role: "system", errMsg: fmt.Sprintf("no cron job matching %q — use /crons to browse jobs", msg.query)})
+		case len(msg.matches) > 1:
+			var b strings.Builder
+			fmt.Fprintf(&b, "%d cron jobs match %q — re-run /cron with the exact id:", len(msg.matches), msg.query)
+			for _, j := range msg.matches {
+				fmt.Fprintf(&b, "\n  %s  (id: %s, %s)", displayJobName(j), j.ID, formatSchedule(j.Schedule))
+			}
+			m.appendMessage(chatMessage{role: "system", errMsg: b.String()})
+		default:
+			cron, ok := m.backend.(backend.CronBackend)
+			if !ok {
+				m.appendMessage(chatMessage{role: "system", errMsg: "/cron is not available on this connection"})
+				break
+			}
+			job := msg.matches[0]
+			id := job.ID
+			name := displayJobName(job)
+			prompt := fmt.Sprintf("Run cron job %q now? (schedule: %s, next run: %s) (y/n)", name, formatSchedule(job.Schedule), formatAbsTime(job.State.NextRunAtMs))
+			m.pendingConfirm = &pendingConfirmation{
+				prompt:        prompt,
+				runningStatus: fmt.Sprintf("Running %s...", name),
+				action: func() tea.Cmd {
+					return func() tea.Msg {
+						err := cron.CronRun(context.Background(), id, true)
+						return chatCronRanMsg{jobName: name, err: err}
+					}
+				},
+			}
+			m.appendMessage(chatMessage{role: "system", content: prompt})
+		}
+		m.updateViewport()
+		return m, nil
+
+	case chatCronRanMsg:
+		if msg.err != nil {
+			m.replacePendingSystem(chatMessage{role: "system", errMsg: fmt.Sprintf("cron run failed: %v", msg.err)})
+		} else {
+			m.replacePendingSystem(chatMessage{role: "system", content: fmt.Sprintf("Triggered %q.", msg.jobName)})
+		}
+		m.updateViewport()
+		return m, nil
+
 	case statsLoadedMsg:
 		if msg.err == nil && msg.stats != nil {
 			m.stats = msg.stats
@@ -784,6 +861,10 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 
 	case chatRoutineNamesLoadedMsg:
 		m.routineNames = msg.names
+		return m, nil
+
+	case chatCronNamesLoadedMsg:
+		m.cronNames = msg.names
 		return m, nil
 
 	case startRoutineMsg:
@@ -1485,6 +1566,9 @@ func (m chatModel) View() string {
 		}
 		if suffix == "" {
 			token, suffix = m.routineNameHint(value, cursorByte)
+		}
+		if suffix == "" {
+			token, suffix = m.cronNameHint(value, cursorByte)
 		}
 		if suffix != "" {
 			help = helpStyle.Render(fmt.Sprintf(" %s%s — tab to complete", token, suffix))

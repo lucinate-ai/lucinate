@@ -275,7 +275,10 @@ func TestRender_ChatView_StreamingCursor(t *testing.T) {
 func TestRender_ChatView_SlashHelpRendersAsSystemMessage(t *testing.T) {
 	adapter := newRenderingChatModel(t, "main")
 
-	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 40))
+	// Tall enough to show the whole help body at once: it scrolls to the
+	// bottom when appended, so the top lines asserted below are only ever
+	// rendered when the full list fits the viewport.
+	tm := teatest.NewTestModel(t, adapter, teatest.WithInitialTermSize(120, 50))
 	defer finishProgram(t, tm)
 
 	// Type the /help command and press enter.

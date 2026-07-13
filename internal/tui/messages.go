@@ -192,6 +192,13 @@ type chatRoutineNamesLoadedMsg struct {
 	names []string
 }
 
+// chatCronNamesLoadedMsg delivers cron job names to the chat model for
+// `/cron <TAB>` completion. Unlike routines (local files), these come from
+// a CronsList round-trip, so the slice is a startup snapshot.
+type chatCronNamesLoadedMsg struct {
+	names []string
+}
+
 // startRoutineMsg requests the chat model to begin a routine. Issued
 // from the routine-cancel-and-replace path: when the user confirms a
 // `/routine X` while another routine is running, the gate first
@@ -447,6 +454,24 @@ type cronJobSavedMsg struct {
 type cronJobRemovedMsg struct {
 	jobID string
 	err   error
+}
+
+// cronResolveMsg carries the outcome of resolving a `/cron <name>` argument
+// against the gateway cron list. matches holds every job the query matched
+// (Names are not unique, so zero, one, or many are all possible); err is set
+// when the CronsList call itself failed.
+type cronResolveMsg struct {
+	query   string
+	matches []protocol.CronJob
+	err     error
+}
+
+// chatCronRanMsg is returned after a `/cron <name>` confirmation triggers a
+// run. It is deliberately distinct from cronJobRanMsg (which cronsModel
+// consumes) so the chat model owns its own result row and can name the job.
+type chatCronRanMsg struct {
+	jobName string
+	err     error
 }
 
 // updateCheckDoneMsg carries the outcome of the startup update check.

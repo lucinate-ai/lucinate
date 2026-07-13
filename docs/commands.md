@@ -22,6 +22,7 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/connections` | Open the connections picker mid-session, tearing down the active backend — see [connections.md](connections.md) |
 | `/crons` | Open the cron browser filtered to the current agent — see [crons.md](crons.md) — **OpenClaw only** |
 | `/crons all` | Open the cron browser unfiltered (jobs across all agents) — **OpenClaw only** |
+| `/cron <name>` | Resolve a named cron job and run it immediately after a y/n confirmation — see below — **OpenClaw only** |
 | `/exit`, `/quit` | Exit via `tea.Quit` |
 | `/export` | Write the current session's canonical history to a transcript file — see below |
 | `/export all` | Same as `/export` |
@@ -63,6 +64,12 @@ Backend-only commands render a "not available on this connection" system message
 
 Both switch paths — the `/model <name>` command and the `/models` picker — patch with the **qualified `<provider>/<id>` reference** produced by `qualifiedModelRef()` (`internal/tui/models.go`), not the bare id. `models.list` reports a provider-local id (e.g. `deepseek/deepseek-v4-pro`) alongside a separate `provider` field (e.g. `openrouter`), but `sessions.patch` — like the agent's configured `model.primary` — validates against the fully-qualified form (`openrouter/deepseek/deepseek-v4-pro`). Sending the bare id makes the gateway reject the switch with `INVALID_REQUEST: model not allowed: <id>`. Backends that leave `provider` empty (openai, hermes) keep the bare id unchanged.
 
+### /cron
+
+`handleCronCommand()` is gated on `backend.CronBackend` (OpenClaw only); on other connections it reports "not available". It requires a name argument — bare `/cron` errors and points at `/crons` (the plural browser is matched by the switch first, so a `/cron ` prefix never swallows it).
+
+Because names live on the gateway, resolution is asynchronous: the handler returns a command that calls `CronsList` and dispatches a `cronResolveMsg` carrying the query and the matched jobs. `matchCronJobs()` is tiered — exact (case-insensitive) `Name`, then exact `ID`, then substring on either — and returns every job in the winning tier because cron job names are **not unique**. `chatModel.Update` turns the result into one of: an error row (list failed or no match), an ambiguity row listing each candidate's name, `id`, and schedule (re-run `/cron <id>` — IDs are unique — to disambiguate), or, for a single match, a `pendingConfirmation` (see [Confirmation pattern](#confirmation-pattern)). The confirm prompt shows the schedule and next run and ends in `(y/n)`; on `y` the action calls `CronRun(id, force=true)` — run now regardless of schedule, matching the crons browser's "Run now" — and reports the outcome via `chatCronRanMsg` → `replacePendingSystem`.
+
 ### /stats
 
 Stats are loaded asynchronously via `client.SessionUsage()` on chat init and after each message exchange. `/stats` formats `m.stats` through `formatStatsTable()` in `internal/tui/render.go`, which produces a text table of input/output/cache tokens and cost breakdown.
@@ -85,6 +92,7 @@ A live menu (rendered between the conversation viewport and the input) appears a
 
 - **Slash commands and skills** — `matchingSlashCommands(prefix)` (`completion.go`) returns built-ins from the static `slashCommands` slice in their curated order, followed by skill names. Source detection: `findSlashTokenAt(value, cursorByte)`.
 - **Agent names** — the argument of `/agent <name>`. `matchingAgentNames(prefix)` returns every loaded agent whose lowercased form has the prefix as a prefix, preserving each agent's original casing. Source detection: `findAgentArgAt(value, cursorByte)`, which treats the entire tail of the line after `/agent ` as the token (so names with spaces complete in one shot).
+- **Cron names** — the argument of `/cron <name>`. `matchingCronNames(prefix)` mirrors the agent source over `m.cronNames`, which `loadCronNames()` populates on init from `CronsList` (a no-op on non-OpenClaw connections). Source detection: `findCronArgAt(value, cursorByte)` (line begins with `/cron ` — the trailing space excludes `/crons`). The snapshot may go slightly stale mid-session; `/cron <name>` always re-lists to resolve the actual run.
 
 `completionAtCursor()` resolves the active source — slash commands take priority — and returns a `completionContext{start, cursorByte, prefix, candidates}`. The Tab handler dispatches a single `handleCompletionTab(ctx)` over this context, applying bash-style menu-complete semantics:
 

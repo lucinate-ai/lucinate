@@ -198,6 +198,14 @@ func (m *chatModel) completionAtCursor() (completionContext, bool) {
 			candidates: m.matchingRoutineNames(prefix),
 		}, true
 	}
+	if start, prefix, ok := findCronArgAt(value, cursorByte); ok {
+		return completionContext{
+			start:      start,
+			cursorByte: cursorByte,
+			prefix:     prefix,
+			candidates: m.matchingCronNames(prefix),
+		}, true
+	}
 	return completionContext{}, false
 }
 
@@ -215,6 +223,27 @@ func (m *chatModel) matchingRoutineNames(prefix string) []string {
 	lower := strings.ToLower(prefix)
 	var out []string
 	for _, n := range m.routineNames {
+		if strings.HasPrefix(strings.ToLower(n), lower) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// matchingCronNames returns every cron job name whose lowercased form has
+// prefix as a prefix. Empty prefix matches every loaded cron name.
+func (m *chatModel) matchingCronNames(prefix string) []string {
+	if len(m.cronNames) == 0 {
+		return nil
+	}
+	if prefix == "" {
+		out := make([]string, len(m.cronNames))
+		copy(out, m.cronNames)
+		return out
+	}
+	lower := strings.ToLower(prefix)
+	var out []string
+	for _, n := range m.cronNames {
 		if strings.HasPrefix(strings.ToLower(n), lower) {
 			out = append(out, n)
 		}
