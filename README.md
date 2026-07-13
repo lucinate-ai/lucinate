@@ -27,6 +27,7 @@ No file browsers, no task boards, no dashboards. Just chat.
 - **Tool call cards** — when the agent invokes a tool, an inline card shows what's running, what arguments it got, and whether it succeeded or failed (OpenClaw)
 - **Shell commands** — run locally with `!` or remotely on the gateway with `!!`
 - **Message queueing** so you can keep typing while the agent is responding
+- **Scroll and copy like a native** — the wheel scrolls history, click-drag selects and copies on release, and `↑`/`↓` recall what you typed. All three, no fighting.
 - **Local agent skills** loaded from `~/.agents/skills/` — invoke as a slash command (`/review`) or drop one mid-message (`use /review on the diff`)
 - **Routines** — author multi-step prompt sequences once, replay them with `/routine <name>`. Auto-advance after each reply, or step through manually. Manage them in-TUI with `/routines`.
 - **Live token/cost stats** in the header bar (OpenClaw)
@@ -55,7 +56,7 @@ On Windows, in PowerShell:
 irm https://raw.githubusercontent.com/lucinate-ai/lucinate/main/install/lucinate.ps1 | iex
 ```
 
-Or, if you have Go 1.24+:
+Or, if you have Go 1.25+:
 
 ```sh
 go install github.com/lucinate-ai/lucinate@latest
@@ -125,11 +126,16 @@ Select an agent from the list to start chatting.
 | `Enter` | Send message |
 | `Alt+Enter` | Insert newline |
 | `Ctrl+W` | Delete word |
+| `↑` / `↓` | Recall previously sent messages (bash-style) |
 | `PgUp` / `PgDn` | Scroll chat history |
 | `Tab` | Show slash-command menu, extend to common prefix, then cycle |
 | `Shift+Tab` | Cycle backward through matches |
 | `Esc` | Back to agent list |
 | `Ctrl+C` | Quit |
+
+The mouse works too: **wheel scrolls the history**, and **click-drag selects
+text** — it lands on your clipboard the moment you let go. Prefer your
+terminal's native selection? `/mouse off` hands the mouse back.
 
 ### Preferences
 
@@ -163,6 +169,7 @@ Type these in the chat input. As soon as you type `/`, a menu shows every matchi
 | `/header <hex>` | Set the chat header background for the current agent to a hex colour (e.g. `#4FC3F7`); the override sticks to that agent and persists across runs. Bare `/header` reports the current agent's value, `/header reset` restores the default. |
 | `/models` | Open the model picker (filter as you type) |
 | `/model <name>` | Switch model (fuzzy match) |
+| `/mouse on\|off` | Mouse capture (on by default: wheel scrolls, drag copies; off: your terminal's native selection) |
 | `/reset` | Delete session and start fresh (with confirmation) |
 | `/routine <name>` | Activate a stored multi-step routine in the current session |
 | `/routines` | List, view, edit, or delete routines |

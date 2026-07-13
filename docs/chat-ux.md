@@ -7,10 +7,13 @@
 | Enter | Send message — or, on empty input with an active routine, advance the routine ([routines.md](routines.md)) |
 | Alt+Enter | Insert newline |
 | Ctrl+W | Delete word backward |
-| Up arrow (empty input) | Recall last sent message for editing |
+| Up arrow (empty input) | Recall the last queued message for editing, or start a bash-style walk back through previously sent messages |
+| Down arrow (while walking) | Walk forward again; at the newest entry, clear the input |
 | Tab | Open slash menu, extend to longest common prefix, then cycle |
 | Shift+Tab | While slash-menu is cycling: cycle backward through candidates. Otherwise, with an active routine: cycle the routine's mode (auto ↔ manual) |
 | Page Up / Page Down | Scroll message history |
+| Mouse wheel | Scroll message history — see [Scrolling, selection, and the mouse](#scrolling-selection-and-the-mouse) |
+| Mouse click-drag | Select transcript text; copies to the clipboard on release |
 | Esc | Cancel in-progress response — or, with an active routine, end the routine and (if streaming) cancel the turn |
 
 Alt+Enter is configured via `ta.KeyMap.InsertNewline.SetKeys("alt+enter")` in `chat.go`. Shift+Enter is not supported — `ReportAllKeysAsEscapeCodes` is disabled to preserve shifted punctuation input.
@@ -18,6 +21,8 @@ Alt+Enter is configured via `ta.KeyMap.InsertNewline.SetKeys("alt+enter")` in `c
 ## Message recall
 
 When the textarea is empty and the user presses Up arrow, the last entry in `m.pendingMessages` is popped and inserted into the textarea with the cursor at the end. This allows editing and resending a recently queued message without retyping it.
+
+With no queued messages, Up starts a bash-style walk back through previously submitted user messages (`historyBrowseIndex` / `historyBrowseValue` in `chat.go`): repeated Up steps older, Down steps newer, and reaching the newest entry clears the input. The walk ends as soon as the recalled text is edited — Up/Down then revert to ordinary cursor movement within multi-line content. Because mouse capture is on by default, the terminal never synthesises arrow keys from the wheel, so scrolling can't accidentally trigger a walk (see [Scrolling, selection, and the mouse](#scrolling-selection-and-the-mouse)).
 
 ## Streaming animation
 
