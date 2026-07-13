@@ -24,9 +24,13 @@ type agentItem struct {
 	sessionKey string
 }
 
+// FilterValue is the haystack the bubbles list filter (here: fuzzy
+// match) runs against. Concatenating Name and ID lets the user narrow
+// the list by either — typing part of a display name or part of the
+// raw agent ID both hit the same agent.
 func (i agentItem) FilterValue() string {
-	if i.agent.Name != "" {
-		return i.agent.Name
+	if i.agent.Name != "" && i.agent.Name != i.agent.ID {
+		return i.agent.Name + " " + i.agent.ID
 	}
 	return i.agent.ID
 }
@@ -205,7 +209,14 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 	// anyway.
 	l.SetShowHelp(!hideHints)
 	l.Styles.Title = headerStyle
-	l.SetFilteringEnabled(false)
+	// Live filtering lets the user narrow a long agent list by pressing
+	// `/` and typing a query, reusing the same fuzzy matcher as the
+	// model picker (see models.go). Unlike that view, the agent picker
+	// starts in plain list mode — filtering is opt-in via `/` so the
+	// single-letter action shortcuts (n/d/c) stay reachable until the
+	// user chooses to filter.
+	l.SetFilteringEnabled(true)
+	l.Filter = fuzzyFilter
 	if disableExitKeys {
 		l.KeyMap.Quit.Unbind()
 		l.KeyMap.ForceQuit.Unbind()
@@ -507,6 +518,11 @@ func (m selectModel) handleKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 
 	// Enter is intrinsic list navigation (select the highlighted item)
 	// rather than a discoverable view-level command, so it stays inline.
+	// It selects from a live filter too, so the user can type to narrow
+	// then pick in one keystroke instead of first applying the filter
+	// (the bubbles default while typing). Falls through when nothing is
+	// selectable — e.g. a filter matching zero agents — so the list
+	// still gets the keystroke.
 	if msg.String() == "enter" {
 		if !m.loading && m.err == nil {
 			if item, ok := m.list.SelectedItem().(agentItem); ok {
@@ -519,6 +535,16 @@ func (m selectModel) handleKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 				return m, nil
 			}
 		}
+	}
+
+	// While the filter input is focused, every other key (printable
+	// chars, backspace, esc-to-clear, cursor nav) belongs to the list
+	// so typing narrows the results instead of firing action shortcuts
+	// like `n`/`d`/`c` that collide with characters in agent names.
+	if m.list.FilterState() == list.Filtering {
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
 	}
 
 	// Discoverable shortcuts route through TriggerAction so the help
@@ -547,6 +573,15 @@ func (m selectModel) Actions() []Action {
 		// Mirror the loading view: no actionable surface while the
 		// gateway round-trip is in flight, so embedders that render
 		// Actions as buttons can't smuggle a re-entry past the gate.
+		return nil
+	}
+	if m.filtering() {
+		// While the fuzzy filter is focused the only interactions are
+		// intrinsic (type to narrow, enter to pick, esc to clear) — the
+		// list's own help footer surfaces those. The action shortcuts
+		// (n/d/c) have their keys captured as filter text here, so
+		// advertising them in the hint line or as embedder buttons
+		// would mislead.
 		return nil
 	}
 	if m.subState == subStateConfirmDelete {
@@ -1001,6 +1036,23 @@ func (m selectModel) backupHint() string {
 func (m selectModel) selectedAgent() (agentItem, bool) {
 	item, ok := m.list.SelectedItem().(agentItem)
 	return item, ok
+}
+
+// filtering reports whether the agent list's fuzzy filter input is
+// focused — i.e. the user pressed `/` and is typing a query. The app
+// consults this so the q-to-quit shortcut and the embedder input-focus
+// signal treat a typed `q` as filter text rather than a quit request.
+func (m selectModel) filtering() bool {
+	return m.list.FilterState() == list.Filtering
+}
+
+// resetFilter clears any active fuzzy filter, restoring the full agent
+// list and unfocusing the filter input. The app calls it when the
+// picker is re-entered from another screen (config, connections, chat)
+// so a stale narrowed view doesn't persist across navigation. It's a
+// no-op when no filter is active.
+func (m *selectModel) resetFilter() {
+	m.list.ResetFilter()
 }
 
 func (m *selectModel) setSize(w, h int) {

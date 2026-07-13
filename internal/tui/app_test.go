@@ -752,3 +752,50 @@ func TestAppModel_AskConfigSubScreenRoundTrip(t *testing.T) {
 		t.Errorf("expected esc from config to return to viewSelect origin, got %v", back.state)
 	}
 }
+
+// TestAppModel_FilterResetsWhenReenteringAgentList checks that returning
+// to the agent picker from another screen clears any active fuzzy filter
+// so the list reopens showing every agent, not a stale narrowed view.
+// Both re-entry messages (Back-from-config and the connections goBackMsg)
+// route through the same Update view-transition hook.
+func TestAppModel_FilterResetsWhenReenteringAgentList(t *testing.T) {
+	cases := []struct {
+		name string
+		from viewState
+		msg  tea.Msg
+		prep func(AppModel) AppModel
+	}{
+		{"from config", viewConfig, goBackFromConfigMsg{}, func(m AppModel) AppModel { m.configReturn = viewSelect; return m }},
+		{"from connections", viewConnections, goBackMsg{}, func(m AppModel) AppModel { return m }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := newSelectModel(nil, false, false, nil, false, "")
+			sm = loadAgents(sm,
+				protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+				protocol.AgentSummary{ID: "beta", Name: "Beta"},
+			)
+			sm.list.SetFilterText("beta")
+			if len(sm.list.VisibleItems()) != 1 {
+				t.Fatalf("setup: expected 1 filtered agent, got %d", len(sm.list.VisibleItems()))
+			}
+
+			m := AppModel{state: tc.from}
+			m.selectModel = sm
+			m = tc.prep(m)
+
+			back, _ := m.Update(tc.msg)
+			app := back.(AppModel)
+
+			if app.state != viewSelect {
+				t.Fatalf("expected viewSelect after re-entry, got %v", app.state)
+			}
+			if app.selectModel.list.FilterState() != list.Unfiltered {
+				t.Errorf("expected filter reset to Unfiltered, got %v", app.selectModel.list.FilterState())
+			}
+			if got := len(app.selectModel.list.VisibleItems()); got != 2 {
+				t.Errorf("expected full list (2 agents) after reset, got %d", got)
+			}
+		})
+	}
+}

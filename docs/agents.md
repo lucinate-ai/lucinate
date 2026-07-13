@@ -8,6 +8,17 @@ Agents come from the active backend (`backend.Backend.ListAgents`). For OpenClaw
 
 `loadAgents()` calls `client.ListAgents()` and returns an `agentsLoadedMsg`. Each agent is an `agentItem` wrapping a `protocol.AgentSummary`. The list is displayed using a Bubble Tea list component with a custom delegate that shows the agent name (falling back to ID if no name is set).
 
+## Filtering
+
+The picker enables the Bubble Tea list's built-in filtering with the same fuzzy matcher (`fuzzyFilter`) as the model picker (`internal/tui/models.go`). Press `/` to open the filter, type to narrow, and `esc` to clear it. `agentItem.FilterValue()` concatenates the agent's name and ID, so a query matches either — typing part of a display name or part of the raw agent ID both hit the same agent.
+
+Unlike the model picker, the agent picker starts in plain list mode rather than dropping straight into filtering: the single-letter action shortcuts (`n` new, `d` delete, `c` connections) must stay reachable, so filtering is opt-in via `/`.
+
+- **Keystroke routing.** While the filter input is focused (`list.FilterState() == list.Filtering`), `handleKey` forwards every key except `enter` to the list so characters that collide with action shortcuts (e.g. `n`) type into the query instead of firing the action. Outside filtering, the normal action dispatch applies.
+- **Enter selects from the filter.** `enter` picks the highlighted agent from any filter state, so the user can type-to-narrow and pick in one keystroke rather than first applying the filter (the bubbles default while typing). When the filter matches nothing, `enter` falls through to the list.
+- **Input focus.** `selectModel.filtering()` reports whether the filter is focused; `app.go`'s `computeWantsInput()` consults it (alongside the create-agent form) so the app-level `q`-to-quit shortcut and the embedder input-focus signal treat a typed `q` as filter text rather than a quit request.
+- **Reset on re-entry.** The picker reuses one `selectModel` across navigation, so leaving for another screen (config, connections, chat) and coming back would otherwise restore a stale narrowed view. `AppModel.Update` calls `selectModel.resetFilter()` on every transition *into* `viewSelect`, clearing the query so the list reopens showing every agent. It's a no-op when no filter was active.
+
 ## Auto-selection
 
 If exactly one agent is returned, it is selected automatically without user interaction and a session is created immediately. The same auto-select fires after creating a new agent — the picker bypasses the list and proceeds straight to chat.
