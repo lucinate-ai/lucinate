@@ -58,7 +58,9 @@ Backend-only commands render a "not available on this connection" system message
 
 ### /model
 
-`handleModelCommand()` reports the current model for the active session when called with no argument (falling back to `gateway default` when `m.modelID` is empty), pointing the user at `/models` and `/model <name>` to change it. With a name it calls `client.ModelsList()` to retrieve available models from the gateway, fuzzy-matches against model IDs and names (exact match first, then substring), then calls `client.SessionPatchModel(sessionKey, modelID)` and updates `m.modelID` in the header. `/models` (plural) opens the picker via `showModelPickerMsg`.
+`handleModelCommand()` reports the current model for the active session when called with no argument (falling back to `gateway default` when `m.modelID` is empty), pointing the user at `/models` and `/model <name>` to change it. With a name it calls `client.ModelsList()` to retrieve available models from the gateway, fuzzy-matches against model IDs and names (exact match first, then substring), then calls `client.SessionPatchModel(sessionKey, modelRef)` and updates `m.modelID` in the header. `/models` (plural) opens the picker via `showModelPickerMsg`.
+
+Both switch paths — the `/model <name>` command and the `/models` picker — patch with the **qualified `<provider>/<id>` reference** produced by `qualifiedModelRef()` (`internal/tui/models.go`), not the bare id. `models.list` reports a provider-local id (e.g. `deepseek/deepseek-v4-pro`) alongside a separate `provider` field (e.g. `openrouter`), but `sessions.patch` — like the agent's configured `model.primary` — validates against the fully-qualified form (`openrouter/deepseek/deepseek-v4-pro`). Sending the bare id makes the gateway reject the switch with `INVALID_REQUEST: model not allowed: <id>`. Backends that leave `provider` empty (openai, hermes) keep the bare id unchanged.
 
 ### /stats
 
