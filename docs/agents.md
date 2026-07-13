@@ -17,6 +17,7 @@ Unlike the model picker, the agent picker starts in plain list mode rather than 
 - **Keystroke routing.** While the filter input is focused (`list.FilterState() == list.Filtering`), `handleKey` forwards every key except `enter` to the list so characters that collide with action shortcuts (e.g. `n`) type into the query instead of firing the action. Outside filtering, the normal action dispatch applies.
 - **Enter selects from the filter.** `enter` picks the highlighted agent from any filter state, so the user can type-to-narrow and pick in one keystroke rather than first applying the filter (the bubbles default while typing). When the filter matches nothing, `enter` falls through to the list.
 - **Input focus.** `selectModel.filtering()` reports whether the filter is focused; `app.go`'s `computeWantsInput()` consults it (alongside the create-agent form) so the app-level `q`-to-quit shortcut and the embedder input-focus signal treat a typed `q` as filter text rather than a quit request.
+- **Reset on re-entry.** The picker reuses one `selectModel` across navigation, so leaving for another screen (config, connections, chat) and coming back would otherwise restore a stale narrowed view. `AppModel.Update` calls `selectModel.resetFilter()` on every transition *into* `viewSelect`, clearing the query so the list reopens showing every agent. It's a no-op when no filter was active.
 
 ## Auto-selection
 

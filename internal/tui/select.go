@@ -1040,6 +1040,15 @@ func (m selectModel) filtering() bool {
 	return m.list.FilterState() == list.Filtering
 }
 
+// resetFilter clears any active fuzzy filter, restoring the full agent
+// list and unfocusing the filter input. The app calls it when the
+// picker is re-entered from another screen (config, connections, chat)
+// so a stale narrowed view doesn't persist across navigation. It's a
+// no-op when no filter is active.
+func (m *selectModel) resetFilter() {
+	m.list.ResetFilter()
+}
+
 func (m *selectModel) setSize(w, h int) {
 	m.width = w
 	m.height = h

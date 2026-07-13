@@ -1088,6 +1088,33 @@ func TestSelectModel_EnterSelectsFilteredAgent(t *testing.T) {
 	}
 }
 
+// TestSelectModel_ResetFilterClearsQuery verifies resetFilter drops the
+// active query and restores the full agent list.
+func TestSelectModel_ResetFilterClearsQuery(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m = loadAgents(m,
+		protocol.AgentSummary{ID: "alpha", Name: "Alpha"},
+		protocol.AgentSummary{ID: "beta", Name: "Beta"},
+		protocol.AgentSummary{ID: "gamma", Name: "Gamma"},
+	)
+	m.list.SetFilterText("beta")
+	if len(m.list.VisibleItems()) != 1 {
+		t.Fatalf("setup: expected 1 filtered agent, got %d", len(m.list.VisibleItems()))
+	}
+
+	m.resetFilter()
+
+	if m.list.FilterState() != list.Unfiltered {
+		t.Errorf("FilterState = %v, want Unfiltered", m.list.FilterState())
+	}
+	if got := len(m.list.VisibleItems()); got != 3 {
+		t.Errorf("expected all 3 agents visible after reset, got %d", got)
+	}
+	if m.filtering() {
+		t.Error("filtering() should be false after reset")
+	}
+}
+
 // TestComputeWantsInput_FilteringAgentList ensures a focused agent-list
 // filter counts as wanting input, so the app-level q-to-quit shortcut
 // and the embedder keyboard signal yield to filter typing.

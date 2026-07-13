@@ -268,6 +268,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	prevState := m.state
 	next, cmd := m.update(msg)
 	if next.state != prevState {
+		// Re-entering the agent picker from another screen (config,
+		// connections, chat) reuses the existing selectModel, so clear
+		// any active fuzzy filter — the list should reopen showing every
+		// agent, not a stale narrowed view from before we left.
+		if next.state == viewSelect {
+			next.selectModel.resetFilter()
+		}
 		// View transitions in an embedded terminal can leave stale cells
 		// from the previous view when an on-screen keyboard
 		// simultaneously toggles and resizes the embedder's grid
