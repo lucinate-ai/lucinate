@@ -451,6 +451,7 @@ func TestAppModel_EscFromCrons_RestoresOriginalChat(t *testing.T) {
 	m.chatModel = newChatModel(fake, "orig-session", "agent-1", "Scout", "", config.Preferences{}, false, "", "", false)
 	m.chatModel.setSize(120, 40)
 	m.state = viewCrons
+	m.cronsReturn = viewChat // opened from chat; showCronsMsg records this in prod
 
 	// Open a run transcript: this clobbers the live chat in place.
 	updated, _ := m.Update(cronTranscriptMsg{job: sampleJobs()[0], agentName: "Scout"})
@@ -508,6 +509,7 @@ func TestAppModel_EscFromCrons_NoTranscriptLeavesChatUntouched(t *testing.T) {
 	m := AppModel{backend: fake, width: 120, height: 40}
 	m.chatModel = newChatModel(fake, "orig-session", "agent-1", "Scout", "", config.Preferences{}, false, "", "", false)
 	m.state = viewCrons
+	m.cronsReturn = viewChat // opened from chat; showCronsMsg records this in prod
 
 	updated, _ := m.Update(goBackFromCronsMsg{})
 	m = updated.(AppModel)
@@ -699,6 +701,30 @@ func TestAppModel_ConfigReturnsToOpeningView(t *testing.T) {
 		back2, _ := opened.update(goBackFromConfigMsg{})
 		if back2.state != origin {
 			t.Errorf("origin %v: Back should return to origin, got %v", origin, back2.state)
+		}
+	}
+}
+
+// TestAppModel_CronsReturnsToOpeningView verifies the cron browser hands
+// control back to whichever view opened it — chat for /crons, the agent
+// picker for its "view crons" action — rather than always returning to chat.
+func TestAppModel_CronsReturnsToOpeningView(t *testing.T) {
+	fake := newFakeBackend()
+	for _, origin := range []viewState{viewChat, viewSelect} {
+		m := AppModel{state: origin, backend: fake, width: 120, height: 40}
+
+		opened, _ := m.Update(showCronsMsg{filterAgentID: "", filterLabel: "all agents"})
+		om := opened.(AppModel)
+		if om.state != viewCrons {
+			t.Fatalf("origin %v: expected viewCrons, got %v", origin, om.state)
+		}
+		if om.cronsReturn != origin {
+			t.Fatalf("origin %v: cronsReturn = %v, want origin", origin, om.cronsReturn)
+		}
+
+		back, _ := om.Update(goBackFromCronsMsg{})
+		if bm := back.(AppModel); bm.state != origin {
+			t.Errorf("origin %v: Back should return to origin, got %v", origin, bm.state)
 		}
 	}
 }

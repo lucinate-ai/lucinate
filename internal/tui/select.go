@@ -203,7 +203,7 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 	l.Title = "Select an agent"
 	l.SetShowStatusBar(false)
 	// The bubbles list widget renders its own keyboard-hint footer
-	// ("↑/k up · ↓/j down · q quit · ? more"). Embedders that surface
+	// ("↑ up · ↓/j down · q quit · ? more"). Embedders that surface
 	// actions through native controls suppress every hint line — those
 	// keys typically aren't reachable from the host's input surface
 	// anyway.
@@ -217,6 +217,12 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 	// user chooses to filter.
 	l.SetFilteringEnabled(true)
 	l.Filter = fuzzyFilter
+	// `k` is repurposed as the "View crons" shortcut (see Actions), so drop
+	// it from the list's up-navigation binding — `↑` still scrolls up — and
+	// refresh the help text so the footer doesn't advertise a `k` that no
+	// longer moves the cursor.
+	l.KeyMap.CursorUp.SetKeys("up")
+	l.KeyMap.CursorUp.SetHelp("↑", "up")
 	if disableExitKeys {
 		l.KeyMap.Quit.Unbind()
 		l.KeyMap.ForceQuit.Unbind()
@@ -624,6 +630,12 @@ func (m selectModel) Actions() []Action {
 		// stable identifier embedders and tests dispatch on.
 		actions = append(actions, Action{ID: "config", Label: "Settings", Key: "s"})
 	}
+	// Crons are a gateway capability (OpenClaw only); gate on the backend
+	// so the option only appears when the connection supports them. Opened
+	// from here the browser is unfiltered — no agent is selected yet.
+	if _, ok := m.backend.(backend.CronBackend); ok {
+		actions = append(actions, Action{ID: "view-crons", Label: "View crons", Key: "k"})
+	}
 	return actions
 }
 
@@ -678,6 +690,12 @@ func (m selectModel) TriggerAction(id string) (selectModel, tea.Cmd) {
 		return m, func() tea.Msg { return showConnectionsMsg{} }
 	case "config":
 		return m, func() tea.Msg { return showConfigMsg{} }
+	case "view-crons":
+		// Unfiltered: from the picker no agent is selected, so show jobs
+		// across all agents (same as /crons all).
+		return m, func() tea.Msg {
+			return showCronsMsg{filterAgentID: "", filterLabel: "all agents"}
+		}
 	}
 	return m, nil
 }

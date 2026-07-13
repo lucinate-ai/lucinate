@@ -169,6 +169,12 @@ type AppModel struct {
 	cronsReturnChat  chatModel
 	cronsReturnValid bool
 
+	// cronsReturn records the view that opened the cron browser so Esc /
+	// Back returns there rather than always to chat. Crons is reachable
+	// from chat (/crons) and from the agent picker ("view crons"), which
+	// don't share a fixed parent. Mirrors configReturn.
+	cronsReturn viewState
+
 	onInputFocusChanged func(bool)
 	lastWantsInput      bool
 	inputFocusReported  bool
@@ -804,6 +810,9 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		m.cronsModel.setSize(m.width, m.height)
 		// Fresh excursion: forget any chat preserved by a prior one.
 		m.cronsReturnValid = false
+		// Remember where we came from so Back returns there — crons opens
+		// from chat (/crons) and from the agent picker ("view crons").
+		m.cronsReturn = m.state
 		m.state = viewCrons
 		return m, m.cronsModel.Init()
 
@@ -818,7 +827,7 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.chatModel.setSize(m.width, m.height)
 			m.chatModel.updateViewport()
 		}
-		m.state = viewChat
+		m.state = m.cronsReturn
 		return m, nil
 
 	case showSessionsMsg:
