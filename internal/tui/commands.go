@@ -76,7 +76,7 @@ const helpBody = `/quit, /exit — quit lucinate
 /header reset — restore the default header colour
 /models — open model picker (filter as you type)
 /model <name> — switch model directly
-/mouse on|off — toggle mouse capture (on = wheel scrolls history; off = native click-drag text selection)
+/mouse on|off — mouse capture (on, the default: wheel scrolls history, drag selects & copies; off: native terminal selection)
 /record on|off — toggle live transcript capture for this session (bare /record shows state)
 /reset — delete session and start fresh
 /sessions — browse and restore previous sessions
@@ -1096,9 +1096,9 @@ func (m *chatModel) handleMouseCommand(text string) (bool, tea.Cmd) {
 func (m *chatModel) reportMouseMode(on bool) {
 	var content string
 	if on {
-		content = "Mouse capture is ON — the wheel scrolls chat history. Native click-drag selection is disabled; hold Shift (or Option on macOS) to select & copy. Use /mouse off to restore native selection."
+		content = "Mouse capture is ON (default) — the wheel scrolls chat history, and click-drag selects text and copies it to the clipboard on release. Use /mouse off for your terminal's native selection."
 	} else {
-		content = "Mouse capture is OFF — click-drag selects & copies text natively. Use /mouse on to enable mouse-wheel scrolling of the chat history."
+		content = "Mouse capture is OFF — click-drag selects & copies text natively via your terminal. Use /mouse on to restore wheel scrolling and in-app selection."
 	}
 	m.appendMessage(chatMessage{role: "system", content: content})
 	m.updateViewport()

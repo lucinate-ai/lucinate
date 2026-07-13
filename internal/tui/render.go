@@ -92,11 +92,31 @@ func (m *chatModel) updateViewport() {
 
 	content := b.String()
 
+	// Cache the rendered lines for mouse selection (hit-testing + copy) and
+	// bake in the highlight while a drag is active. Coordinates are line
+	// indexes into these lines, so they survive pure restyles (a spinner
+	// frame swap keeps the count) but not row shifts — if the rendered line
+	// count changes mid-drag (streaming growth, history refresh), drop the
+	// selection rather than highlight the wrong text.
+	lines := strings.Split(content, "\n")
+	if m.sel.dragging && len(lines) != len(m.selLines) {
+		m.sel = selectionState{}
+	}
+	m.selLines = lines
+	if m.sel.dragging {
+		display := make([]string, len(lines))
+		copy(display, lines)
+		applySelectionHighlight(display, m.sel.anchor, m.sel.head)
+		content = strings.Join(display, "\n")
+	}
+
 	// Pad the top so messages are anchored to the bottom of the viewport.
+	// Record the pad so selection hit-testing can subtract the blank rows.
+	m.viewportTopPad = 0
 	contentLines := strings.Count(content, "\n")
 	if contentLines < m.viewport.Height() {
-		padding := strings.Repeat("\n", m.viewport.Height()-contentLines)
-		content = padding + content
+		m.viewportTopPad = m.viewport.Height() - contentLines
+		content = strings.Repeat("\n", m.viewportTopPad) + content
 	}
 
 	// Only auto-follow when the user is already pinned at the bottom. If they've

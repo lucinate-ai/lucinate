@@ -150,12 +150,14 @@ type AppModel struct {
 	// and the agent list, none of which share a fixed parent.
 	configReturn viewState
 
-	// mouseCapture toggles SGR mouse tracking. Off by default so a plain
-	// click-drag runs the terminal's native text selection (the fix for
-	// lucinate-ai/lucinate#14); the user opts in via /mouse on to get
-	// mouse-wheel scrolling of the chat history, accepting that native
-	// selection then needs a Shift/Option modifier. Owned here because the
-	// View() that emits the mode lives on AppModel.
+	// mouseCapture toggles SGR mouse tracking. On by default: the wheel
+	// scrolls the chat history (and is never translated to arrow keys, so
+	// Up/Down stay reserved for input recall), and click-drag runs the
+	// in-app transcript selection with copy-on-release (selection.go) —
+	// which restores the copy capability that issue #14 previously required
+	// native selection for. /mouse off opts out, handing click-drag back to
+	// the terminal's native selection at the cost of wheel scrolling. Owned
+	// here because the View() that emits the mode lives on AppModel.
 	mouseCapture bool
 
 	// cronsReturnChat preserves the chat the user was viewing when they
@@ -207,6 +209,7 @@ func NewApp(b backend.Backend, opts AppOptions) AppModel {
 	m := AppModel{
 		backend:               b,
 		prefs:                 config.LoadPreferences(),
+		mouseCapture:          true,
 		hideInput:             opts.HideInputArea,
 		hideActionHints:       opts.HideActionHints,
 		disableExitKeys:       opts.DisableExitKeys,
