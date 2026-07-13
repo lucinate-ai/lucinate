@@ -4,6 +4,24 @@ End-to-end integration tests that run repclaw against a real OpenClaw gateway.
 Several inference backends are supported: a local Ollama model (default), AWS
 Bedrock, OpenRouter, or a zero-cost echo stub for CI.
 
+## Bootstrap (rapid evaluation)
+
+Want to *use* a gateway interactively rather than run tests against it? The
+bootstrap harness stands the same gateway up and drops you into lucinate:
+
+```bash
+make bootstrap-openclaw-up      # stand up (echo model by default)
+make bootstrap-openclaw-run     # chat with it from lucinate
+make bootstrap-openclaw-down    # tear down
+```
+
+It composes the `setup-openclaw-<provider>.sh` scripts documented below, so the
+provider tables and prerequisites here apply. Because it shares the gateway
+container, port, state directory, and device identity with these test setups,
+bootstrap and the integration tests are mutually exclusive — bring one down
+before standing the other up. See [docs/bootstrap.md](../../docs/bootstrap.md)
+for the full picture.
+
 ## Ollama (default)
 
 The LLM runs on the host (Metal-accelerated), while the gateway runs in Docker.

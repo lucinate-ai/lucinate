@@ -347,6 +347,18 @@ LUCINATE_LOG_FORMAT=text                 # text (default) | json
 
 The TUI never writes diagnostics to your terminal — they would corrupt the rendered frame — so by default log output goes to a side file in the OS temp dir (`lucinate-events.log`). Bump `LUCINATE_LOG_LEVEL=debug` and tail it when something looks off. See [docs/logging.md](docs/logging.md) for the full design.
 
+## Evaluate a local gateway
+
+No OpenClaw gateway to point at yet? Stand one up locally in Docker and chat with it in three commands — handy for evaluating lucinate against a real gateway without any cloud setup:
+
+```sh
+make bootstrap-openclaw-up      # stand OpenClaw up (zero-cost echo model by default)
+make bootstrap-openclaw-run     # launch lucinate against it
+make bootstrap-openclaw-down    # tear it down
+```
+
+Swap in a real model provider with `make bootstrap-openclaw-up PROVIDER=ollama` (or `openrouter`, `bedrock`). See [docs/bootstrap.md](docs/bootstrap.md) for the details.
+
 ## Built on
 
 lucinate uses the [openclaw-go](https://github.com/a3tai/openclaw-go) SDK for gateway communication. The TUI is built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Bubbles](https://github.com/charmbracelet/bubbles), and [Lip Gloss](https://github.com/charmbracelet/lipgloss), with markdown rendered via [Glamour](https://github.com/charmbracelet/glamour).

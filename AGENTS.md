@@ -13,9 +13,18 @@ make coverage-html    # Generate HTML coverage report
 make fmt              # Format code
 make run args="..."   # Run with arguments
 make install          # Install binary globally
+
+make bootstrap-openclaw-up     # Stand OpenClaw up locally for interactive evaluation
+make bootstrap-openclaw-run    # Chat with the bootstrapped gateway from lucinate
+make bootstrap-openclaw-down   # Tear the bootstrapped gateway down
 ```
 
 Run a single test: `go test ./internal/tui/ -run TestExtractContent`
+
+For rapid, hands-on evaluation of an agent orchestration platform (OpenClaw
+today), the `bootstrap-openclaw-*` targets stand the gateway up in Docker and
+launch the TUI against it — see [docs/bootstrap.md](docs/bootstrap.md). They
+reuse the integration-test standup and pairing flow.
 
 ## Architecture
 

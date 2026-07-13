@@ -75,6 +75,29 @@ test-integration-openclaw-smoke:
 test-integration-openclaw-teardown:
 	./test/integration/teardown-openclaw.sh
 
+# --- Bootstrap: rapid, interactive evaluation of OpenClaw ------------------
+# Stand a local OpenClaw gateway up in Docker and chat with it from lucinate.
+# Reuses the integration-test standup + pairing flow; see docs/bootstrap.md.
+# Override the provider/model:  make bootstrap-openclaw-up PROVIDER=ollama MODEL=qwen2.5:1.5b
+.PHONY: bootstrap-openclaw-up
+bootstrap-openclaw-up:
+	./test/integration/bootstrap-openclaw.sh --provider $(or $(PROVIDER),echo) $(if $(MODEL),--model $(MODEL),)
+
+# Launch the interactive TUI against the bootstrapped gateway.
+.PHONY: bootstrap-openclaw-run
+bootstrap-openclaw-run:
+	OPENCLAW_GATEWAY_URL=http://localhost:18789 go run -ldflags "$(LDFLAGS)" .
+
+# Show gateway container + health status.
+.PHONY: bootstrap-openclaw-status
+bootstrap-openclaw-status:
+	@docker compose -f test/integration/docker-compose.yml ps
+	@printf "health: "; curl -fsS http://localhost:18789/healthz && echo || echo "unreachable"
+
+.PHONY: bootstrap-openclaw-down
+bootstrap-openclaw-down:
+	./test/integration/teardown-openclaw.sh
+
 .PHONY: test-integration-openai-setup
 test-integration-openai-setup:
 	./test/integration/setup-openai.sh

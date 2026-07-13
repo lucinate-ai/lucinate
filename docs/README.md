@@ -25,3 +25,4 @@ This directory contains maintainer-level documentation for lucinate. It covers h
 | [message-rendering.md](message-rendering.md) | Message roles, `System:` prefix convention, history cleanup, markdown rendering |
 | [key-conventions.md](key-conventions.md) | Cross-view keyboard conventions: action keys, confirms, navigation, form keys, reserved keys |
 | [logging.md](logging.md) | `internal/logging` design: `LUCINATE_LOG_*` env vars, destination rule, TUI-safety constraints |
+| [bootstrap.md](bootstrap.md) | Rapid-evaluation harness: stand OpenClaw up locally and chat with it, provider selection, relationship to integration tests |
