@@ -721,6 +721,44 @@ func TestRenderToolActivity_Empty(t *testing.T) {
 	}
 }
 
+// Info notifications ("copied … to clipboard") pin to the top below the
+// header; error notifications drop to the very bottom below the queued
+// footer. This pins the full region order end-to-end through View().
+func TestView_NotificationPlacement(t *testing.T) {
+	m := newChatModel(newFakeBackend(), "s", "a", "agent", "", config.DefaultPreferences(), false, "", "", false)
+	m.setSize(80, 24)
+	m.historyLoading = false
+	m.messages = []chatMessage{{role: "user", content: "TRANSCRIPT_MARKER"}}
+	m.pendingMessages = []string{"QUEUED_MARKER"}
+	m.notify("COPIED_MARKER")
+	m.notifyError("ERROR_MARKER")
+	m.updateViewport()
+
+	view := ansi.Strip(m.View())
+	idx := map[string]int{
+		"info":       strings.Index(view, "COPIED_MARKER"),
+		"transcript": strings.Index(view, "TRANSCRIPT_MARKER"),
+		"queued":     strings.Index(view, "QUEUED_MARKER"),
+		"error":      strings.Index(view, "ERROR_MARKER"),
+	}
+	for name, i := range idx {
+		if i < 0 {
+			t.Fatalf("%s marker not found in view:\n%s", name, view)
+		}
+	}
+	// Info pinned above the transcript; error below the transcript and below
+	// the queued footer; queued footer between the transcript and the error.
+	if idx["info"] >= idx["transcript"] {
+		t.Errorf("info notification should render above the transcript (info=%d, transcript=%d)", idx["info"], idx["transcript"])
+	}
+	if idx["queued"] <= idx["transcript"] || idx["queued"] >= idx["error"] {
+		t.Errorf("queued footer should sit between transcript and error (transcript=%d, queued=%d, error=%d)", idx["transcript"], idx["queued"], idx["error"])
+	}
+	if idx["error"] <= idx["queued"] {
+		t.Errorf("error notification should be the bottommost region, below the queued footer (queued=%d, error=%d)", idx["queued"], idx["error"])
+	}
+}
+
 func TestNarrowLayout_Threshold(t *testing.T) {
 	tests := []struct {
 		name       string

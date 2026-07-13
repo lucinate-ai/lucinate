@@ -76,9 +76,26 @@ A second header badge — `↑ vX.Y.Z`, rendered in the same warn style as `⚠ 
 
 The badge is suppressed once the user has seen it: `prefs.LatestSeenVersion` records the manifest version on every successful check, and the badge only appears when the manifest moves *past* that version. Toggle the whole thing off via the `Check for updates on startup` row in `/config`, or set `LUCINATE_DISABLE_UPDATE_CHECK=1` for an unconditional opt-out (useful in CI). The manifest URL itself can be overridden via `LUCINATE_UPDATE_MANIFEST_URL` for local testing.
 
+## View region order
+
+`chatModel.View()` (`internal/tui/chat.go`) assembles the chat view top→bottom in this fixed order. Every region between the header and the input reserves conversation-viewport height via `applyLayout`, and each only renders when it has content:
+
+1. **Header** — the status bar (connection, agent, model, token/cost).
+2. **Info notifications** — informational one-shots such as `copied … to clipboard`, pinned just below the header.
+3. **Conversation viewport** — the scrollable transcript.
+4. **Completion menu** — slash-command / mention candidates, while active.
+5. **Routine status row** — when a routine is active.
+6. **Tool-activity strip** — what the agent is running this turn (collapses to a summary when idle).
+7. **Queued-message footer** — messages typed while a turn streams, awaiting dispatch.
+8. **Error notifications** — error one-shots; the bottommost region above the input.
+9. **Input box.**
+10. **Help line.**
+
+Informational and error notifications are deliberately split to opposite ends. An informational confirmation reads naturally at the top beside the status bar, while an error surfaces at the bottom next to the input, where the user will act on it. Both are drawn from the same `chatModel.notifications` store, filtered on the `isError` flag by `renderInfoNotifications` / `renderErrorNotifications`.
+
 ## Notifications
 
-Ephemeral state messages — confirmation prompts, cancel acks, routine state changes ([routines.md](routines.md)) — render as one or more rows above the input box, between the conversation viewport (or completion menu) and the routine status row when present. Each row is width-padded and styled with `statusStyle` (or `errorStyle` for is-error rows).
+Ephemeral state messages — confirmation prompts, cancel acks, routine state changes ([routines.md](routines.md)) — render as one or more width-padded rows, styled with `statusStyle` (or `errorStyle` for is-error rows). They are split by kind: **informational** rows pin to the top just below the header, and **error** rows drop to the bottommost region below the queued-message footer — see [View region order](#view-region-order) for how they sit relative to the other regions.
 
 The store is `chatModel.notifications []notification` (`internal/tui/notifications.go`). Notifications live outside `m.messages`, so they survive `historyRefreshMsg` and never reach the gateway. They are cleared at the top of the Enter handler whenever the user submits a non-empty input, and on the empty-Enter routine-advance path — the assumption is that any state worth showing in a notification has been read or no longer applies once the user takes their next action.
 

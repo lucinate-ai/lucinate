@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 ### Changed
 - fix(tui): render queued messages in a footer below the tool-activity strip (directly above the input) instead of at the bottom of the scrollable transcript
+- fix(tui): pin informational notifications (e.g. "copied … to clipboard") to the top below the header and drop error notifications to the bottommost row below the queued messages
 
 ### Fixed
 - fix(tui): stop streamed assistant text repeating after each tool call by moving tool activity into an ephemeral strip above the input instead of inline scrollback rows
