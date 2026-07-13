@@ -5,10 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-### Changed
-- feat(tui): bare `/model` now reports the model in use for the current session instead of an error
-
 ## [1.21.0] - 2026-07-13
 ### Added
 - feat: default mouse capture on with in-app transcript selection (#171)
