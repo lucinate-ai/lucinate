@@ -265,6 +265,37 @@ func TestSelectModel_AgentCreatedError(t *testing.T) {
 	}
 }
 
+func TestSelectModel_CreatingBlocksKeystrokes(t *testing.T) {
+	m := newSelectModel(nil, false, false, nil, false, "")
+	m.subState = subStateCreate
+	m.nameInput.SetValue("my-agent")
+	m.focusedField = 0
+	m.creating = true
+
+	// A printable key, Tab, and Esc must all be inert while the create
+	// RPC is in flight — the form is frozen until agentCreatedMsg lands.
+	for _, key := range []tea.KeyPressMsg{
+		{Code: 'x', Text: "x"},
+		{Code: tea.KeyTab},
+		{Code: tea.KeyEsc},
+	} {
+		m, _ = m.handleKey(key)
+	}
+
+	if got := m.nameInput.Value(); got != "my-agent" {
+		t.Errorf("name input mutated while creating: got %q, want %q", got, "my-agent")
+	}
+	if m.focusedField != 0 {
+		t.Errorf("focus changed while creating: got %d, want 0", m.focusedField)
+	}
+	if m.subState != subStateCreate {
+		t.Errorf("esc backed out of the form while creating: subState = %v, want subStateCreate", m.subState)
+	}
+	if !m.creating {
+		t.Error("creating flag should remain set until the result arrives")
+	}
+}
+
 func TestSelectModel_AutoSelectNewAgent(t *testing.T) {
 	m := newSelectModel(nil, false, false, nil, false, "")
 	m.newAgentID = "new-agent"

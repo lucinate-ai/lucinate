@@ -152,6 +152,54 @@ func TestConnectingModel_TokenPromptIgnoresEmpty(t *testing.T) {
 	}
 }
 
+func TestConnectingModel_ResolvingBlocksDoubleSubmit(t *testing.T) {
+	conn := &config.Connection{Name: "home", URL: "https://home.example.com"}
+	fake := newFakeBackend()
+	m := newConnectingModel(conn, false)
+	m.enterAuthModal(conn, fake, authRecoveryTokenMissing, errors.New("gateway token missing"))
+
+	m.tokenInput.SetValue("pre-shared-token")
+	m, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected cmd from first Enter")
+	}
+	if !m.resolving {
+		t.Fatal("expected resolving=true after committing the submit")
+	}
+
+	// A second Enter while the store+connect round-trip is in flight must
+	// be ignored so the mutation can't be dispatched twice.
+	m, cmd2 := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd2 != nil {
+		t.Error("second Enter should be ignored while resolving")
+	}
+	// The field is frozen too: a printable key doesn't mutate it.
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: 'z', Text: "z"})
+	if got := m.tokenInput.Value(); got != "pre-shared-token" {
+		t.Errorf("token field mutated while resolving: got %q", got)
+	}
+}
+
+func TestConnectingModel_EnterAuthModalClearsResolving(t *testing.T) {
+	conn := &config.Connection{Name: "home", URL: "https://home.example.com"}
+	fake := newFakeBackend()
+	m := newConnectingModel(conn, false)
+	m.enterAuthModal(conn, fake, authRecoveryTokenMissing, errors.New("gateway token missing"))
+
+	m.tokenInput.SetValue("tok")
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.resolving {
+		t.Fatal("expected resolving=true after submit")
+	}
+
+	// A retry that failed again re-enters the same model instance; the
+	// reopened modal must be interactive.
+	m.enterAuthModal(conn, fake, authRecoveryTokenMissing, errors.New("still missing"))
+	if m.resolving {
+		t.Error("expected resolving cleared on re-entry via enterAuthModal")
+	}
+}
+
 func TestConnectingModel_PairingRequiredShowsInstructions(t *testing.T) {
 	conn := &config.Connection{Name: "home", URL: "https://home.example.com"}
 	m := newConnectingModel(conn, false)
