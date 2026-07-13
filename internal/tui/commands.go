@@ -52,7 +52,7 @@ type pendingNavConfirm struct {
 // hint surfaces the picker first, "/model" before "/models" likewise.
 // Tab now extends to the longest common prefix and the completion menu
 // shows every candidate, so the curated order no longer rules Tab.
-var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/export", "/help", "/header", "/model", "/models", "/mouse", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/skills", "/stats", "/status", "/think"}
+var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/exit", "/export", "/help", "/header", "/model", "/models", "/mouse", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/settings", "/skills", "/stats", "/status", "/think"}
 
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
@@ -67,7 +67,7 @@ const helpBody = `/quit, /exit — quit lucinate
 /cancel — cancel the current response (also: Esc)
 /clear — clear chat display
 /compact — compact session context
-/config — open preferences
+/settings — open settings (also: /config)
 /connections — switch gateway connection
 /crons — list and manage cron jobs (use /crons all for global)
 /export — write the current session's canonical history to a transcript file (/export routine opens the routine form prefilled with the user prompts)
@@ -295,7 +295,9 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		})
 		m.updateViewport()
 		return true, nil
-	case "/config":
+	case "/settings", "/config":
+		// /settings is the primary command; /config is kept as a
+		// backward-compatible alias.
 		return true, func() tea.Msg { return showConfigMsg{} }
 	case "/connections":
 		return true, m.gateNavigation("Switching connections", func() tea.Msg { return showConnectionsMsg{} })

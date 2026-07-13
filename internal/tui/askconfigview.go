@@ -10,7 +10,7 @@ import (
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
-// askConfigModel is the "/config ▸ Ask command defaults" sub-screen. It
+// askConfigModel is the "/settings ▸ Ask command defaults" sub-screen. It
 // edits the preconfigured values the `lucinate ask` subcommand uses —
 // the same fields `lucinate send` accepts (connection, agent, session,
 // detach). KEEP IN SYNC with config.AskDefaults and the send/ask flag

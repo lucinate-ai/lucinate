@@ -16,7 +16,7 @@ import (
 // runAsk implements `lucinate ask`, a thin alias for `lucinate send`
 // (see runSend in send.go) that pre-fills the connection / agent /
 // session / detach flags from the user's saved Ask defaults. Those
-// defaults are edited in the TUI under /config ▸ "Ask command
+// defaults are edited in the TUI under /settings ▸ "Ask command
 // defaults"; an empty default leaves the flag unset so the user can
 // supply it on the command line. Any flag passed explicitly overrides
 // the saved default.
@@ -45,10 +45,10 @@ func runAsk(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("ask: missing message text")
 	}
 	if strings.TrimSpace(connection) == "" {
-		return errors.New("ask: no connection configured — set one in the TUI under /config ▸ Ask command defaults, or pass --connection")
+		return errors.New("ask: no connection configured — set one in the TUI under /settings ▸ Ask command defaults, or pass --connection")
 	}
 	if strings.TrimSpace(agent) == "" {
-		return errors.New("ask: no agent configured — set one in the TUI under /config ▸ Ask command defaults, or pass --agent")
+		return errors.New("ask: no agent configured — set one in the TUI under /settings ▸ Ask command defaults, or pass --agent")
 	}
 	message := strings.Join(rest, " ")
 	out := stdout
@@ -90,7 +90,7 @@ func printAskUsage(out io.Writer) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Sends a single chat message, just like `lucinate send`, but pre-fills the")
 	fmt.Fprintln(out, "connection, agent, session, and detach options from the saved Ask defaults")
-	fmt.Fprintln(out, "(edit them in the TUI under /config ▸ Ask command defaults). Any flag passed")
+	fmt.Fprintln(out, "(edit them in the TUI under /settings ▸ Ask command defaults). Any flag passed")
 	fmt.Fprintln(out, "explicitly overrides the saved default.")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Flags:")

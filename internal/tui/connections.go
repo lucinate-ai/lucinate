@@ -333,8 +333,10 @@ func (m connectionsModel) Actions() []Action {
 			Action{ID: "delete-connection", Label: "Delete", Key: "d"},
 		)
 	}
-	// Config is reachable here as well as from chat and the agent list.
-	actions = append(actions, Action{ID: "config", Label: "Config", Key: ","})
+	// Settings is reachable here as well as from chat and the agent list;
+	// the "s" key is kept consistent with the agent list's binding. ID
+	// stays "config" as a stable dispatch identifier.
+	actions = append(actions, Action{ID: "config", Label: "Settings", Key: "s"})
 	return actions
 }
 

@@ -18,7 +18,7 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/cancel` | Cancel the in-progress response (also triggered by Escape) — see [chat-ux.md](chat-ux.md) |
 | `/clear` | Wipe `m.messages` from the local display (does not affect gateway history) |
 | `/compact` | Compact the session context — see [sessions.md](sessions.md#compact-and-reset) |
-| `/config` | Open the preferences view by emitting `showConfigMsg{}` |
+| `/config` | Backward-compatible alias for `/settings` |
 | `/connections` | Open the connections picker mid-session, tearing down the active backend — see [connections.md](connections.md) |
 | `/crons` | Open the cron browser filtered to the current agent — see [crons.md](crons.md) — **OpenClaw only** |
 | `/crons all` | Open the cron browser unfiltered (jobs across all agents) — **OpenClaw only** |
@@ -44,6 +44,7 @@ Slash input that isn't a built-in is checked against the loaded skill names: if 
 | `/routine <name>` | Activate a stored routine in the current session — see [routines.md](routines.md) |
 | `/routines` | Open the routines manager (list/view/edit/delete) — see [routines.md](routines.md) |
 | `/sessions` | Open the session browser — see [sessions.md](sessions.md#session-browser) |
+| `/settings` | Open the settings view by emitting `showConfigMsg{}` (alias: `/config`) |
 | `/skills` | List discovered skills — see [skills.md](skills.md) |
 | `/stats` | Show a token usage and cost table for the current session — **OpenClaw only** |
 | `/status` | Show backend status — common header (type, endpoint, auth, default model) plus backend-specific blocks: OpenClaw gateway health / versions / agents / channels, OpenAI agent count + current `history.jsonl` stats, Hermes thread state |
