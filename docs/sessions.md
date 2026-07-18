@@ -1,46 +1,62 @@
-# Sessions
+# Sessions — lessons and rationale
 
-## Lifecycle
+The behavioural contract for sessions lives in
+[`openspec/specs/sessions/spec.md`](../openspec/specs/sessions/spec.md) — the session
+lifecycle, the session browser, the compact and reset commands, and message queueing are all
+captured there as requirements and scenarios. This file keeps the hard-won lessons, pitfalls,
+and design rationale behind that flow: the "why it works this odd way" that the spec's
+requirements don't dwell on.
 
-A session is created when the user selects an agent in the agent picker (see [agents.md](agents.md)). `client.CreateSession(agentID, key)` is called and the returned `sessionKey` is passed to `newChatModel()`. The session key is deterministic for non-default agents (based on agent ID) so the same session is restored on restart.
+## Why session keys are deterministic
 
-The same default-key rule is reused by the one-shot CLI mode: `app.Send` (`lucinate send`) calls `CreateSession` with `MainKey` for the default agent and the literal `"main"` for any other agent, so a scripted dispatch lands on the same conversation as "open the picker, pick the agent, hit enter". See [one-shot.md](one-shot.md) for the full lifecycle.
+The session key is deterministic for non-default agents (based on agent ID) so the same session
+is restored on restart rather than spawning a fresh conversation each launch. The same
+default-key rule is reused by the one-shot CLI mode (`lucinate send`): it uses `MainKey` for the
+default agent and the literal `"main"` for any other agent, so a scripted dispatch lands on the
+same conversation as "open the picker, pick the agent, hit enter". Keeping both entry points on
+the same key rule is the whole point — otherwise a scripted send and an interactive pick would
+drift onto different conversations.
 
-`lucinate chat --session <key>` overrides this default at the picker's `CreateSession` site: `AppModel.initialSession` is consumed in the `viewSelect` block of `update`, beating both the literal `"main"` and `MainKey`. The override is one-shot — cleared once consumed so a follow-up agent pick on the same picker doesn't keep landing on the original key. See [chat-launch.md](chat-launch.md).
+The `lucinate chat --session <key>` override is deliberately **one-shot** — cleared once
+consumed in the `viewSelect` block so a follow-up agent pick on the same picker doesn't keep
+landing on the original key.
 
-On `chatModel.Init()`, two async commands run in parallel:
+## Why history and stats load in parallel
 
-- `loadHistory()` — fetches the last N messages from the gateway (`client.SessionHistory()`), strips `System:` lines (see [message-rendering.md](message-rendering.md#history-cleanup)), and populates the viewport.
-- `loadStats()` — fetches token usage and cost via `client.SessionUsage()` for the header bar.
+On `chatModel.Init()`, `loadHistory()` and `loadStats()` run as two async commands in parallel
+rather than in sequence — neither depends on the other, so serialising them would just add
+latency to the first paint.
 
-History depth (N) is configurable; see [chat-ux.md](chat-ux.md#history-depth).
+## Compact: server-side vs local streaming
 
-## Session browser
+The distinction that catches people out: on OpenClaw the gateway runs the compaction pass
+server-side, but on the OpenAI-compatible backend the pass runs **locally** (a streaming
+`POST /v1/chat/completions` against the agent's configured model). Same `/compact` command, two
+very different execution paths — worth remembering when a compaction behaves differently between
+backends.
 
-`/sessions` emits `showSessionsMsg{}`, which navigates to the sessions view (`sessionsModel` in `internal/tui/sessions.go`). The model calls `client.SessionsList(agentID)` and parses the response into `sessionItem` values grouped into two lists:
+## Reset is delete-then-recreate
 
-- **Conversations** — regular sessions.
-- **Scheduled** — sessions whose key contains `:cron:`, used by scheduled/automated agents.
+`/reset` doesn't clear a session in place; it calls `SessionDelete()` to permanently remove the
+session and then immediately creates a replacement via `CreateSession()`. The new session key
+comes back as `sessionClearedMsg{newSessionKey}` — the chat model reinitialises against a fresh
+key rather than reusing the old one.
 
-Both lists are sorted by `updatedAt` descending. Selecting a session returns `sessionSelectedMsg` and a new `chatModel` is constructed with the chosen key, loading its history.
+## Queueing gotcha: exec results also drain the queue
 
-## Compact and reset
+While a response is in flight, new input is appended to `m.pendingMessages` rather than sent, so
+fast typing doesn't drop messages. The non-obvious part is that local (`!`) and remote (`!!`)
+exec results **also** trigger `drainQueue()` — not just chat responses. If you change the exec
+flow, remember it shares the same drain path; miss that and queued messages silently stall after
+an exec.
 
-Both commands use the [confirmation pattern](commands.md#confirmation-pattern) before taking action.
+`lucinate chat <message>` pre-seeds the same queue and drains it from the `historyLoadedMsg`
+handler *after* the scrollback has rendered, so the launch message appears after the loaded
+history — matching what a human typing the same message would see, rather than jumping ahead of
+it.
 
-**`/compact`** calls `backend.SessionCompact()`, which summarises older messages in the session context to reduce token usage. On OpenClaw the gateway runs the pass server-side; on the OpenAI-compatible backend the pass runs locally (a streaming `POST /v1/chat/completions` against the agent's configured model — see [backend_openai.md](backend_openai.md#compaction)). While the pass is in flight the confirmation handler shows a pending `Compacting session…` system row with the streaming spinner attached (see [confirmation pattern](commands.md#confirmation-pattern)). On success the placeholder is replaced in place with `Session compacted.`; the smaller context is picked up on the next chat send.
+## Scheduled sessions sort separately
 
-**`/reset`** calls `backend.SessionDelete()` to permanently remove the session, then immediately creates a replacement via `backend.CreateSession()`. While the round-trip is in flight the chat view shows a pending `Clearing session…` system row with the spinner attached. On success the new session key is returned as `sessionClearedMsg{newSessionKey}` and the chat model reinitialises with an empty history; on error the placeholder is replaced in place with the error.
-
-## Message queueing
-
-While `m.sending == true` (a response is in flight), new user input is appended to `m.pendingMessages []string` rather than sent immediately. This prevents messages from being dropped when the user types quickly.
-
-After each response (`drainQueue()` in `chat.go`):
-
-1. If there are pending messages, the first one is dequeued and sent as if the user typed it fresh (including command detection, skill prepend, etc.).
-2. History is refreshed once the queue is fully drained.
-
-Local (`!`) and remote (`!!`) exec results also trigger queue draining. See [shell-execution.md](shell-execution.md) for the exec flow.
-
-`lucinate chat <message>` pre-seeds the same queue: `newChatModel` appends the supplied text to `pendingMessages` at construction time, and the `historyLoadedMsg` handler returns `m.drainQueue()` once the scrollback has rendered — so the user turn appears *after* the loaded history, matching what a human typing the same message would see. See [chat-launch.md](chat-launch.md).
+Sessions whose key contains `:cron:` are split into their own **Scheduled** list in the session
+browser, separate from regular **Conversations**. The `:cron:` marker in the key is what drives
+the grouping — there's no other flag distinguishing an automated session from a hand-started one.

@@ -1,88 +1,83 @@
-# Connections and backends
+# Connections and backends — lessons and rationale
 
-A connection is a saved target lucinate can connect to (URL + type + auth identity). The list is persisted to `~/.lucinate/connections.json` and managed through the connections picker (`viewConnections`) — accessible as the entry view on first run, via `/connections` mid-session, or via the **Connections** action on the agent picker. The picker also exposes a **Settings** action (key `s`) that opens the settings screen without leaving the pre-chat flow.
+The behavioural contract for connections and backends lives in
+[`openspec/specs/connections/spec.md`](../openspec/specs/connections/spec.md) — the connection
+types, the picker and form, the startup decision tree, the connection lifecycle, capability
+negotiation, auth-recovery modals, and secrets storage are all captured there as requirements
+and scenarios. This file keeps the hard-won lessons, pitfalls, and design rationale behind that
+contract: the "why it works this odd way" that the spec's requirements don't dwell on.
 
-## Connection types
+## Sibling backends, not a base class and a subclass
 
-Three backend types ship today; all implement `backend.Backend` (`internal/backend/backend.go`) so the chat / sessions / commands views are backend-agnostic. The OpenAI and Hermes backends both speak HTTP+SSE+JSON over Bearer-token auth and share the request builder, SSE scanner, and event emitter in `internal/backend/httpcommon` — but they're sibling implementations, not a base class and a subclass. Backend-specific behaviour is documented in dedicated files:
+The OpenAI and Hermes backends both speak HTTP+SSE+JSON over Bearer-token auth and share the
+request builder, SSE scanner, and event emitter in `internal/backend/httpcommon` — but they're
+sibling implementations, not a base class and a subclass. The shared plumbing is a convenience,
+not an inheritance hierarchy, and treating it as one leads you astray when their request/response
+shapes diverge (`/v1/chat/completions` vs `/v1/responses` server-state chaining).
 
-- [backend_openclaw.md](backend_openclaw.md) — full capability surface, device-token auth, server-side agents
-- [backend_openai.md](backend_openai.md) — `/v1/chat/completions` streaming, on-disk agents (IDENTITY.md + SOUL.md), API-key auth
-- [backend_hermes.md](backend_hermes.md) — `/v1/responses` server-state chaining, one synthetic agent per connection, API-key auth
+## Why the factory switch is enough to reach a new backend everywhere
 
-| Type      | URL shape                                                   | Auth                                   | Agent storage                                                                  |
-|-----------|-------------------------------------------------------------|----------------------------------------|--------------------------------------------------------------------------------|
-| OpenClaw  | `https://`/`http://`/`wss://`/`ws://` (WS endpoint derived) | Ed25519 device pairing                 | Server-side on the gateway                                                     |
-| OpenAI    | `http(s)://host/v1`                                         | Optional `Authorization: Bearer <key>` | Local under `~/.lucinate/agents/<conn-id>/<agent-id>/`                         |
-| Hermes    | `http(s)://host:8642/v1` (default loopback)                 | `Authorization: Bearer <API_SERVER_KEY>` | Server-side in the Hermes profile; only `last_response_id` + prompts log local |
+`DefaultBackendFactory` (`app/factory.go`) has two non-TUI consumers, and both are wired so that
+landing a new connection type in the factory's switch is all it takes to reach them. `app.Send`
+(`lucinate send`) calls the factory directly for one-shot dispatch, so a new type is automatically
+reachable from the scripted CLI mode without further wiring. `app.Chat` (`lucinate chat`) defers
+all connect / list / create work to the TUI and just packs overrides into `RunOptions`, so a new
+type is reachable there as soon as it works in the regular TUI. Worth knowing before you go
+hunting for extra plumbing to add.
 
-`AllConnectionTypes` (`internal/config/connections.go`) drives the picker form's type radio. Adding a fourth backend means: implementing `backend.Backend`, extending the enum, dispatching in `DefaultBackendFactory` (`app/factory.go`), adjusting the form's type-conditional rendering, and writing a `backend_<name>.md` doc for it.
+## Auto-add doesn't persist until a successful connect
 
-`DefaultBackendFactory` has two non-TUI consumers. `app.Send` (`lucinate send`) calls it directly to build a backend for one-shot dispatch — a new connection type that lands in the factory's switch is automatically reachable from the scripted CLI mode without further wiring (see [one-shot.md](one-shot.md)). `app.Chat` (`lucinate chat`) defers all connect / list / create work to the TUI and just packs `Connection` / `Agent` / `Session` / `Message` overrides into `RunOptions`, so a new connection type is reachable there as soon as it works in the regular TUI (see [chat-launch.md](chat-launch.md)).
+In the startup decision tree, auto-add from `OPENCLAW_GATEWAY_URL` / `LUCINATE_OPENAI_BASE_URL`
+mutates the in-memory store but does **not** persist it until a successful connect. This is
+deliberate: a typo in the env URL would otherwise accumulate ghost entries in
+`~/.lucinate/connections.json` on every launch.
 
-## Startup decision tree
+## The driver owns Close
 
-`config.ResolveEntryConnection()` (`internal/config/startup.go`) decides what the TUI's entry view is:
+In managed mode the driver, not the TUI, owns closing the backend once it's published. Picking a
+different connection mid-session publishes `nil` to the driver, which closes the active backend
+before binding to the next pick. TUI code never closes the backend itself. Keeping Close in one
+place avoids two paths racing to tear down the same connection.
 
-1. If `OPENCLAW_GATEWAY_URL` is set, find or auto-add a matching OpenClaw connection.
-2. Else if `LUCINATE_OPENAI_BASE_URL` is set, find or auto-add a matching OpenAI connection (with `LUCINATE_OPENAI_DEFAULT_MODEL` if provided).
-3. Else if a saved `defaultId` resolves to a known entry → use it (last-used = default).
-4. Else if exactly one connection is stored → auto-pick it.
-5. Else → open the connections picker.
+## Auth-modal dispatch is on `authNeed`, not interface assertion
 
-Auto-add (steps 1–2) mutates the in-memory store but does **not** persist it until a successful connect, so a typo in the env URL doesn't accumulate ghost entries.
+The connecting view (`internal/tui/connecting.go`) dispatches modal submissions on
+`connectingModel.authNeed` rather than on a Go interface assertion. The trap: the OpenClaw wrapper
+implements **both** `DeviceTokenAuth` and `APIKeyAuth`, so a naive type-switch would always pick
+the first arm and store the wrong kind of credential. See `connecting.go` `case "enter":` for the
+dispatch.
 
-`lucinate chat --connection <name>` short-circuits this tree: the named connection is resolved against the store directly (ID-then-case-insensitive-name) and a miss is a hard error rather than falling through to the env-var / default-id path. With `--connection` unset, `chat` runs the same `ResolveEntryConnection` the bare invocation does. See [chat-launch.md](chat-launch.md) for the override plumbing.
+## Hermes leaves agent management off on purpose
 
-## Connection lifecycle
+`Capabilities.AgentManagement` gates both the "new agent" and "delete agent" affordances. Hermes
+leaves it false because profiles are configured server-side via `hermes profile create` on the
+host — there's nothing for the picker to create or delete. As defence in depth `Backend.CreateAgent`
+and `Backend.DeleteAgent` both reject if ever reached, so a stray call can't half-create a profile
+the picker was never meant to touch.
 
-The TUI owns the lifecycle in managed mode (`AppOptions.Store != nil`):
+## Secrets are on disk for now
 
-- A successful connect calls `OnBackendChanged(backend)` so the app driver in `app/app.go` rewires the events pump and supervisor onto the new backend.
-- Picking a different connection mid-session (`/connections`, the picker action, or any other `showConnectionsMsg`) publishes `nil` to the driver, which closes the active backend before binding to whatever the next pick produces.
-- The driver owns Close — TUI code never closes the backend itself once it's published.
+API keys live at `~/.lucinate/secrets/secrets.json` (mode 0600). The `secretAwareOpenAIBackend`
+and `secretAwareHermesBackend` shims in `app/factory.go` wrap their concrete backends so
+`StoreAPIKey` writes through to that file during the auth-modal resolution path, letting the next
+launch reuse the key without re-prompting. The shim exists so the concrete backends stay unaware
+of on-disk storage — the write-through is bolted on at the factory rather than baked into each
+backend.
 
-Legacy mode (`AppOptions.Backend != nil`, no `Store`) is for native-platform embedders that manage the connection elsewhere; the connections picker and `/connections` are unavailable, and Close is the caller's responsibility.
+A future enhancement is to back this with the OS keychain (Keychain on macOS, libsecret on Linux,
+Credential Manager on Windows) and fall back to the JSON file when no keychain is available — kept
+on disk for now to avoid platform-specific dependencies on first run.
 
-## Capability negotiation
+## Switching presets clears the localhost prefill
 
-`backend.Backend.Capabilities()` reports a `Capabilities` struct (`internal/backend/backend.go`); the TUI type-asserts against optional sub-interfaces (`StatusBackend`, `ExecBackend`, `CompactBackend`, `ThinkingBackend`, `UsageBackend`, `CronBackend`, `DeviceTokenAuth`, `APIKeyAuth`) at the relevant call sites. OpenClaw implements all of them. OpenAI implements `APIKeyAuth`, `CompactBackend` (the latter via a local summarisation pass — see [backend_openai.md](backend_openai.md#compaction)), and `StatusBackend`. Hermes implements `APIKeyAuth` and `StatusBackend`. Backend-only commands the active connection doesn't support (`/think`, `/stats`, `/crons`, `!!` on OpenAI/Hermes; `/compact` on Hermes) render a "not available on this connection" system message instead of erroring.
+The Ollama and Hermes presets pre-fill a localhost Base URL. Switching to either preset and back
+clears the prefill so the user isn't stranded with the wrong localhost URL sitting in a gateway
+field. Without the clear, a half-configured form would carry a stale value that looks plausible
+but points at the wrong backend.
 
-`/status` works on every backend, with each one populating only the sub-blocks of `BackendStatus` that apply: OpenClaw fills the gateway-health block, OpenAI fills agent-count and `history.jsonl` stats, Hermes fills the lastResponseID thread block. See the per-backend "Status payload" sections in [backend_openclaw.md](backend_openclaw.md#status-payload), [backend_openai.md](backend_openai.md#status-payload), and [backend_hermes.md](backend_hermes.md#status-payload).
+## Ollama isn't distinguishable after save
 
-The `Capabilities.AgentManagement` flag gates both the picker's "new agent" affordance and its "delete agent" affordance. OpenClaw and OpenAI opt in (the user creates and deletes agents via the picker). Hermes leaves it false because profiles are configured server-side via `hermes profile create` on the host, so both buttons are hidden on Hermes connections; `Backend.DeleteAgent` and `Backend.CreateAgent` both reject defensively if reached.
-
-## Auth-recovery modals
-
-`Connect` errors are routed into modal sub-states by the connecting view (`internal/tui/connecting.go`):
-
-- `gateway token mismatch` → device-token modal: clear / reset identity / cancel. `ClearToken` and `ResetIdentity` come from `DeviceTokenAuth`.
-- `gateway token missing` → device-token text prompt; submission stores via `DeviceTokenAuth.StoreToken`.
-- `api key required` (HTTP 401/403 from any `/v1` request) → API-key text prompt; submission stores via `APIKeyAuth.StoreAPIKey`.
-
-The submission flow dispatches on `connectingModel.authNeed` rather than on Go interface assertion: the OpenClaw wrapper implements both `DeviceTokenAuth` and `APIKeyAuth`, so a naive type-switch would always pick the first arm. See `connecting.go` `case "enter":` for the dispatch.
-
-## Secrets storage
-
-API keys live at `~/.lucinate/secrets/secrets.json` (mode 0600), keyed by connection ID. `config.GetAPIKey(connID)` and `config.SetAPIKey(connID, key)` are the public surface. `LUCINATE_OPENAI_API_KEY` falls back when no per-connection key is stored.
-
-The `secretAwareOpenAIBackend` and `secretAwareHermesBackend` shims in `app/factory.go` wrap their respective concrete backends so `StoreAPIKey` writes through to `~/.lucinate/secrets/secrets.json` during the auth-modal resolution path; the next launch reuses the key without re-prompting.
-
-A future enhancement is to back this with the OS keychain (Keychain on macOS, libsecret on Linux, Credential Manager on Windows) and fall back to the JSON file when no keychain is available — kept on disk for now to avoid platform-specific dependencies on first run.
-
-## Connections form
-
-`internal/tui/connections.go` implements the picker. The form has a fixed type radio plus type-conditional fields:
-
-| Preset   | Persisted Type | Fields                                                     |
-|----------|----------------|------------------------------------------------------------|
-| OpenClaw | `openclaw`     | Type, Name, Gateway URL                                    |
-| OpenAI   | `openai`       | Type, Name, Base URL, Default model (optional)             |
-| Ollama   | `openai`       | Type, Name, Base URL, Default model (optional)             |
-| Hermes   | `hermes`       | Type, Name, Base URL, Profile name                         |
-
-The picker offers four presets but only three persisted types — Ollama is an opinionated OpenAI preset that pre-fills `Name = ollama` and `Base URL = http://localhost:11434/v1`. Hermes is its own type with a pre-filled `Base URL = http://127.0.0.1:8642/v1` and a "Profile name" model field. Switching to either preset and back clears the prefill so the user isn't stranded with the wrong localhost URL in a gateway field.
-
-The type radio renders vertically (one preset per line) so the list reflows cleanly on narrow terminals. ↑/↓ cycles the presets when the radio is focused; Tab moves between fields. Edit forms drop the radio entirely (type is immutable post-create) and start focus on the name field. Edited connections show the persisted type as a dimmed read-only label — Ollama-created connections render as "OpenAI-compatible" on edit because the Ollama preset isn't distinguishable post-save.
-
-Delete confirmation is exposed as a sub-state with confirm/cancel pairs in `Actions()`, so native-platform embedders render them as buttons rather than relying on inline `y/n` keys.
+Ollama is an opinionated OpenAI preset — it persists type `openai`, not a distinct type. The
+consequence is that an Ollama-created connection renders as "OpenAI-compatible" when edited,
+because there's nothing on disk that marks it as having come from the Ollama preset. Not a bug,
+just a limit of treating it as a preset rather than its own persisted type.

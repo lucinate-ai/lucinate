@@ -1,0 +1,80 @@
+schema: spec-driven
+
+# Project context (shown to AI when creating artifacts).
+context: |
+  Project: lucinate — a terminal UI (TUI) chat client for backend agent runtimes,
+  written in Go and built on bubbletea (charmbracelet).
+
+  Tech stack:
+    - Go (module `lucinate`; single binary, version stamped from git tags)
+    - bubbletea / bubbles / lipgloss for the TUI
+    - `github.com/a3tai/openclaw-go` gateway SDK, consumed as a local `replace` (`../openclaw-go`)
+    - Build/test via Makefile (`make build`, `make test`, `make coverage`, `make fmt`)
+
+  Architecture:
+    - The TUI talks to backends through a uniform `backend.Backend` interface, so chat /
+      sessions / commands code paths are backend-agnostic. Optional capabilities are exposed
+      as sub-interfaces (`StatusBackend`, `ExecBackend`, `CompactBackend`, `ThinkingBackend`,
+      `UsageBackend`, `DeviceTokenAuth`, `APIKeyAuth`) that a backend may or may not implement.
+    - Three backends ship: OpenClaw (gateway over WebSocket), OpenAI-compatible
+      (`/v1/chat/completions` for Ollama, vLLM, LM Studio, OpenAI proper), and Hermes
+      (`/v1/responses` chaining, server-side state).
+    - Persisted state lives under `~/.lucinate/` (connections, secrets, identity, agents, config).
+    - Key packages: `internal/config`, `internal/backend` (+ `openclaw`, `openai` adapters),
+      `internal/client` (gateway SDK wrapper, WebSocket supervisor), `internal/tui` (views).
+
+  Naming conventions:
+    - This repo must contain NO "mobile", "ios", or "android" references in specs, code,
+      commits, or PRs. Refer to "native platforms" instead.
+    - British English spelling in prose (behaviour, colour, synchronise).
+    - Conventional-commit style for commits and branch names (feat/…, fix/…).
+    - Never edit CHANGELOG.md by hand — the release process owns it.
+
+  Keyboard conventions (cross-view; every new manager/picker/form should follow these so the
+  user's mental model carries between screens — these are descriptive of the code today, not
+  aspirational):
+    Action keys:
+      n=New, e=Edit, x=Delete (NOT d — d is Duplicate), d=Duplicate, r=Refresh (always
+      available), R=Retry (only after an error), t=Toggle, T=Transcript, !=Run now,
+      a=Toggle agent filter, c=Connections, s=Settings, k=View crons (agent picker, OpenClaw
+      only), Space=Toggle a boolean config item.
+    Rationale worth preserving:
+      - x for delete because d is reserved for duplicate; the two managers share a vocabulary.
+      - lowercase r = refresh, uppercase R = retry; never reverse (terminals that drop shift
+        would land on the wrong action). Where retry does not apply, only r is bound.
+      - ! for run-now (not R) because the case-sensitive r/R pair misfires on terminals that
+        drop shift on letters.
+      - In the agent picker, k is "View crons", a deliberate deviation from k/j list-nav; the
+        picker drops k from up-navigation rather than shadowing it (↑ still moves up).
+    Confirms: y/Y confirm a destructive action, n/N or Esc decline; a confirm is always its own
+      substate so the prompt UI replaces the help row before the user presses a key.
+    Navigation: Esc = back/cancel (always "step backwards"), Enter = select/submit,
+      Up/Down or k/j move in a list, Left/Right or h/l adjust numeric config items,
+      Tab/Shift+Tab cycle form focus.
+    Form keys: Alt+S = Save (Ctrl+S kept only as a defensive alias — many terminals treat
+      Ctrl+S as XOFF and never deliver it), Alt+Enter = newline in a multi-line field,
+      Enter = submit, Esc = cancel without saving.
+    Reserved keys (avoid for app actions — the terminal or readline layer consumes them):
+      Ctrl+S (XOFF), Ctrl+R (readline reverse-search), Ctrl+W (delete word), and Ctrl+<letter>
+      in general. Prefer Alt+<letter> for app-level shortcuts (e.g. Alt+M for routine mode).
+    Discovery: every manager view exposes its bindings via `Actions() []Action`; when adding a
+      binding, register it in `Actions()` for the substate AND wire it in `handleKey` so the
+      help line, action drawer, and key dispatch stay in sync (`TriggerAction(id)` lets a menu
+      invoke the same code path as the keystroke).
+
+  Testing:
+    - Add or update tests whenever behaviour changes; capture behaviour a user or caller
+      depends on, not coverage for its own sake. Run `make test` before committing.
+    - Levels: plain unit tests for pure logic; drive `Update` directly for model state
+      transitions; `teatest/v2` for rendered output; build-tag-guarded integration tests for
+      anything needing a real backend (`//go:build integration`, `integration_openai`).
+
+# Per-artifact rules (optional).
+rules:
+  proposal:
+    - Refer to the app as a "native platform" client where relevant; never say mobile/iOS/Android.
+    - Use British English spelling.
+  specs:
+    - State each requirement as one observable behaviour using SHALL/MUST (RFC 2119). Split
+      any requirement with "and also" clauses into separate requirements.
+    - Every requirement has at least one `#### Scenario:` with GIVEN/WHEN/THEN bullets.
