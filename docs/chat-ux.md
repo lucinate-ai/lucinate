@@ -1,177 +1,113 @@
-# Chat UX
+# Chat UX — lessons and rationale
 
-## Input key bindings
+The behavioural contract for the chat surface lives in
+[`openspec/specs/chat-ux/spec.md`](../openspec/specs/chat-ux/spec.md) — the key bindings, streaming
+animation, header bar, view region order, notifications, routine status, tool activity, history
+depth and resync, connect timeout, and the mouse/scrolling model are all captured there as
+requirements and scenarios. This file keeps the hard-won lessons, pitfalls, and design rationale
+behind that contract: the "why it works this odd way" that the spec's requirements don't dwell on.
 
-| Key | Action |
-|---|---|
-| Enter | Send message — or, on empty input with an active routine, advance the routine ([routines.md](routines.md)) |
-| Alt+Enter | Insert newline |
-| Ctrl+W | Delete word backward |
-| Up arrow (empty input) | Recall the last queued message for editing, or start a bash-style walk back through previously sent messages |
-| Down arrow (while walking) | Walk forward again; at the newest entry, clear the input |
-| Tab | Open slash menu, extend to longest common prefix, then cycle |
-| Shift+Tab | While slash-menu is cycling: cycle backward through candidates. Otherwise, with an active routine: cycle the routine's mode (auto ↔ manual) |
-| Page Up / Page Down | Scroll message history |
-| Mouse wheel | Scroll message history — see [Scrolling, selection, and the mouse](#scrolling-selection-and-the-mouse) |
-| Mouse click-drag | Select transcript text; copies to the clipboard on release |
-| Esc | Cancel in-progress response — or, with an active routine, end the routine and (if streaming) cancel the turn |
+## The 999% peg: why context usage is session-scoped
 
-Alt+Enter is configured via `ta.KeyMap.InsertNewline.SetKeys("alt+enter")` in `chat.go`. Shift+Enter is not supported — `ReportAllKeysAsEscapeCodes` is disabled to preserve shifted punctuation input.
+The right-hand context-usage percentage is scoped to the *current session* on purpose. The older
+approach of calling `SessionUsage("")` returned gateway-wide aggregates and pegged the value at
+999%. `loadContextUsage()` fixes this by calling `SessionsList(agentID)`, finding the entry whose
+`key` matches `m.sessionKey`, and reading `totalTokens` (numerator — a per-turn prompt-token
+snapshot of `input + cacheRead + cacheWrite`, intentionally excluding output) and `contextTokens`
+(denominator), falling back to `defaults.contextTokens` when the entry omits the window.
 
-## Message recall
+The handler discards results whose `sessionKey` no longer matches `m.sessionKey` so a
+navigated-away-and-back race can't apply a stale snapshot. And the renderer still caps the
+displayed percentage at 999% regardless — a runaway numerator never widens the header past three
+digits.
 
-When the textarea is empty and the user presses Up arrow, the last entry in `m.pendingMessages` is popped and inserted into the textarea with the cursor at the end. This allows editing and resending a recently queued message without retyping it.
+## Mid-turn history resync: why the merge is not a wholesale replacement
 
-With no queued messages, Up starts a bash-style walk back through previously submitted user messages (`historyBrowseIndex` / `historyBrowseValue` in `chat.go`): repeated Up steps older, Down steps newer, and reaching the newest entry clears the input. The walk ends as soon as the recalled text is edited — Up/Down then revert to ordinary cursor movement within multi-line content. Because mouse capture is on by default, the terminal never synthesises arrow keys from the wheel, so scrolling can't accidentally trigger a walk (see [Scrolling, selection, and the mouse](#scrolling-selection-and-the-mouse)).
+After a turn finalises, the chat view fetches `chat.history` and merges it into `m.messages`. The
+merge is deliberately *not* a wholesale replacement — that would wipe live state (the next routine
+step's placeholder, a system row the user just took an action on).
 
-## Streaming animation
+The mechanism is a generation counter (`chatModel.gen`, a monotonic `uint64` starting at 1). Every
+`appendMessage(...)` stamps the current `m.gen` onto the row. A successful `final` (or
+`error`/`aborted`) calls `bumpGen()`, capturing the current value as the "boundary" before
+advancing; that boundary is what `refreshHistoryAt(boundary)` carries. When the resulting
+`historyRefreshMsg` lands, `mergeHistoryRefresh(server, boundary)` keeps every existing row with
+`gen > boundary` (the live tail — appended by the post-bump `drainQueue` / `maybeAdvanceRoutine` /
+recovery path) and prepends the server-fetched canonical state.
 
-When a message is sent, an assistant message with `streaming: true` is appended to the display immediately so there is always visible feedback. A braille spinner (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) animates at 120 ms intervals via `spinnerTickCmd()`. Each frame increments `m.spinnerFrame` and re-renders the last message line.
+The non-obvious consequences worth remembering:
 
-As delta events arrive from the gateway, the message content is built up in place. When the final event arrives, `streaming` is set to false and the spinner stops. If the final event arrives before any delta (empty response), the placeholder is removed from the display entirely.
+- Rows imported from `chat.history` carry `gen=0` (the chatMessage zero value), so any subsequent
+  refresh treats them as history-side and replaces them cleanly.
+- Tool activity is not part of `m.messages` at all — it lives in `chatModel.activeTools` — so the
+  merge neither preserves nor wipes it; it's reset per turn independently.
+- Empty `final` acks (the gateway ping that arrives before any real content) intentionally do NOT
+  bump the gen, because no turn has actually completed.
 
-The same spinner also decorates pending system rows (`chatMessage.pending`) — the in-flight placeholders posted by `/compact` and `/reset` after confirmation. `hasStreamingMessage()` treats any pending system row as a reason to keep ticking, and the result handler swaps the placeholder for the outcome via `replacePendingSystem` so the spinner is replaced in place rather than appended after. See [commands.md](commands.md#confirmation-pattern) for the wiring.
+Tests pin the contract: `TestMergeHistoryRefresh_PreservesLiveTail`,
+`TestMergeHistoryRefresh_NoLiveTail`, `TestHandleEvent_FinalBumpsGen`,
+`TestHandleEvent_FinalEmptyAckDoesNotBumpGen`. Treat them as a regression fence.
 
-See [message-rendering.md](message-rendering.md#streaming-placeholder) for the rendering side of this.
+## Per-agent header colour: why it's keyed on the agent ID
 
-## Thinking levels
+The header background override is stored against the agent ID under
+`prefs.Agents[agentID].HeaderColor`, and the renderer calls `prefs.HeaderColorFor(m.agentID)` each
+frame. Keying it on the agent (rather than a single global setting) is what lets switching to
+another agent pick up that agent's own colour, or fall back to the default accent purple. The
+colour is applied to both `headerStyle` and the warn-badge background so the badges stay legible
+against a customised header.
 
-The gateway supports extended thinking for supported models. The level is stored in `m.thinkingLevel` and displayed in the header bar when set and not `"off"`.
+## Update check: the escape hatches and why they exist
 
-Valid levels: `off`, `minimal`, `low`, `medium`, `high`.
+The daily startup update check is owned by `internal/update`: a single
+`GET https://lucinate.ai/latest.json` with a 5-second timeout, fired once per day from
+`AppModel.Init()`. It's designed to fail silently — offline, captive portal, malformed manifest, or
+a non-stable build all make `update.Check` return `nil, nil`, so a flaky network never produces a
+badge or an error.
 
-`/think` (no argument) shows the current level. `/think <level>` validates the input and calls `client.SessionPatchThinking(sessionKey, level)`. See [commands.md](commands.md) for the command dispatch.
+Two env-var escape hatches exist for good reason:
 
-The spinner also appears while the model is thinking before any response deltas arrive, giving immediate feedback after sending.
+- `LUCINATE_DISABLE_UPDATE_CHECK=1` is an unconditional opt-out on top of the `/settings` toggle,
+  useful in CI where you don't want any outbound request.
+- `LUCINATE_UPDATE_MANIFEST_URL` overrides the manifest URL for local testing without touching the
+  production endpoint.
 
-## Header bar
+The badge is suppressed once seen: `prefs.LatestSeenVersion` records the manifest version on every
+successful check, and the badge only reappears when the manifest moves *past* that version.
 
-The header line shows:
+## Why mouse capture is on by default
 
-- **Left:** agent name · model ID (last path component) · thinking level (if set and not `off`) · connection status (only when not connected) · update-available badge (only when `prefs.UpdateChecksEnabled()` and the startup check found a newer release)
-- **Right:** context usage (`tokens: 65k/1.0m (7%)  $0.42`) when the gateway has reported a context window for the active session; otherwise the legacy `tokens: 125.5K (2.3K cached)  $0.42` shape.
+Mouse capture (SGR cell-motion tracking) is on by default because it's what lets wheel scrolling,
+click-drag selection, and Up/Down input recall coexist without fighting. With tracking on, the
+terminal never translates the wheel into arrow keys, so scrolling can't collide with the bash-style
+input-recall walk — the arrow keys stay exclusively input recall. The cost of `/mouse off` is
+losing wheel scrolling (it hands click-drag back to the terminal's native selection), which is why
+capture-on is the default rather than the opt-in.
 
-Two independent loads feed the right-hand side:
+One related nicety: if you've scrolled up, new streaming output does not yank you back down; new
+messages re-anchor to the bottom only when you're already there (`GotoBottom()` after each update).
 
-- `loadContextUsage()` populates `m.promptTokens` and `m.contextWindow`. It calls `SessionsList(agentID)`, finds the entry whose `key` matches `m.sessionKey`, and reads `totalTokens` (numerator — a per-turn prompt-token snapshot of `input + cacheRead + cacheWrite`, intentionally excluding output) and `contextTokens` (denominator), falling back to `defaults.contextTokens` when the entry omits the window. This is what makes the percentage scoped to the *current session*; the older approach of calling `SessionUsage("")` returned gateway-wide aggregates and pegged the value at 999%. The cmd refreshes on chat init, on every `historyRefreshMsg` (so the percentage tracks turn-by-turn), and on `modelSwitchedMsg` (a new model can change the window). The handler discards results whose `sessionKey` no longer matches `m.sessionKey` so a navigated-away-and-back race can't apply a stale snapshot.
-- `loadStats()` continues to call `client.SessionUsage()` for the cumulative cost figure shown on the right of the header (and for the `/stats` table). The percentage display falls back to its token+cache layout when `loadContextUsage` hasn't produced a window yet.
+## Why Alt+Enter, not Shift+Enter, inserts a newline
 
-The renderer caps the percentage at 999% so a runaway numerator never widens the header past three digits.
+Newline is bound to Alt+Enter via `ta.KeyMap.InsertNewline.SetKeys("alt+enter")`. Shift+Enter is
+deliberately not supported: enabling it would require `ReportAllKeysAsEscapeCodes`, which is
+disabled precisely to preserve shifted punctuation input.
 
-The header background defaults to the accent purple but can be overridden per agent with `/header <hex>` — see [commands.md → /header](commands.md#header). The override is stored against the agent ID under `prefs.Agents[agentID].HeaderColor`; the renderer calls `prefs.HeaderColorFor(m.agentID)` each frame and applies the colour to both `headerStyle` and the warn-badge background. Switching to another agent picks up that agent's own colour (or the default).
+## Notifications replaced transient system rows
 
-The connection-status badge is rendered in the error colour and only appears when the gateway connection is degraded:
+The `chatModel.notifications` store (`internal/tui/notifications.go`) exists because appending
+`chatMessage{role:"system"}` rows for transient state was the wrong home for it. Notifications live
+outside `m.messages`, so they survive `historyRefreshMsg` and never reach the gateway, and they're
+cleared at the top of the Enter handler on the user's next action — the assumption being that any
+state worth showing has been read or no longer applies by then.
 
-| Badge | Meaning |
-|---|---|
-| `⚠ disconnected` | The supervisor has just observed the WebSocket close; reconnect not yet attempted. |
-| `⟳ reconnecting` (or `attempt N`) | A reconnect attempt is in progress. The attempt counter is shown from the second attempt onwards. |
-| `✖ auth failed` | The gateway rejected the device token mid-session. The supervisor has stopped retrying — open `/connections` and re-pick the same connection so the connecting view's auth-recovery modal can prompt for a fix. |
+Persistent client-side rows (the inline `! cmd` / `!! cmd` shell-execution scrollback, gateway
+connect/disconnect notes, the `/help` / `/stats` / `/skills` info dumps) still go in `m.messages`
+because their value is in being scrollable history, not in a one-shot read.
 
-A matching one-line system message is also added to the chat scrollback on disconnect (`Lost gateway connection — attempting to reconnect…`) and on recovery (`Reconnected to gateway.`) so the event is visible even after the badge clears. See [authentication.md](authentication.md#reconnect-after-disconnection) for the full lifecycle.
+## Connect timeout: bump it for cold-starting local LLMs
 
-### Update-available badge
-
-A second header badge — `↑ vX.Y.Z`, rendered in the same warn style as `⚠ disconnected` — appears when the daily startup update check finds a newer release. The check is owned by `internal/update`: a single `GET https://lucinate.ai/latest.json` with a 5-second timeout, fired once per day from `AppModel.Init()`. Anything goes wrong (offline, captive portal, malformed manifest, non-stable build) and `update.Check` returns `nil, nil` — no badge, no error.
-
-The badge is suppressed once the user has seen it: `prefs.LatestSeenVersion` records the manifest version on every successful check, and the badge only appears when the manifest moves *past* that version. Toggle the whole thing off via the `Check for updates on startup` row in `/settings`, or set `LUCINATE_DISABLE_UPDATE_CHECK=1` for an unconditional opt-out (useful in CI). The manifest URL itself can be overridden via `LUCINATE_UPDATE_MANIFEST_URL` for local testing.
-
-## View region order
-
-`chatModel.View()` (`internal/tui/chat.go`) assembles the chat view top→bottom in this fixed order. Every region between the header and the input reserves conversation-viewport height via `applyLayout`, and each only renders when it has content:
-
-1. **Header** — the status bar (connection, agent, model, token/cost).
-2. **Info notifications** — informational one-shots such as `copied … to clipboard`, pinned just below the header.
-3. **Conversation viewport** — the scrollable transcript.
-4. **Completion menu** — slash-command / mention candidates, while active.
-5. **Routine status row** — when a routine is active.
-6. **Tool-activity strip** — what the agent is running this turn (collapses to a summary when idle).
-7. **Queued-message footer** — messages typed while a turn streams, awaiting dispatch.
-8. **Error notifications** — error one-shots; the bottommost region above the input.
-9. **Input box.**
-10. **Help line.**
-
-Informational and error notifications are deliberately split to opposite ends. An informational confirmation reads naturally at the top beside the status bar, while an error surfaces at the bottom next to the input, where the user will act on it. Both are drawn from the same `chatModel.notifications` store, filtered on the `isError` flag by `renderInfoNotifications` / `renderErrorNotifications`.
-
-## Notifications
-
-Ephemeral state messages — confirmation prompts, cancel acks, routine state changes ([routines.md](routines.md)) — render as one or more width-padded rows, styled with `statusStyle` (or `errorStyle` for is-error rows). They are split by kind: **informational** rows pin to the top just below the header, and **error** rows drop to the bottommost region below the queued-message footer — see [View region order](#view-region-order) for how they sit relative to the other regions.
-
-The store is `chatModel.notifications []notification` (`internal/tui/notifications.go`). Notifications live outside `m.messages`, so they survive `historyRefreshMsg` and never reach the gateway. They are cleared at the top of the Enter handler whenever the user submits a non-empty input, and on the empty-Enter routine-advance path — the assumption is that any state worth showing in a notification has been read or no longer applies once the user takes their next action.
-
-`m.notify(text)`, `m.notifyError(text)`, and `m.clearNotifications()` are the only entry points; each calls `applyLayout()` so the conversation viewport reflows when notifications appear or disappear. Empty text is dropped silently so callers can `notify(maybeFmt(...))` without a guard.
-
-This replaced the older pattern of appending `chatMessage{role:"system"}` rows for transient state. Persistent client-side rows (the inline `! cmd` / `!! cmd` shell-execution scrollback, gateway connect/disconnect notes, the `/help` / `/stats` / `/skills` info dumps) still go in `m.messages` because their value is in being scrollable history, not in a one-shot read.
-
-## Routine status row
-
-When `m.activeRoutine != nil`, a single styled row renders immediately above the input box:
-
-```
-routine: demo — AUTO — sent: 5/10 — next: <40-char preview>
-```
-
-`AUTO`/`MANUAL` reflects the controller's mode; `(paused)` is appended when `paused` is set. The row is sourced by `routineStatusLine()` and styled by `routineStatusStyle` in `routines_chat.go`. `applyLayout()` subtracts one from the viewport height when a routine is active, mirroring the notification-row accounting. See [routines.md](routines.md) for the full controller surface.
-
-## Tool activity strip
-
-When the agent invokes a tool, it appears in an ephemeral strip above the input (not in the scrollback) — name, one-line argument summary, and a state glyph that animates while running and resolves to ✓ or ✖. Once the turn finishes the strip collapses to a one-line summary (`✓ called search ×3, read ×2`) that clears when the next turn begins. Lucinate opts into the `tool-events` capability on connect; backends without tool events (e.g. the OpenAI-compatible adapter) simply never emit them. Tool output bodies are not yet expandable — see [message-rendering.md](message-rendering.md#tool-activity-strip) for the rendering contract and the open follow-up for an expand/collapse affordance.
-
-## History depth
-
-The number of messages loaded from the gateway on session init is configurable. The default is 50. It can be changed via `/settings` ("History limit") in steps of 10 (range 10–500). The value is stored in `prefs.HistoryLimit` and passed to `loadHistory()` as the fetch limit.
-
-When restored history is non-empty, a dimmed separator row is rendered above the new turn, labelled with the relative time of the most recent restored message (`Resumed from 2h ago`, `…`). The label comes from `formatSeparatorLabel` (`render.go`), driven by the `timestampMs` field on the synthetic separator `chatMessage`. See [message-rendering.md](message-rendering.md#message-roles) for the role.
-
-See [sessions.md](sessions.md#lifecycle) for how history loading fits into the session lifecycle.
-
-## Mid-turn history resync
-
-After a turn finalises, the chat view fetches `chat.history` from the gateway and merges it into `m.messages`. The merge is *not* a wholesale replacement — that would wipe live state (the next routine step's placeholder, a system row the user just took an action on). (Tool activity lives outside `m.messages`, so it's untouched by the merge.)
-
-The mechanism is a generation counter:
-
-- `chatModel.gen` is a monotonically increasing `uint64` (starts at 1).
-- Every `appendMessage(...)` stamps the current `m.gen` onto the row.
-- A successful `final` (or `error`/`aborted`) calls `bumpGen()`, which captures the current value as the "boundary" and then advances the counter. The boundary is what the just-issued `refreshHistoryAt(boundary)` carries.
-- When the resulting `historyRefreshMsg` lands, `mergeHistoryRefresh(server, boundary)` keeps every existing row with `gen > boundary` (the live tail — appended by the post-bump `drainQueue` / `maybeAdvanceRoutine` / recovery path) and prepends the server-fetched canonical state.
-
-Practical consequences:
-
-- Rows imported from `chat.history` carry `gen=0` (the chatMessage zero value), so any subsequent refresh treats them as history-side and replaces them cleanly.
-- Tool activity is not part of `m.messages` at all (it lives in `chatModel.activeTools`, rendered in the [strip](#tool-activity-strip)), so the merge neither preserves nor wipes it — it's reset per turn independently.
-- Empty `final` acks (the gateway ping that arrives before any real content) intentionally do NOT bump the gen, because no turn has actually completed.
-
-Tests pin the contract: `TestMergeHistoryRefresh_PreservesLiveTail`, `TestMergeHistoryRefresh_NoLiveTail`, `TestHandleEvent_FinalBumpsGen`, `TestHandleEvent_FinalEmptyAckDoesNotBumpGen`.
-
-## Connect timeout
-
-Each (re)connect attempt has a per-attempt deadline applied to the WebSocket / HTTP handshake. The default is 15 seconds; the range is 5–300 seconds via `/settings` ("Connect timeout"). The configured value is loaded by `app.DefaultBackendFactory` (`app/factory.go`) for every backend dispatch, so the same setting governs the initial connect and the supervisor's reconnect attempts. Bump it when targeting a slow local LLM that cold-starts on first request.
-
-## Scrolling, selection, and the mouse
-
-The message history is a Bubble Tea viewport. Mouse capture (SGR cell-motion
-tracking) is **on by default**, which makes the three core interactions
-coexist cleanly:
-
-- **Wheel / trackpad scrolls the history.** Wheel events are forwarded to the
-  viewport directly. Because tracking is on, the terminal never translates the
-  wheel into arrow keys, so scrolling can't collide with input recall. If
-  you've scrolled up, new streaming output does not yank you back down; new
-  messages re-anchor to the bottom only when you're already there
-  (`GotoBottom()` after each update).
-- **Click-drag selects and copies.** Dragging over the transcript draws a
-  reverse-video highlight; on release the selected text is copied to the
-  clipboard (both OSC 52 through the terminal and the OS clipboard directly),
-  with a "Copied …" confirmation row. Implemented in
-  `internal/tui/selection.go`. Selections are char-precise, span multiple
-  lines, auto-scroll when dragged past the viewport edge, and strip styling
-  from the copied text.
-- **Up/Down remain input recall.** The bash-style walk through previously
-  submitted messages (and queued-message editing) owns the arrow keys
-  exclusively; scrolling never reaches them.
-
-Page Up/Down still scroll a page at a time. `/mouse off` opts out of capture,
-handing click-drag back to the terminal's native selection at the cost of
-wheel scrolling (the previous default behaviour); `/mouse on` restores the
-default.
+The per-attempt handshake deadline (default 15s) is loaded by `app.DefaultBackendFactory`
+(`app/factory.go`) for every backend dispatch, so the one setting governs both the initial connect
+and the supervisor's reconnect attempts. The practical note: bump it when targeting a slow local
+LLM that cold-starts on first request, or the first connect will time out before the model is ready.

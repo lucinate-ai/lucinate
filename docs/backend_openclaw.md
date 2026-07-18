@@ -1,59 +1,55 @@
-# OpenClaw backend
+# OpenClaw backend — lessons and rationale
 
-The OpenClaw backend (`internal/backend/openclaw`) is a thin adapter over `*client.Client` from the existing OpenClaw SDK. Every TUI call site that used to hold a `*client.Client` now holds a `backend.Backend`; the OpenClaw concrete type is recovered via type assertion at the few sites that still need gateway-only affordances.
+The behavioural contract for the OpenClaw backend lives in
+[`openspec/specs/backend-openclaw/spec.md`](../openspec/specs/backend-openclaw/spec.md) — the
+declared capabilities, connect and auth pass-throughs, agent and session model, skill-catalogue
+injection, the pass-through method surface, and the status payload are all captured there as
+requirements and scenarios. This file keeps the lessons, pitfalls, and design rationale behind
+that adapter: the "why it works this odd way" that the spec's requirements don't dwell on.
 
-See [connections.md](connections.md) for the cross-backend connection lifecycle and [authentication.md](authentication.md) for device pairing.
+## The adapter adds no behaviour, on purpose
 
-## Capabilities
+`internal/backend/openclaw` is a thin adapter over `*client.Client` from the OpenClaw SDK. Every
+TUI call site that used to hold a `*client.Client` now holds a `backend.Backend`; the OpenClaw
+concrete type is recovered via type assertion at the few sites that still need gateway-only
+affordances. Most methods forward straight through unchanged — the adapter exists to satisfy the
+`backend.Backend` interface, not to add behaviour. Only the handful of methods below do anything
+non-obvious, and they are the ones worth remembering.
 
-`Backend.Capabilities()` reports the full surface — every optional sub-interface is implemented:
+## Skill catalogue is injected once, and the mutex matters
 
-| Capability        | Use site                                  |
-|-------------------|-------------------------------------------|
-| `GatewayStatus`   | `/status`                                 |
-| `RemoteExec`      | `!!` — see [shell-execution.md](shell-execution.md) |
-| `SessionCompact`  | `/compact`                                |
-| `Thinking`        | `/think`                                  |
-| `SessionUsage`    | `/stats`                                  |
-| `Cron`            | `/crons` — see [crons.md](crons.md)       |
-| `AuthRecovery`    | `AuthRecoveryDeviceToken` — see below     |
-| `AgentWorkspace`  | Workspace field on the create-agent form  |
+The catalogue block — `Available agent skills (activate with /skill-name): …` — is prepended only
+to the first turn of each session via `takePendingCatalog(sessionKey, skills)`, after which
+`catalogSent[sessionKey] = true` and later sends omit it.
 
-## Connect and auth
+The check-and-mark is mutex-guarded for a reason: two concurrent sends on the same session could
+otherwise both see the flag unset and both emit the catalogue. The guard is what makes "once per
+session" actually hold under concurrency, not just on the happy path.
 
-`Connect`, `Close`, `Events`, and `Supervise` are pass-throughs to the underlying client. The TUI's connecting view routes auth failures into modal sub-states:
+Every line of the block is prefixed with `System:` so it does double duty: the gateway's prompt
+assembler recognises it as a session-level system block (retained server-side across turns), and
+`stripSystemLines` on the client side hides it from the visible transcript on history refresh.
+Drop the prefix and it would either be treated as user input or leak into the visible transcript.
 
-- `NOT_PAIRED` → pairing-required modal: instructions to approve the device on the gateway host, then Enter to retry.
-- `gateway token mismatch` → device-token modal: clear / reset identity / cancel. `ClearToken` and `ResetIdentity` come from the `DeviceTokenAuth` sub-interface.
-- `gateway token missing` → device-token text prompt; submission stores via `StoreToken`.
+## `DeleteFiles: &flag` is always populated — the implicit default must never apply
 
-Tokens and the Ed25519 device identity live under `~/.lucinate/identity/<endpoint>/`, isolated per gateway endpoint. The first successful connect after a fresh approval re-dials transparently so the surviving connection authenticates with the issued token — see [authentication.md](authentication.md) for the full pairing flow and the re-dial rationale.
+`DeleteAgent` forwards to `Client.DeleteAgent(ctx, agentID, deleteFiles)`, which sends
+`protocol.AgentsDeleteParams{AgentID, DeleteFiles: &flag}` over the wire. The `*bool` is a pointer
+precisely so the gateway can distinguish "not set" from "set to false" — and lucinate always
+populates it explicitly from the picker's keep-vs-delete-files toggle (see the `agents` spec,
+deleting-an-agent) so the gateway's implicit "preserve files" default never applies. If we ever
+passed a nil pointer here, a user who chose "delete files" could silently get them preserved.
 
-## Agent and session model
+## Health-fetch failure surfaces, it doesn't swallow
 
-Agents are owned by the gateway. `ListAgents` and `CreateAgent` (with name + workspace) call straight through. Sessions are created server-side and identified by the gateway-issued session key.
+If the `/health` fetch fails, `Status` still returns a populated payload with `Gateway.Health =
+nil` and passes the error back to the caller. The TUI then renders the body and the error as
+separate system messages rather than swallowing either — a partial status plus a visible error is
+more useful than a blank screen or a lost error.
 
-The gateway seeds an `IDENTITY.md` file in the agent's workspace on creation; lucinate does not author it.
+## `agentID` and `sessionKey` are ignored deliberately
 
-`DeleteAgent` forwards to `Client.DeleteAgent(ctx, agentID, deleteFiles)`, which sends `protocol.AgentsDeleteParams{AgentID, DeleteFiles: &flag}` over the wire. The `*bool` is always populated explicitly from the picker's keep-vs-delete-files toggle (see [agents.md](agents.md#deleting-an-agent)) — the gateway's implicit "preserve files" default never applies. When `deleteFiles=false` the gateway drops bindings but leaves the agent's workspace files in place; when true the workspace is wiped along with the bindings.
-
-## Skill catalog injection
-
-The chat layer passes the active skill catalog through `ChatSendParams.Skills`. The backend prepends a `System:`-prefixed block — `Available agent skills (activate with /skill-name): …` — to the first turn of each session via `takePendingCatalog(sessionKey, skills)`. After the first turn, `catalogSent[sessionKey] = true` and subsequent sends omit the block.
-
-The check-and-mark is mutex-guarded so two concurrent sends on the same session can't both emit the catalog. Every line of the block is prefixed with `System:` so the gateway's prompt assembler can identify it as a session-level system block (retained server-side across turns) and so `stripSystemLines` on the client side hides it from the visible transcript on history refresh.
-
-## Pass-through methods
-
-`SessionsList`, `CreateSession`, `SessionDelete`, `ChatSend`, `ChatAbort`, `ChatHistory`, `ModelsList`, `SessionPatchModel`, and the capability-specific methods (`ExecRequest`, `ExecResolve`, `SessionCompact`, `SessionPatchThinking`, `SessionUsage`, `CronsList`, `CronRuns`, `CronAdd`, `CronUpdate`, `CronUpdateRaw`, `CronRemove`, `CronRun`) all forward to the underlying client unchanged. The adapter exists to satisfy the `backend.Backend` interface, not to add behaviour.
-
-## Status payload
-
-`Status(ctx, agentID, sessionKey)` assembles the cross-backend `BackendStatus` from a single gateway `/health` round-trip plus accessors on `*client.Client`:
-
-- Common header — `Type: "openclaw"`, the gateway WebSocket URL, and `"device token"` / `"anonymous"` derived from whether a token is loaded for this endpoint.
-- `Gateway` block — the health snapshot (sessions, agents, channels), the gateway version and uptime from the connect handshake, and the negotiated protocol version bounded by `protocol.MinProtocolVersion` and `protocol.ProtocolVersion` (the same pair advertised in `ConnectParams.MinProtocol`/`MaxProtocol`, so the displayed range matches what the handshake actually negotiated against).
-
-If the health fetch fails, `Status` still returns a populated payload with `Gateway.Health = nil` and surfaces the error to the caller; the TUI renders the body and the error as separate system messages rather than swallowing either.
-
-`agentID` and `sessionKey` are ignored — OpenClaw's per-session state lives on the gateway and is already reflected in the health snapshot.
+`Status(ctx, agentID, sessionKey)` takes those arguments to match the cross-backend signature but
+ignores them: OpenClaw's per-session state lives on the gateway and is already reflected in the
+health snapshot, so there is nothing local to look up. They are kept in the signature only so the
+backend satisfies the shared interface.

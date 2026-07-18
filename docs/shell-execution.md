@@ -1,28 +1,42 @@
-# Shell execution
+# Shell execution — lessons and rationale
 
-Lucinate supports running shell commands directly from the chat input using a prefix convention:
+The behavioural contract for shell execution lives in
+[`openspec/specs/shell-execution/spec.md`](../openspec/specs/shell-execution/spec.md) — the
+prefix convention, local execution, remote two-phase-approval execution, and message queueing
+during execution are all captured there as requirements and scenarios. This file keeps the
+hard-won lessons, pitfalls, and design rationale behind that flow.
 
-| Prefix | Where it runs |
-|---|---|
-| `!<command>` | Local machine (user's shell) |
-| `!!<command>` | Gateway host (remote) |
+## Two-phase approval for remote exec is not one call
 
-Both are handled in `chat.go`'s `Update()` before messages are sent to the gateway.
+Remote `!!` execution deliberately splits into submit then approve rather than a single request.
+`client.ExecRequest` only lodges the request; the gateway may resolve it under its own exec
+policy or leave it open for the client to decide. The client auto-approves an unresolved request
+with `"allow-once"` — but the race here is the whole point of the design, and it bites two ways:
 
-## Local execution (`!`)
+- If the gateway's own policy has *already* resolved the approval, the follow-up `ExecResolve`
+  comes back with `"unknown or expired"`. That error is silently ignored on purpose — it means
+  the request already went through, not that anything failed. Treating it as an error would
+  reject perfectly good runs.
+- If the gateway denies (`Decision == "deny"`), the error is shown immediately rather than
+  waiting for the asynchronous `exec.finished` event — because no event is coming for a request
+  that never ran.
 
-Detected when the input starts with `!` but not `!!`. `localExecCommand()` in `commands.go` spawns `exec.Command("sh", "-c", command)` and captures combined stdout and stderr. The result is returned as `localExecFinishedMsg{output, exitCode, err}` and displayed as a system message. No gateway involvement; no approval required.
+## "running on gateway..." is a placeholder, not the result
 
-## Remote execution (`!!`)
+Remote output arrives asynchronously via the `exec.finished` event, well after the submit call
+returns. The "running on gateway..." system message is a placeholder that `handleEvent()` later
+replaces with the real output or error. If you change how system messages are keyed, keep this
+replacement working — otherwise you get a stuck "running on gateway..." line that never resolves.
 
-Detected when the input starts with `!!`. The stripped command is passed to `execCommand()` in `commands.go`, which implements a two-phase approval flow:
+## Local `!` has no gateway approval
 
-1. **Submit** — `client.ExecRequest(ctx, command, sessionKey)` is called. The gateway returns immediately with an `ExecApprovalRequestResult` containing `{ID, Status, Decision}`.
-2. **Approve** — If `Decision` is empty (not yet resolved by gateway policy), the client auto-approves via `client.ExecResolve(ctx, id, "allow-once")`. If the approval was already resolved (the gateway's own exec policy accepted it), the `"unknown or expired"` error is silently ignored.
-3. **Result** — Output arrives asynchronously via an `exec.finished` gateway event, processed in `handleEvent()` in `events.go`. The system message "running on gateway..." is replaced with the output or an error.
+Local execution runs straight through `sh -c` with no gateway involvement and no approval step.
+This is intentional — `!` is the user's own shell on their own machine — but it means the
+security model for `!` and `!!` is genuinely different: only remote exec passes through gateway
+policy. Don't assume approval semantics carry over from one to the other.
 
-If the gateway denies the request (`Decision == "deny"`), an error is shown immediately without waiting for the event.
+## Message queueing overlaps with exec
 
-## Message queueing during execution
-
-Both local and remote execution can overlap with in-flight chat messages. New user input while `m.sending == true` is held in `m.pendingMessages` and drained after the current exchange completes. See [sessions.md](sessions.md#message-queueing) for details.
+Both local and remote execution can overlap with in-flight chat messages; new input while
+`m.sending == true` is held in `m.pendingMessages` and drained afterwards. The rationale and
+details live in the `sessions` spec (message queueing).
