@@ -108,7 +108,7 @@ A bad or missing token is rejected at the **WebSocket upgrade with HTTP status 4
 
 ### Requirement: Streaming chat via prompt.submit
 
-`ChatSend` SHALL submit a turn via the `prompt.submit` RPC with `{session_id, text}`, using a generated idempotency key as the run id; the RPC returns `{"status": "streaming"}` and the turn's output arrives as event notifications. On turn 1 of a session the skills catalogue SHALL be prepended as a system preamble, as the OpenAI backend does. Streamed `message.delta` events SHALL accumulate per session and surface as `protocol.ChatEvent` (state=delta); `message.complete` SHALL produce a final event and carries the turn's usage inline in its payload. `ChatAbort` SHALL call `session.interrupt` for a real server-side interrupt (not merely dropping the stream) and surface an aborted event; the session SHALL remain usable afterwards.
+`ChatSend` SHALL submit a turn via the `prompt.submit` RPC with `{session_id, text}`, using a generated idempotency key as the run id; the RPC returns `{"status": "streaming"}` and the turn's output arrives as event notifications. On turn 1 of a session the skills catalogue SHALL be prepended as a system preamble, as the OpenAI backend does. Streamed `message.delta` events SHALL accumulate per session and surface as `protocol.ChatEvent` (state=delta). `message.complete` carries the turn's usage inline and a `status` field: `status:"complete"` SHALL produce a final event, and `status:"interrupted"` SHALL produce an aborted event. `ChatAbort` SHALL call `session.interrupt` (which returns `{"status":"interrupted"}`) for a real server-side interrupt, not merely dropping the stream; the interrupted turn terminates with a `message.complete` whose `status` is `"interrupted"`. The session SHALL remain usable afterwards.
 
 #### Scenario: Streaming chat over the gateway
 - **WHEN** `ChatSend` is invoked
@@ -117,7 +117,7 @@ A bad or missing token is rejected at the **WebSocket upgrade with HTTP status 4
 
 #### Scenario: Abort interrupts server-side
 - **WHEN** `ChatAbort` is called mid-turn
-- **THEN** it calls `session.interrupt`, an aborted event is surfaced, and the session remains usable for the next turn
+- **THEN** it calls `session.interrupt`, the turn ends with a `message.complete` whose `status` is `"interrupted"` which surfaces as an aborted event, and the session remains usable for the next turn
 
 ### Requirement: Event translation to protocol events
 
@@ -181,12 +181,12 @@ A connection whose stored URL points at the legacy Hermes API server (port `8642
 
 ### Requirement: Interactive agent requests declined in this phase
 
-Server → client blocking asks from the agent (`approval.request`, `clarify.request`, `sudo.request`, `secret.request`) SHALL be auto-responded with a deny/cancel and a visible system message, so a chat turn can never hang the TUI silently. The message SHALL tell the user the request is not supported yet and how to configure the profile for autonomous approval.
+Server → client blocking asks from the agent (`approval.request`, `clarify.request`, `sudo.request`, `secret.request`) each carry a `request_id` and are answered by a paired `<type>.respond` RPC (`clarify.respond`/`sudo.respond`/`secret.respond`/`approval.respond`). In this phase the backend SHALL auto-decline every such ask by calling the matching respond method with a deny/cancel value (for `approval.respond`, `{session_id, choice:"deny"}`) and render a visible system message, so a chat turn can never hang the TUI silently. The message SHALL tell the user the request is not supported yet and how to configure the profile for autonomous approval.
 
 #### Scenario: Approval request is declined with a message
-- **GIVEN** the agent emits an `approval.request` during a turn
+- **GIVEN** the agent emits an `approval.request` (or `clarify`/`sudo`/`secret` request) carrying a `request_id` during a turn
 - **WHEN** the backend receives it
-- **THEN** it auto-responds deny/cancel and renders a visible system message explaining the request is not supported yet, so the turn does not hang
+- **THEN** it calls the paired `<type>.respond` RPC with a deny/cancel value (e.g. `approval.respond {session_id, choice:"deny"}`) and renders a visible system message explaining the request is not supported yet, so the turn does not hang
 
 ## REMOVED Requirements
 

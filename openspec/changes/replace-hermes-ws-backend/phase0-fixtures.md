@@ -93,7 +93,7 @@ Tool turn: `session.info → message.start → thinking.delta* → tool.generati
 // tool.complete — pairs by tool_id; structured args + result; error via result.error/exit_code
 {"type":"tool.complete","session_id":"…","payload":{"tool_id":"call_QyqcRwF2…","name":"terminal","args":{"command":"echo lucinate-tool-ok"},"duration_s":1.99,"result":{"output":"lucinate-tool-ok","exit_code":0,"error":null}}}
 
-// message.complete — carries FULL usage inline
+// message.complete — carries FULL usage inline; status "complete" | "interrupted"
 {"type":"message.complete","session_id":"…","payload":{"text":"…","status":"complete",
   "usage":{"model":"openai/gpt-4o-mini","input":224,"output":32,"cache_read":28032,"cache_write":0,"reasoning":0,
            "prompt":28256,"completion":32,"total":28288,"calls":2,"context_used":14151,"context_max":65536,
@@ -103,15 +103,60 @@ Tool turn: `session.info → message.start → thinking.delta* → tool.generati
 {"type":"error","session_id":"…","payload":{"message":"agent init failed: No LLM provider configured…"}}
 ```
 
-Not observed in these turns (need targeted triggers, follow-up spike): `reasoning.delta`
-(reasoning models only — gpt-4o-mini emits `reasoning.available` instead), `tool.output_risk`,
-`approval.request`, `clarify.request`, `status.update`, and the exact `session.interrupt`
-mid-stream aborted-event shape.
+## Abort (verified)
+
+`session.interrupt {session_id}` returns `{"status":"interrupted"}`. The interrupted turn does **not** emit a distinct `aborted`/`interrupted` event — it ends with a **`message.complete` whose `payload.status` is `"interrupted"`**:
+
+```json
+// session.interrupt result
+{"jsonrpc":"2.0","id":3,"result":{"status":"interrupted"}}
+// terminal event for the aborted turn
+{"type":"message.complete","session_id":"…","payload":{"text":"Operation interrupted: waiting for model response (9.6s elapsed).","status":"interrupted","usage":{…zeroed…}}}
+```
+
+So `translate.go` branches on `message.complete.payload.status`: `"complete"` → final, `"interrupted"` → aborted.
+
+## Interactive asks (clarify verified live; approval from source)
+
+Each blocking ask carries a `request_id` and is answered by a paired `*.respond` RPC.
+
+```json
+// clarify.request (LIVE — triggered via the clarify tool)
+{"type":"clarify.request","session_id":"…","payload":{"question":"Which file should I edit?","choices":null,"request_id":"d7987369"}}
+```
+
+Response methods (from `@method` handlers in `tui_gateway/server.py`):
+
+| Ask event | Response RPC | Params |
+|---|---|---|
+| `clarify.request` | `clarify.respond` | `{session_id, answer, request_id}` |
+| `sudo.request` | `sudo.respond` | `{session_id, password, request_id}` |
+| `secret.request` | `secret.respond` | `{session_id, value, request_id}` |
+| `approval.request` | `approval.respond` | `{session_id, choice, all}` — **decline = `choice:"deny"`** |
+
+Phase 1's auto-decline policy: on any of these, call the matching `*.respond` to cancel/deny
+(`approval.respond {session_id, choice:"deny"}`) and render a system message. The live
+`approval.request` payload wasn't captured (the `terminal` tool auto-runs; approval needs a
+shell-hook or a risky tool to trigger) — capture it before Phase 2.
+
+## Harness host-reachability — RESOLVED (socat not needed)
+
+`dashboard --insecure --host 0.0.0.0` was tested from a **genuine non-loopback peer** (a sibling
+container connecting to `hermes-net:9119` over a Docker network):
+
+- good `?token=` → **CONNECTED, `gateway.ready`** — token-mode survives a non-loopback bind.
+- bad / missing token → **HTTP 403** (same as loopback).
+- a non-loopback `Host` header (`hermes-net:9119`) → still connects; **no host-guard rejection**.
+
+So the original "non-loopback bind forces OAuth, need a socat sidecar" assumption is **wrong** for
+`v2026.6.5`. The harness can bind `0.0.0.0 --insecure` and publish the port directly — a single
+compose service, no socat.
+
+Not observed (need targeted triggers): `reasoning.delta` (reasoning models only — gpt-4o-mini
+emits `reasoning.available` instead), `tool.output_risk`, `status.update`, and the live
+`approval.request` payload (the `terminal` tool auto-runs; approval needs a shell-hook / risky tool).
 
 ## Still open after this spike
 
-- **Harness host-reachability topology** (socat sidecar vs `dashboard --insecure --host 0.0.0.0`):
-  loopback token-mode is confirmed; whether `--insecure` keeps token-mode on a published port
-  (removing the socat sidecar) is unverified.
-- Abort (`session.interrupt`) mid-stream event shape.
-- `approval.request` / `clarify.request` shapes (need a tool requiring approval).
+- Live `approval.request` payload (response method `approval.respond {choice:"deny"}` is confirmed; only the request payload is uncaptured) — capture before Phase 2.
+- `reasoning.delta`, `tool.output_risk`, `status.update` payloads — capture opportunistically during Phase 1.

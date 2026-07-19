@@ -73,11 +73,11 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 
 **Rationale:** This is the user's explicit ask — verification must be durable and live in CI/CD, not a one-off local check. The version matrix is the drift alarm: upstream moves fast and a protocol change should break a pinned CI leg, not a user. The spike confirmed the harness can drive real chat and tool turns against the container with an OpenAI-compatible provider, which is exactly what the echomodel leg needs.
 
-### Harness runs `hermes dashboard`; host-reachability topology still open
+### Harness runs `hermes dashboard --insecure`; no socat sidecar
 
-**Decision:** The container runs `hermes dashboard --host 127.0.0.1 --port 9119 --no-open --skip-build` (loopback keeps token auth; `--skip-build` serves the prebuilt SPA at `/opt/hermes/hermes_cli/web_dist`, confirmed present). Reaching it from the test host is the one unresolved topology question.
+**Decision:** The container runs `hermes dashboard --host 0.0.0.0 --port 9119 --no-open --skip-build --insecure` and publishes the port directly — a single compose service, no socat sidecar.
 
-**Open:** the design proposed a loopback bind + `alpine/socat` sidecar because a non-loopback bind was assumed to force OAuth. The spike found `hermes dashboard --insecure` explicitly permits a non-localhost bind while keeping token auth (it only warns about exposing keys). If `--insecure --host 0.0.0.0` on a published port keeps token-mode, the socat sidecar is unnecessary and the compose collapses to a single service. This wasn't fully validated in the spike (publishing an `--insecure` port was out of reach in the sandbox) and is the first thing to settle when building the harness (task 1.2).
+**Correction from the spike:** the design proposed a loopback bind + `alpine/socat` sidecar (its self-described "riskiest single assumption") because a non-loopback bind was assumed to force OAuth. **Tested and false.** Driving `--insecure --host 0.0.0.0` from a genuine non-loopback peer (a sibling container over a Docker network) connected cleanly with `?token=` and returned `gateway.ready`; bad/missing token still gave HTTP 403; a non-loopback `Host` header was accepted (no host-guard rejection). So `--insecure` keeps token-mode on a non-loopback bind and the socat trickery is unnecessary. `--skip-build` serves the prebuilt SPA at `/opt/hermes/hermes_cli/web_dist` (confirmed present).
 
 ### Phased delivery; this change is Phases 0–1
 
@@ -89,9 +89,8 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 
 - **Two session id-spaces** → `session.create` returns a short live `session_id` (used by `prompt.submit`/`history`/`usage`/`interrupt`) *and* a timestamped `stored_session_id`, which is the `id` that appears in `session.list`. The backend must track both: the live handle for the active turn, the stored id for listing/resume. Empty sessions aren't listed until they have a message, so a freshly created session won't round-trip through `session.list` immediately.
 - **Upstream churn — the WS surface is not a stability-guaranteed public API** → version-pinned CI matrix plus a supported floor (`v2026.6.5`); treat a break like an openclaw-go protocol bump. The spike already showed the design was drifting from a source read; the pinned live harness is what keeps us honest.
-- **Harness host-reachability topology unproven** (socat vs `--insecure`) → settle in task 1.2; loopback token-mode and `--skip-build` are confirmed, so the fallback (loopback + socat) is known-workable even if `--insecure` doesn't pan out.
 - **WS disconnects on long turns and gateway idle-dormancy** → both are reconnect-and-resume problems; `Supervise` becomes a real backoff loop that re-issues `session.resume` on reconnect before reporting healthy, and the integration suite restarts the container mid-session to prove it.
-- **Interactive server→client asks (`approval.request` et al.) can block a turn** → Phase 1 policy is auto-deny with a visible system message so a turn can never hang the TUI silently; Phase 2 wires them into the existing exec-approval prompt. Their exact payload shapes weren't triggered in the spike and need capturing before Phase 2.
+- **Interactive server→client asks (`approval.request` et al.) can block a turn** → Phase 1 policy is auto-deny/cancel via the paired `*.respond` RPC (`approval.respond {choice:"deny"}`) with a visible system message so a turn can never hang the TUI silently; Phase 2 wires them into the existing exec-approval prompt. `clarify.request` was captured live (`{question, choices, request_id}`); the `approval.request` payload still needs capturing before Phase 2.
 - **Delta coalescing** → `message.delta` frames arrive incrementally; no TUI impact expected (OpenClaw deltas are burstier), but the streaming integration test asserts ordering explicitly so a reorder regression is caught.
 
 ## Migration Plan
@@ -104,9 +103,7 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 
 ## Open Questions
 
-- **Harness host-reachability** — does `dashboard --insecure --host 0.0.0.0` on a published port keep token-mode (dropping the socat sidecar)? Settle in task 1.2.
-- **Abort event shape** — the exact frame(s) emitted by `session.interrupt` mid-stream (the aborted state) weren't captured; confirm during Phase 1.
-- **Interactive ask shapes** — `approval.request` / `clarify.request` payloads need a tool that requests approval; capture before Phase 2.
+- **Live `approval.request` payload** — the response method (`approval.respond {choice:"deny"}`) is confirmed and `clarify.request` was captured live, but the `approval.request` payload itself needs a shell-hook / risky tool to trigger; capture before Phase 2.
 - **`/think`** — no single-RPC surface confirmed; still a spike before committing `ThinkingBackend`.
 
 ## Reference (verified against `v2026.6.5`)
@@ -149,8 +146,9 @@ Envelope: `{type, session_id, payload}`. Sequence (tool turn): `session.info →
 | `session.info` | `{model, tools, skills, …}` | internal — cache model/tools |
 | `message.start` | *(none)* | — (arms accumulator) |
 | `message.delta` | `{text}` | `EventChat` state=`delta` |
-| `message.complete` | `{text, status, usage{…}}` | `EventChat` state=`final` + usage snapshot (inline) |
+| `message.complete` | `{text, status, usage{…}}` | `status:"complete"` → `EventChat` state=`final`; `status:"interrupted"` → state=`aborted`; usage inline |
 | `error` | `{message}` | `EventChat` state=`error` |
+| `clarify.request` / `approval.request` / `sudo.request` / `secret.request` | `{…, request_id}` | Phase 1: auto-decline via `<type>.respond` (approval: `{choice:"deny"}`) + system message |
 | `tool.generating` | `{name}` | `EventAgent` stream=`tool`, phase=`update` (pre-call) |
 | `tool.start` | `{tool_id, name, context}` | `EventAgent` stream=`tool`, phase=`start` (id = `tool_id`) |
 | `tool.complete` | `{tool_id, name, args, duration_s, result{output, exit_code, error}}` | `EventAgent` stream=`tool`, phase=`result`; error from `result.error`/`exit_code` |
@@ -177,22 +175,18 @@ internal/backend/hermes/
 
 ### Harness topology (compose)
 
-Runs `hermes dashboard` (loopback + token). Whether the socat sidecar is needed or `--insecure` on a published port suffices is task 1.2:
+Single service — `hermes dashboard --insecure --host 0.0.0.0` with the port published directly (the spike proved token-mode survives a non-loopback bind, so no socat sidecar):
 
 ```yaml
 services:
   hermes:
     image: nousresearch/hermes-agent:${HERMES_TAG:-v2026.7.7.2}
-    command: ["dashboard", "--host", "127.0.0.1", "--port", "9119", "--no-open", "--skip-build"]
-    ports: ["19119:19119"]
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--skip-build", "--insecure"]
+    ports: ["19119:9119"]
     extra_hosts: ["host.docker.internal:host-gateway"]
     volumes: ["./state:/opt/data"]
     environment:
       HERMES_DASHBOARD_SESSION_TOKEN: "lucinate"
-  wsproxy:                     # drop if `dashboard --insecure --host 0.0.0.0` keeps token-mode (task 1.2)
-    image: alpine/socat
-    network_mode: "service:hermes"
-    command: ["TCP-LISTEN:19119,fork,bind=0.0.0.0", "TCP:127.0.0.1:9119"]
 ```
 
 `--skip-build` serves the prebuilt SPA (`/opt/hermes/hermes_cli/web_dist`, confirmed present). Three inference legs, same as OpenClaw: **Ollama** (`qwen2.5:0.5b` on host, local dev), **Echo** (echomodel stub, zero-cost deterministic CI), **Echo scripted** (echomodel tool-call script). The scripted mode triggers on a magic marker (e.g. `[[tool:shell echo lucinate]]`): the stub replies with an OpenAI-format `tool_calls` response, then a plain-text follow-up carrying the tool result, so Hermes executes the tool for real and emits real `tool.*` frames. (The spike proved this end to end against OpenRouter's `openai/gpt-4o-mini` via the first-class `openrouter` provider — the terminal tool ran and emitted real `tool.start`/`tool.complete` frames.)
