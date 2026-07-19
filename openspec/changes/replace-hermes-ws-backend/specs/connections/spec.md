@@ -6,7 +6,7 @@ The system SHALL ship three backend types — OpenClaw, OpenAI-compatible, and H
 
 - the `backend-openclaw` spec — full capability surface, device-token auth, server-side agents
 - the `backend-openai` spec — `/v1/chat/completions` streaming, on-disk agents (IDENTITY.md + SOUL.md), API-key auth
-- the `backend-hermes` spec — `tui_gateway` JSON-RPC over WebSocket (`hermes serve`, `/api/ws`), one synthetic agent per connection, server-side sessions, gateway-token auth
+- the `backend-hermes` spec — `tui_gateway` JSON-RPC over WebSocket (`hermes dashboard`, `/api/ws`), one synthetic agent per connection, server-side sessions, gateway-token auth
 
 The three types differ as follows:
 
@@ -14,7 +14,7 @@ The three types differ as follows:
 |-----------|-------------------------------------------------------------|----------------------------------------|--------------------------------------------------------------------------------|
 | OpenClaw  | `https://`/`http://`/`wss://`/`ws://` (WS endpoint derived) | Ed25519 device pairing                 | Server-side on the gateway                                                     |
 | OpenAI    | `http(s)://host/v1`                                         | Optional `Authorization: Bearer <key>` | Local under `~/.lucinate/agents/<conn-id>/<agent-id>/`                         |
-| Hermes    | `http(s)://host:9119` (`hermes serve` gateway, WS derived)  | Gateway session token                    | Server-side in the Hermes profile; no local state                              |
+| Hermes    | `http(s)://host:9119` (`hermes dashboard` gateway, WS derived) | Gateway session token                 | Server-side in the Hermes profile; no local state                              |
 
 #### Scenario: Views stay backend-agnostic
 
@@ -61,7 +61,7 @@ The three types differ as follows:
 | Ollama   | `openai`       | Type, Name, Base URL, Default model (optional)             |
 | Hermes   | `hermes`       | Type, Name, Base URL                                       |
 
-Ollama SHALL be an opinionated OpenAI preset that pre-fills `Name = ollama` and `Base URL = http://localhost:11434/v1`. Hermes SHALL be its own type with a pre-filled `Base URL = http://localhost:9119` (the `hermes serve` gateway); it SHALL NOT carry a `/v1` path hint or a model field, because the Hermes profile pins its model server-side and the gateway token is supplied through the auth modal rather than a form field. Switching to any preset and back SHALL clear the prefill so the user isn't stranded with the wrong localhost URL in a gateway field.
+Ollama SHALL be an opinionated OpenAI preset that pre-fills `Name = ollama` and `Base URL = http://localhost:11434/v1`. Hermes SHALL be its own type with a pre-filled `Base URL = http://localhost:9119` (the `hermes dashboard` gateway); it SHALL NOT carry a `/v1` path hint or a model field, because the Hermes profile pins its model server-side and the gateway token is supplied through the auth modal rather than a form field. Switching to any preset and back SHALL clear the prefill so the user isn't stranded with the wrong localhost URL in a gateway field.
 
 #### Scenario: Ollama preset pre-fills OpenAI-typed defaults
 

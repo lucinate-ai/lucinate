@@ -1,10 +1,10 @@
 ## 1. Phase 0 — Spike (de-risk before writing backend code)
 
-- [ ] 1.1 Stand up a pinned `hermes serve` container locally (`--host 127.0.0.1 --port 9119`), confirm the WebSocket `/api/ws` endpoint accepts a `?token=` connection and pushes `gateway.ready`
-- [ ] 1.2 Validate the harness networking to reach the loopback-bound server from the test host: prove the `alpine/socat` sidecar variant (Docker Desktop / macOS) and the `network_mode: host` variant (Linux CI), and confirm `--skip-build` works with the published image (SPA dist present)
-- [ ] 1.3 Capture golden JSON fixtures from the live gateway for every RPC and event shape the backend consumes: `agents.list`, `session.create`/`resume`/`list`/`history`/`delete`/`interrupt`, `prompt.submit`, `session.usage`, `model.options`, and the event stream (`message.*`, `tool.*`, `thinking.delta`, `reasoning.delta`, `error`, `session.info`, `status.update`). Commit fixtures under `internal/backend/hermes/testdata`
-- [ ] 1.4 Confirm WebSocket close-code semantics against the live server (`4401` bad/missing credential, `4403` origin/host gate) and record them for the auth mapping
-- [ ] 1.5 Record spike findings in the change's `design.md` (update the Reference appendix and Open Questions with what the live server confirms; flag any shape that differed from source)
+- [x] 1.1 Stand up a pinned container locally and confirm the WS handshake — **done** against `v2026.6.5`. Launch command is `hermes dashboard --host 127.0.0.1 --port 9119 --no-open --skip-build` (there is no `hermes serve`); `/api/ws?token=` connects and pushes `gateway.ready`.
+- [ ] 1.2 Settle the harness host-reachability topology: confirm whether `dashboard --insecure --host 0.0.0.0` on a published port keeps token-mode (dropping the `alpine/socat` sidecar) or whether the loopback-bind + socat shape is required; validate `network_mode: host` on Linux CI. (`--skip-build` serving the prebuilt SPA at `/opt/hermes/hermes_cli/web_dist` is **confirmed**.)
+- [x] 1.3 Capture golden payloads from the live gateway — **done**, recorded in [phase0-fixtures.md](phase0-fixtures.md): `agents.list`, `session.create`/`list`/`history`/`usage`/`status`, `model.options`, `cron.manage`, and the event stream (`session.info`, `message.start`/`delta`/`complete`, `thinking.delta`, `reasoning.available`, `tool.generating`/`start`/`complete`, `error`). Still to capture: the `session.interrupt` aborted-event shape and `approval.request`/`clarify.request` (need targeted triggers). Convert these into `internal/backend/hermes/testdata` JSON when implementing task 3.2.
+- [x] 1.4 Confirm the auth-failure signal — **done**: a bad/missing token is rejected at the **WS upgrade with HTTP 403** (no `4401`/`4403` close frame). The backend keys auth recovery off the 403 upgrade status.
+- [x] 1.5 Record spike findings in the change's `design.md` and `phase0-fixtures.md` — **done** (command, auth, RPC registry, event shapes, two session id-spaces, `tool_id` presence, inline usage; corrected the stale assumptions).
 
 ## 2. RPC client (`internal/backend/hermes/rpc`)
 
@@ -14,13 +14,13 @@
 
 ## 3. Event translation (`translate.go`)
 
-- [ ] 3.1 Implement the pure `translate(n Notification) []protocol.Event` function covering the event table (chat deltas/final/error, tool start/result with paired `(sid, tool-invocation)` ids, thinking/reasoning)
+- [ ] 3.1 Implement the pure `translate(n Notification) []protocol.Event` function covering the event table (chat deltas/final-with-inline-usage/error, tool start/result paired by the server-supplied `tool_id`, error state from `result.error`/`exit_code`, thinking/reasoning)
 - [ ] 3.2 Table-test `translate` exhaustively against the Phase 0 golden fixtures, including the error-result tool-card variant
 
 ## 4. Backend core rewrite (`backend.go`)
 
-- [ ] 4.1 Rewrite `Connect`: derive `ws(s)://…/api/ws` from the connection URL, dial with the gateway token as `?token=`, await `gateway.ready` with timeout, then `agents.list`; map `4401` → canonical `api key required`, `4403` → verbatim host-gate hint
-- [ ] 4.2 Implement the legacy-endpoint migration error (URL on `:8642` or with a `/v1` path → targeted "run `hermes serve`, repoint to :9119, paste gateway token" error)
+- [ ] 4.1 Rewrite `Connect`: derive `ws(s)://…/api/ws` from the connection URL, dial with the gateway token as `?token=`, await `gateway.ready` with timeout, then `agents.list`; map an **HTTP 403 upgrade rejection** → canonical `api key required`
+- [ ] 4.2 Implement the legacy-endpoint migration error (URL on `:8642` or with a `/v1` path → targeted "run `hermes dashboard`, repoint to :9119, paste gateway token" error)
 - [ ] 4.3 Implement `ListAgents` (single synthetic `hermes` agent from the profile model; fallback when the gateway lists none) and keep `CreateAgent`/`DeleteAgent` rejecting
 - [ ] 4.4 Implement server-side sessions: `SessionsList` (`session.list`), `CreateSession` (`session.create`/`resume`), `SessionDelete` (`session.delete`), `ChatHistory` (`session.history`)
 - [ ] 4.5 Implement `ChatSend` (`prompt.submit` with idempotency-key run id, skills-catalogue preamble on turn 1) and `ChatAbort` (`session.interrupt`), wiring the notification pump through `translate.go` into `Events`
@@ -41,15 +41,15 @@
 
 ## 7. Unit tests for the backend
 
-- [ ] 7.1 Rewrite `backend_test.go` against a fake `rpc` server: connect/handshake, agents, sessions round-trip, chat stream reassembly, abort, usage/compact, migration error, `4401` auth-recovery mapping
+- [ ] 7.1 Rewrite `backend_test.go` against a fake `rpc` server: connect/handshake, agents, sessions round-trip, chat stream reassembly, abort, usage/compact, migration error, HTTP-403-upgrade auth-recovery mapping
 - [ ] 7.2 Ensure `make test` and `make fmt` pass; remove obsolete assertions tied to the deleted transport
 
 ## 8. Integration harness (durable, in CI/CD)
 
-- [ ] 8.1 Retool `test/integration/hermes/` compose to run `hermes serve` with the Phase 0 networking topology; update `setup-hermes.sh` to poll the gateway health endpoint on the published port and write `LUCINATE_HERMES_BASE_URL` + `LUCINATE_HERMES_TOKEN` to `.env.hermes` (keep the two synced `HERMES_TAG` pins)
+- [ ] 8.1 Retool `test/integration/hermes/` compose to run `hermes dashboard --no-open --skip-build` with the Phase 0 networking topology (task 1.2); update `setup-hermes.sh` to poll the gateway on the published port and write `LUCINATE_HERMES_BASE_URL` + `LUCINATE_HERMES_TOKEN` to `.env.hermes` (keep the two synced `HERMES_TAG` pins)
 - [ ] 8.2 Update the probe (`test/integration/hermes/probe`) to dial the WS, await `gateway.ready`, and round-trip `session.create` + `session.list`
 - [ ] 8.3 Extend `test/integration/echomodel` with a scripted mode: on a magic marker (e.g. `[[tool:shell echo lucinate]]`) return an OpenAI-format `tool_calls` response, then a plain-text follow-up carrying the tool result
-- [ ] 8.4 Write `integration_test.go` (`//go:build integration_hermes`): connect/handshake + bad-token `4401`, legacy-endpoint rejection, sessions + history round-trip, chat streaming order, abort, tool events (scripted leg), usage/compact, and reconnect (`docker compose restart hermes` mid-session → resume)
+- [ ] 8.4 Write `integration_test.go` (`//go:build integration_hermes`): connect/handshake + bad-token HTTP-403 upgrade, legacy-endpoint rejection, sessions + history round-trip, chat streaming order, abort, tool events (scripted leg), usage/compact, and reconnect (`docker compose restart hermes` mid-session → resume)
 - [ ] 8.5 Add the `hermes-smoke` job to `.github/workflows/integration.yml` (echo leg, matrixed across `v2026.6.5` oldest-supported and the current stable pin) as the protocol-drift alarm
 - [ ] 8.6 Confirm `make test-integration-hermes` is green on both the echo and Ollama legs
 

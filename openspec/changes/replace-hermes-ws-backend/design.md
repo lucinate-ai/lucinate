@@ -2,9 +2,9 @@
 
 The Hermes backend (`internal/backend/hermes`) currently speaks Hermes' OpenAI-Responses-compatible HTTP API over `/v1/responses`, sharing the `internal/backend/httpcommon` request/SSE/event plumbing with the OpenAI backend. That transport carries only chat text, which forces two client-side workarounds (a `prompts.jsonl` shadow log and a 3-hop `previous_response_id` history walk-back) and leaves most TUI features dark on Hermes connections.
 
-Upstream Hermes (v0.11.0, "The Interface Release") rebuilt its own TUI on a Python JSON-RPC backend, `tui_gateway`, and exposes that same dispatcher over WebSocket at `/api/ws` (served by `hermes serve`, default port 9119). The desktop app and web dashboard are clients of this exact protocol — it is the first-party integration surface. `hermes serve` and the hardened WS auth ship from v0.16.0 (`v2026.6.5`).
+Upstream Hermes rebuilt its own TUI on a Python JSON-RPC backend, `tui_gateway`, and exposes that same dispatcher over WebSocket at `/api/ws`. That server is run by **`hermes dashboard`** (default port 9119) — the desktop app and web dashboard are clients of this exact protocol, the first-party integration surface. `hermes dashboard` and the WS gateway ship from the v0.16.0 release (`v2026.6.5`), which is the supported floor.
 
-This document records the design-level decisions and their rationale; the concrete reference material read from upstream source — wire protocol, the full RPC/event mapping, and the harness topology — is folded into the **Reference** appendix at the end so the change stands on its own.
+The RPC/event surface described here was **verified against a live `nousresearch/hermes-agent:v2026.6.5` container** during the Phase 0 spike (2026-07-19). The concrete golden payloads live in [phase0-fixtures.md](phase0-fixtures.md); the Reference appendix below summarises the shapes at design altitude. Several original read-from-source assumptions were wrong and are corrected throughout (see the callouts).
 
 A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `UsageBackend`, `CompactBackend`, `ExecBackend`, …) already exist and the OpenClaw backend already implements the full set. This change fills those interfaces in for Hermes rather than inventing new abstraction. The TUI stays backend-agnostic; the lingua franca remains `openclaw-go/protocol` types.
 
@@ -12,7 +12,7 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 
 **Goals:**
 
-- Replace the HTTP/SSE Hermes backend entirely with a JSON-RPC-over-WebSocket client against `hermes serve` — one transport, no fallback.
+- Replace the HTTP/SSE Hermes backend entirely with a JSON-RPC-over-WebSocket client against `hermes dashboard` — one transport, no fallback.
 - Feature parity with OpenClaw wherever Hermes has the primitive: tool call cards, `/stats` + live header usage, `/compact`, real server-side abort, real session list / history / delete.
 - Delete the client-side state directory and both HTTP workarounds; let the server be the source of truth for history.
 - Durable verification: a live Hermes container in Docker in the CI/CD suite, mirroring the OpenClaw harness — an echo-model leg for zero-cost CI, a scripted tool-call leg for deterministic tool-event coverage, and a version-matrixed smoke job as a drift alarm.
@@ -20,8 +20,8 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 **Non-Goals (this change, Phases 0–1):**
 
 - `!!` remote exec (`shell.exec`), agent-initiated approval prompts, and `/model` switch via `command.dispatch` — Phase 2.
-- Remote / gated auth (OAuth or password login + single-use `?ticket=`) — Phase 3. Phase 1 is loopback-token only, which covers "Hermes on my machine / my box over an SSH tunnel".
-- `/crons` and `/think` — schema spikes required before committing `CronBackend` / `ThinkingBackend`.
+- Remote / gated auth (OAuth or password login) — Phase 3. Phase 1 is loopback-token only, which covers "Hermes on my machine / my box over an SSH tunnel".
+- `/think` — schema spike required before committing `ThinkingBackend`. (`cron.manage` turned out to work out of the box; see Decisions — `CronBackend` is a cheap follow-on but still out of scope here to keep the core swap tight.)
 - Hermes profile CRUD — `AgentManagement` stays `false`; profiles remain server-managed.
 - Multi-session UI beyond what the TUI already renders for OpenClaw.
 
@@ -31,21 +31,29 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 
 **Decision:** Delete the `/v1/responses` path outright rather than keep it as a fallback or a second Hermes connection type.
 
-**Rationale:** There are no real users of the Hermes integration today, so a clean break costs nothing and a dual-transport backend would double the surface we test and maintain forever. Existing connections pointing at the legacy API server keep their entry but fail `Connect` with a targeted migration error, because the user has to switch their server process (`gateway run` → `serve`) regardless — a human step no auto-migration can remove.
+**Rationale:** There are no real users of the Hermes integration today, so a clean break costs nothing and a dual-transport backend would double the surface we test and maintain forever. Existing connections pointing at the legacy API server keep their entry but fail `Connect` with a targeted migration error, because the user has to switch their server process (`gateway run` → `dashboard`) regardless — a human step no auto-migration can remove.
 
 **Alternative considered:** Keep both transports behind a capability probe. Rejected — permanent complexity to serve a user base of zero.
 
 ### `rpc.Client` is small and Hermes-agnostic; no generated client
 
-**Decision:** A new `internal/backend/hermes/rpc` package provides a generic newline-delimited JSON-RPC 2.0 client over WebSocket (`Call(ctx, method, params, &result)`, `Notifications() <-chan Notification`, `Close()`). The backend calls the ~20 methods it needs with typed param/result structs local to the package; we do not generate a client for the ~120-method registry.
+**Decision:** A new `internal/backend/hermes/rpc` package provides a generic newline-delimited JSON-RPC 2.0 client over WebSocket (`Call(ctx, method, params, &result)`, `Notifications() <-chan Notification`, `Close()`). The backend calls the ~18 methods it needs with typed param/result structs local to the package; we do not generate a client for the full registry.
 
 **Rationale:** We consume a small, stable slice of the surface. A hand-written client keeps the dependency graph flat and the typed structs close to where they are used. The openclaw-go SDK transport is not reusable (it implements the OpenClaw gateway protocol, not generic JSON-RPC), but its supervision pattern is the model.
 
-### Event translation is a pure function
+### Event translation is a pure function — and Hermes provides tool ids
 
-**Decision:** `translate(n Notification) []protocol.Event` is pure and table-tested exhaustively without a socket. Hermes has no OpenClaw-style `toolCallId`; the backend assigns stable ids per `(sid, tool-invocation)` as it pairs `tool.start` / `tool.complete`, matching the shape the existing tool cards in `internal/tui/events.go` expect.
+**Decision:** `translate(n Notification) []protocol.Event` is pure and table-tested exhaustively without a socket.
+
+**Correction from the spike:** the original design assumed Hermes sends no tool-call id and the backend must synthesise stable ids by pairing `tool.start`/`tool.complete`. **Not so** — `tool.start` and `tool.complete` both carry a `tool_id` (OpenAI-style `call_…`). The backend uses that id directly to pair start/result and feed the existing tool cards, so the id-synthesis logic is dropped entirely. `tool.start` carries `{tool_id, name, context}` (a human summary), `tool.complete` carries `{tool_id, name, args, duration_s, result:{output, exit_code, error}}`; error state comes from `result.error`/`exit_code`, not an `isError` field.
 
 **Rationale:** The event mapping is the headline feature (tool cards) and the part most exposed to upstream shape drift. Isolating it as a pure function makes it the natural home for golden-fixture tests and keeps the socket lifecycle out of the unit tests.
+
+### Usage comes inline on `message.complete`
+
+**Decision:** `UsageBackend` and the streamed-final path both read the `usage` object embedded in `message.complete` rather than issuing a follow-up call on every turn.
+
+**Correction from the spike:** the design assumed a separate `session.usage` fetch to attach usage to the final event. In reality `message.complete.payload.usage` is rich and inline (`input/output/total/calls/context_used/context_max/context_percent/cost_usd/…`), so the final event already has everything the header needs. `session.usage` still exists (`{calls,input,output,total}`) for an on-demand `/stats` refresh, but the per-turn path is free. `session.context_breakdown` does **not** exist — dropped.
 
 ### WebSocket library: `nhooyr.io/websocket` (`github.com/coder/websocket`)
 
@@ -53,118 +61,103 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 
 **Rationale:** Context-native API (fits our `Call(ctx, …)` shape), no CGo, actively maintained. `gorilla/websocket` is heavier and less context-friendly; the openclaw-go transport is the wrong protocol.
 
+### Auth detection: HTTP 403 on the WS upgrade
+
+**Decision:** `Connect` treats a **failed WebSocket upgrade with HTTP 403** as the auth-recovery trigger, mapping it to the canonical `api key required` error.
+
+**Correction from the spike:** the design claimed a bad/missing token yields a post-open WS **close code 4401** (and `4403` for host/origin). In reality a bad or missing token is rejected at the **HTTP upgrade with status 403** — the socket never opens, so there is no 4401 close frame to observe. The backend keys auth recovery off the 403 upgrade status instead.
+
 ### Durable Docker-in-CI verification, echo-leg first
 
 **Decision:** Retool the existing `test/integration/hermes/` harness rather than replace it, matching the OpenClaw harness shape: pinned upstream image in Docker, host-side Ollama for local dev, an echo-model leg for CI, a Go probe that fails setup fast, and `.env.hermes` consumed by build-tagged Go tests. Extend `test/integration/echomodel` with a scripted mode that emits an OpenAI-format `tool_calls` response on a magic marker so Hermes executes a real tool and emits real `tool.*` frames — the assertion is on protocol structure, not model behaviour. A new `hermes-smoke` CI job runs the echo leg matrixed across Hermes image tags (oldest supported + current stable).
 
-**Rationale:** This is the user's explicit ask — verification must be durable and live in CI/CD, not a one-off local check. The version matrix is the drift alarm: upstream moves fast and a protocol change should break a pinned CI leg, not a user.
+**Rationale:** This is the user's explicit ask — verification must be durable and live in CI/CD, not a one-off local check. The version matrix is the drift alarm: upstream moves fast and a protocol change should break a pinned CI leg, not a user. The spike confirmed the harness can drive real chat and tool turns against the container with an OpenAI-compatible provider, which is exactly what the echomodel leg needs.
 
-### Harness stays in token mode via a loopback bind + socat sidecar
+### Harness runs `hermes dashboard`; host-reachability topology still open
 
-**Decision:** Run `hermes serve --host 127.0.0.1` inside the container (keeping loopback token auth, no OAuth in CI) and forward the published port with an `alpine/socat` sidecar sharing the container's network namespace. `network_mode: host` is the simpler Linux-only alternative; the socat shape is the default because it also works on Docker Desktop for macOS.
+**Decision:** The container runs `hermes dashboard --host 127.0.0.1 --port 9119 --no-open --skip-build` (loopback keeps token auth; `--skip-build` serves the prebuilt SPA at `/opt/hermes/hermes_cli/web_dist`, confirmed present). Reaching it from the test host is the one unresolved topology question.
 
-**Rationale:** Upstream's June-2026 hardening forces an auth provider on any non-loopback bind, so a naive published port would demand the full ticket flow in CI. The sidecar keeps the server seeing a loopback bind, loopback peer, and a `Host: localhost` alias the host guard accepts. This is the riskiest single assumption in the plan and is the first thing the Phase 0 spike validates.
+**Open:** the design proposed a loopback bind + `alpine/socat` sidecar because a non-loopback bind was assumed to force OAuth. The spike found `hermes dashboard --insecure` explicitly permits a non-localhost bind while keeping token auth (it only warns about exposing keys). If `--insecure --host 0.0.0.0` on a published port keeps token-mode, the socat sidecar is unnecessary and the compose collapses to a single service. This wasn't fully validated in the spike (publishing an `--insecure` port was out of reach in the sandbox) and is the first thing to settle when building the harness (task 1.2).
 
 ### Phased delivery; this change is Phases 0–1
 
 **Decision:** Phase 0 (spike: harness topology + golden JSON fixtures) and Phase 1 (core swap: rpc client, backend rewrite, migration error, harness + CI leg, tests) are in scope. Phases 2 (interactive) and 3 (remote auth) are follow-on changes.
 
-**Rationale:** Phase 0 is the critical de-risking step — the RPC method names and event shapes in the design were read from upstream source, not observed on a live server. Committing fixtures first de-risks every later phase. Phase 1 delivers a working, tested backend without betting on the interactive or remote-auth surfaces, which have their own open questions.
+**Rationale:** Phase 0 was the critical de-risking step, and it earned its keep — the live spike corrected the launch command (`dashboard`, not `serve`), the auth-failure signal (HTTP 403, not a 4401 close), the tool-id assumption, the usage-delivery path, and several method/payload shapes. The corrected fixtures now anchor Phase 1's structs and `translate.go` tests. Phase 1 delivers a working, tested backend without betting on the interactive or remote-auth surfaces, which have their own open questions.
 
 ## Risks / Trade-offs
 
-- **Upstream RPC/event shapes are read-from-source, not live-verified** → Phase 0 spike captures golden JSON fixtures for `session.usage`, `session.history`, and the event stream before any backend code depends on them; `translate.go` is a pure function tested against those fixtures. We expect to feel our way here and adjust as the live server reveals shapes.
-- **Harness auth topology (socat / `network_mode: host` / `--skip-build`) is unproven** → day-one spike validates both networking variants and the prebuilt-SPA image; fallback is configuring the bundled password provider and minting a `?ticket=` in the test client only (dragging a slice of Phase 3 forward).
-- **Upstream churn — the WS surface is not a stability-guaranteed public API** → version-pinned CI matrix plus a supported floor (`v2026.6.5`); treat a break like an openclaw-go protocol bump.
-- **WS disconnects on long turns and gateway idle-dormancy (upstream #48445, v0.18.0 drain)** → both are reconnect-and-resume problems; `Supervise` becomes a real backoff loop that re-issues `session.resume` on reconnect before reporting healthy, and the integration suite restarts the container mid-session to prove it.
-- **Interactive server→client asks (`approval.request` et al.) can block a turn** → Phase 1 policy is auto-deny with a visible system message so a turn can never hang the TUI silently; Phase 2 wires them into the existing exec-approval prompt.
-- **Delta coalescing (~30 fps server-side batches)** → no TUI impact expected (OpenClaw deltas are burstier), but the streaming integration test asserts ordering explicitly so a reorder regression is caught.
+- **Two session id-spaces** → `session.create` returns a short live `session_id` (used by `prompt.submit`/`history`/`usage`/`interrupt`) *and* a timestamped `stored_session_id`, which is the `id` that appears in `session.list`. The backend must track both: the live handle for the active turn, the stored id for listing/resume. Empty sessions aren't listed until they have a message, so a freshly created session won't round-trip through `session.list` immediately.
+- **Upstream churn — the WS surface is not a stability-guaranteed public API** → version-pinned CI matrix plus a supported floor (`v2026.6.5`); treat a break like an openclaw-go protocol bump. The spike already showed the design was drifting from a source read; the pinned live harness is what keeps us honest.
+- **Harness host-reachability topology unproven** (socat vs `--insecure`) → settle in task 1.2; loopback token-mode and `--skip-build` are confirmed, so the fallback (loopback + socat) is known-workable even if `--insecure` doesn't pan out.
+- **WS disconnects on long turns and gateway idle-dormancy** → both are reconnect-and-resume problems; `Supervise` becomes a real backoff loop that re-issues `session.resume` on reconnect before reporting healthy, and the integration suite restarts the container mid-session to prove it.
+- **Interactive server→client asks (`approval.request` et al.) can block a turn** → Phase 1 policy is auto-deny with a visible system message so a turn can never hang the TUI silently; Phase 2 wires them into the existing exec-approval prompt. Their exact payload shapes weren't triggered in the spike and need capturing before Phase 2.
+- **Delta coalescing** → `message.delta` frames arrive incrementally; no TUI impact expected (OpenClaw deltas are burstier), but the streaming integration test asserts ordering explicitly so a reorder regression is caught.
 
 ## Migration Plan
 
 - **Deploy:** ship the rewritten backend; no data migration runs automatically.
-- **Existing connections:** URLs pointing at the legacy API server (`:8642` or a `/v1` path) keep their entry but fail `Connect` with a targeted error instructing the user to run `hermes serve`, repoint the URL to the gateway (default `http://localhost:9119`), and paste the gateway token. A WS close code `4401` maps to the canonical `api key required` error so the auth modal opens.
-- **Secrets:** the stored per-connection secret slot (formerly the `API_SERVER_KEY` bearer key) is reused as the gateway token; users paste the new token via the existing modal on the first `4401`.
+- **Existing connections:** URLs pointing at the legacy API server (`:8642` or a `/v1` path) keep their entry but fail `Connect` with a targeted error instructing the user to run `hermes dashboard`, repoint the URL to the gateway (default `http://localhost:9119`), and paste the gateway token. A failed WS upgrade with **HTTP 403** maps to the canonical `api key required` error so the auth modal opens.
+- **Secrets:** the stored per-connection secret slot (formerly the `API_SERVER_KEY` bearer key) is reused as the gateway token (`HERMES_DASHBOARD_SESSION_TOKEN`); users paste the new token via the existing modal on the first 403.
 - **Removed state:** `~/.lucinate/hermes/<conn-id>/` (`last_response_id`, `prompts.jsonl`) is no longer written or read.
 - **Rollback:** revert the change; the legacy backend and its state files return. No persisted schema changes block a revert. This is called out as a breaking change for Hermes connections in the release notes.
 
 ## Open Questions
 
-- `session.usage` and `session.history` payload shapes — method names and emit sites were read from source; the Phase 0 spike confirms them and commits fixtures.
-- `cron.manage` and `/think` single-RPC action schemas — need a spike before committing `CronBackend` / `ThinkingBackend`; deliberately excluded from this change.
-- Whether the published Hermes image ships a prebuilt SPA dist so `--skip-build` works, or whether the harness must build it — resolved in the Phase 0 spike.
-- Exact WS close-code semantics beyond `4401` (bad credential) and `4403` (origin/host gate) under the hardened auth — confirmed against the live container during the spike.
+- **Harness host-reachability** — does `dashboard --insecure --host 0.0.0.0` on a published port keep token-mode (dropping the socat sidecar)? Settle in task 1.2.
+- **Abort event shape** — the exact frame(s) emitted by `session.interrupt` mid-stream (the aborted state) weren't captured; confirm during Phase 1.
+- **Interactive ask shapes** — `approval.request` / `clarify.request` payloads need a tool that requests approval; capture before Phase 2.
+- **`/think`** — no single-RPC surface confirmed; still a spike before committing `ThinkingBackend`.
 
-## Reference (read from upstream source)
+## Reference (verified against `v2026.6.5`)
 
-Everything here was read from `NousResearch/hermes-agent` at `main` (2026-07-15) — `tui_gateway/ws.py`, `tui_gateway/server.py`, `hermes_cli/web_server.py`, `hermes_cli/subcommands/dashboard.py` — and is unverified against a live server until the Phase 0 spike. Treat method names and payload shapes as provisional.
+Full golden payloads are in [phase0-fixtures.md](phase0-fixtures.md). Summary:
 
-### Server and endpoint
+### Server, endpoint, auth
 
-`hermes serve --host <h> --port <p>` (default port **9119**) runs the headless "JSON-RPC/WebSocket gateway" that powers the desktop app; `hermes dashboard` boots the same server plus the browser SPA. The WS endpoint is **`/api/ws`**. This is **not** the legacy API server (`gateway run`, port 8642) the current backend talks to — that process does not register `/api/ws` (upstream issue #32882).
-
-### Wire protocol
-
-Newline-delimited JSON-RPC 2.0, identical in both directions, no extra framing or negotiation. On accept the server pushes:
-
-```json
-{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"skin":"..."}}}
-```
-
-Requests are standard JSON-RPC calls (`id`, `method`, `params`); server → client pushes are `method:"event"` notifications with `params: {type, payload, sid}` where `sid` scopes the event to a session. High-frequency `*.delta` events are coalesced server-side into ~30 fps batches; ordering against non-delta frames is preserved.
-
-### Auth (decided by bind address)
-
-- **Loopback bind** (`127.0.0.1`, `localhost`, `::1`): no auth gate; connect with `?token=<session-token>`. The token is `HERMES_DASHBOARD_SESSION_TOKEN` when set in the server's environment, otherwise a random per-process value. Constant-time compared.
-- **Non-loopback bind**: the June-2026 hardening makes an auth provider (bundled password or OAuth via Nous Portal) mandatory — `--insecure` is now a no-op. Clients authenticate to the dashboard auth API, then open the WS with a **single-use, 30s-TTL `?ticket=`**. This is the path native clients use (Phase 3).
-
-An `Origin` header is only validated **when present**, so a native Go client (which sends none) passes the origin gate; a Host/DNS-rebinding check and a peer-IP check still apply. Rejections close the socket with **4401** (bad/missing credential) or **4403** (origin/host/embedded-chat gate).
-
-### Version floor
-
-`tui_gateway` exists from v0.11.0 (`v2026.4.23`), but `hermes serve` and the hardened WS auth ship from the v0.16.0 desktop release (`v2026.6.5`). Supported floor is **`v2026.6.5`**; the integration harness pins the newest stable tag (currently `v2026.7.7.2`, v0.18.2). Known upstream rough edges designed around: WS disconnects during long foreground turns (#48445) and gateway idle-dormancy/drain introduced in v0.18.0 — both reconnect-and-resume problems.
+- **Launch:** `hermes dashboard --host <h> --port <p> --no-open --skip-build` (no `serve` command). Default port **9119**, WS endpoint **`/api/ws`**. Legacy `gateway run` on 8642 is unchanged and does not serve `/api/ws`.
+- **Auth:** loopback bind + `?token=<HERMES_DASHBOARD_SESSION_TOKEN>`. Bad/missing token → **HTTP 403 on the WS upgrade** (no 4401/4403 close). `--insecure` permits non-localhost binds with the token.
+- **Wire:** newline-delimited JSON-RPC 2.0. On connect the server pushes `event:gateway.ready`. Server→client pushes are `method:"event"` with `params:{type, session_id, payload}` (envelope key is `session_id`, not `sid`). App-level error codes: `-32601` unknown method, `4001` session not found, `4004` empty command, `4006` session_id required, `4018` invalid command.
 
 ### Backend method → RPC mapping
 
 | `backend.Backend` method | Hermes RPC | Notes |
 |---|---|---|
-| `Connect` | dial + `gateway.ready` + `agents.list` | see Decisions / Migration |
+| `Connect` | dial + `gateway.ready` + `agents.list` | 403 upgrade → `api key required` |
 | `Close` | WS close | server reaps/detaches sessions on disconnect |
 | `Events` | notification pump → `translate` | event table below |
-| `Supervise` | real reconnect loop | no longer the HTTP "block forever" stub |
-| `ListAgents` | `agents.list` | fall back to one synthetic profile agent if empty |
+| `Supervise` | real reconnect loop | re-issues `session.resume` on reconnect |
+| `ListAgents` | `agents.list` → `{processes:[]}` | empty → one synthetic profile agent (profile from `session.create` `info.profile_name`) |
 | `CreateAgent` / `DeleteAgent` | — | rejected; `AgentManagement: false` |
-| `SessionsList` | `session.list` (+ `session.active_list`) | mapped to `protocol.SessionsListResult` JSON |
-| `CreateSession` | `session.create` / `session.resume` | returns Hermes session id as the session key |
-| `SessionDelete` | `session.delete` | replaces the old "wipe local pointer" `/reset` |
-| `ChatSend` | `prompt.submit` `{sid, text}` | run id = generated idempotency key; skills catalogue prepended as a system preamble on turn 1 |
-| `ChatAbort` | `session.interrupt` | real server-side interrupt |
-| `ChatHistory` | `session.history` | full transcript from the server |
-| `ModelsList` | `model.options` | read-only listing |
+| `SessionsList` | `session.list` | entries `{id(=stored_session_id), title, preview, started_at, message_count, source}`; only sessions with messages listed |
+| `CreateSession` | `session.create` / `session.resume` | returns **two** ids: live `session_id` + `stored_session_id` |
+| `SessionDelete` | `session.delete {session_id}` | replaces the old local-pointer `/reset` |
+| `ChatSend` | `prompt.submit {session_id, text}` → `{status:"streaming"}` | run id = idempotency key; skills catalogue preamble on turn 1 |
+| `ChatAbort` | `session.interrupt {session_id}` | real server-side interrupt (aborted-event shape TBC) |
+| `ChatHistory` | `session.history {session_id}` → `{count, messages}` | full transcript from the server |
+| `ModelsList` | `model.options` → `{providers:[…], model, provider}` | provider-centric; active model = top-level `model` |
 | `SessionPatchModel` | `command.dispatch {"command":"/model …"}` (Phase 2) | error in Phase 1 |
 
-Sub-interfaces: `StatusBackend` (local + `session.status` / `verification.status`, Phase 1), `UsageBackend` (`session.usage`, `session.context_breakdown`, Phase 1), `CompactBackend` (`session.compress`, Phase 1), `ExecBackend` (`shell.exec`, Phase 2), `ThinkingBackend`/`CronBackend` (schema spike). The `!!` mapping is direct-execute: `ExecRequest` calls `shell.exec` and synthesises the `exec.finished` event; there is no gateway-side approval hop for *user*-initiated commands (`approval.request` is agent-initiated tool approval).
+Sub-interfaces: `StatusBackend` (compose from `session.create` `info` + `session.usage`; **`verification.status` does not exist**, and `session.status` returns a pre-rendered text blob, not structured fields), `UsageBackend` (inline `message.complete.usage` per turn + `session.usage` for on-demand; **no `session.context_breakdown`**), `CompactBackend` (`session.compress`), `ExecBackend` (`shell.exec`, Phase 2), `ThinkingBackend` (spike). `cron.manage` exists and works (`{success,count,jobs}`) — `CronBackend` is a cheap follow-on, still out of scope here.
 
-### Event translation table
+### Event translation table (verified)
 
-`translate(n Notification) []protocol.Event` is pure and table-tested without a socket.
+Envelope: `{type, session_id, payload}`. Sequence (tool turn): `session.info → message.start → thinking.delta* → tool.generating → tool.start → tool.complete → message.delta* → reasoning.available → message.complete`.
 
-| Hermes event (`params.type`) | → `protocol.Event` | Notes |
+| Hermes event | payload | → `protocol.Event` |
 |---|---|---|
-| `message.start` | — (arms accumulator) | new assistant message begins |
-| `message.delta` | `EventChat` state=`delta` | text accumulated per sid |
-| `message.complete` | `EventChat` state=`final` | attach usage snapshot when a `session.usage` refresh is cheap |
-| `error` | `EventChat` state=`error` | |
-| interrupt ack (`session.interrupt` result) | `EventChat` state=`aborted` | |
-| `tool.start` | `EventAgent` stream=`tool`, phase=`start` | `{toolCallId, name, args}` feeds existing tool cards in `events.go` |
-| `tool.generating` | `EventAgent` stream=`tool`, phase=`update` | TUI ignores `update` today; forwarded for the expand/collapse follow-up |
-| `tool.complete` | `EventAgent` stream=`tool`, phase=`result` | `isError` + result payload → success/error card state |
-| `tool.output_risk` | `EventAgent` stream=`tool`, phase=`update` | annotation only |
-| `thinking.delta`, `reasoning.delta` | `EventAgent` stream=`thinking` | ignored by the TUI today; enables a thinking indicator later |
-| `reasoning.available`, `session.info`, `status.update` | internal | refresh cached session metadata |
-| `gateway.ready` | internal | handshake / reconnect signal |
-
-Hermes does not send OpenClaw-style `toolCallId`s under that name; the backend assigns stable ids per `(sid, tool-invocation)` as it pairs `tool.start`/`tool.complete`, matching the shape `toolEventData` expects in `internal/tui/events.go`.
+| `session.info` | `{model, tools, skills, …}` | internal — cache model/tools |
+| `message.start` | *(none)* | — (arms accumulator) |
+| `message.delta` | `{text}` | `EventChat` state=`delta` |
+| `message.complete` | `{text, status, usage{…}}` | `EventChat` state=`final` + usage snapshot (inline) |
+| `error` | `{message}` | `EventChat` state=`error` |
+| `tool.generating` | `{name}` | `EventAgent` stream=`tool`, phase=`update` (pre-call) |
+| `tool.start` | `{tool_id, name, context}` | `EventAgent` stream=`tool`, phase=`start` (id = `tool_id`) |
+| `tool.complete` | `{tool_id, name, args, duration_s, result{output, exit_code, error}}` | `EventAgent` stream=`tool`, phase=`result`; error from `result.error`/`exit_code` |
+| `thinking.delta` | `{text}` | `EventAgent` stream=`thinking` (decorative) |
+| `reasoning.delta` | `{text}` | `EventAgent` stream=`thinking` (reasoning models; not seen from gpt-4o-mini) |
+| `reasoning.available` | `{text}` | internal / optional thinking surface (whole reasoning text) |
+| `gateway.ready` | `{skin}` | internal — handshake / reconnect signal |
 
 ### Package layout
 
@@ -177,33 +170,32 @@ internal/backend/hermes/
   rpc/
     client.go       WS dial + NDJSON JSON-RPC client
     client_test.go  against an in-process fake WS server
+  testdata/         golden fixtures captured in Phase 0 (see phase0-fixtures.md)
   backend_test.go   unit tests with a fake rpc server
   integration_test.go  //go:build integration_hermes — live container
 ```
 
 ### Harness topology (compose)
 
-The container runs `hermes serve` bound to loopback (keeping token mode) with an `alpine/socat` sidecar forwarding the published port:
+Runs `hermes dashboard` (loopback + token). Whether the socat sidecar is needed or `--insecure` on a published port suffices is task 1.2:
 
 ```yaml
 services:
   hermes:
     image: nousresearch/hermes-agent:${HERMES_TAG:-v2026.7.7.2}
-    command: ["serve", "--host", "127.0.0.1", "--port", "9119", "--skip-build"]
+    command: ["dashboard", "--host", "127.0.0.1", "--port", "9119", "--no-open", "--skip-build"]
     ports: ["19119:19119"]
     extra_hosts: ["host.docker.internal:host-gateway"]
     volumes: ["./state:/opt/data"]
     environment:
       HERMES_DASHBOARD_SESSION_TOKEN: "lucinate"
-  wsproxy:
+  wsproxy:                     # drop if `dashboard --insecure --host 0.0.0.0` keeps token-mode (task 1.2)
     image: alpine/socat
     network_mode: "service:hermes"
     command: ["TCP-LISTEN:19119,fork,bind=0.0.0.0", "TCP:127.0.0.1:9119"]
 ```
 
-The server sees a loopback bind (token mode stays active), a loopback peer, and a `Host: localhost:19119` header the host guard accepts as a loopback alias. `network_mode: host` is a simpler Linux-only alternative; the socat shape is the default because it also works on Docker Desktop for macOS. `--skip-build` assumes the published image ships a prebuilt SPA dist (`/api/ws` itself does not need the SPA) — validated in the spike.
-
-Three inference legs, same as OpenClaw: **Ollama** (`qwen2.5:0.5b` on host, local dev), **Echo** (echomodel stub, zero-cost deterministic CI), **Echo scripted** (echomodel tool-call script, tool-event and approval-path tests). The scripted mode triggers on a magic marker (e.g. `[[tool:shell echo lucinate]]`): the stub replies with an OpenAI-format `tool_calls` response for Hermes' shell tool, then a plain-text follow-up carrying the tool result, so Hermes executes the tool for real and emits real `tool.*` frames.
+`--skip-build` serves the prebuilt SPA (`/opt/hermes/hermes_cli/web_dist`, confirmed present). Three inference legs, same as OpenClaw: **Ollama** (`qwen2.5:0.5b` on host, local dev), **Echo** (echomodel stub, zero-cost deterministic CI), **Echo scripted** (echomodel tool-call script). The scripted mode triggers on a magic marker (e.g. `[[tool:shell echo lucinate]]`): the stub replies with an OpenAI-format `tool_calls` response, then a plain-text follow-up carrying the tool result, so Hermes executes the tool for real and emits real `tool.*` frames. (The spike proved this end to end against OpenRouter's `openai/gpt-4o-mini` via the first-class `openrouter` provider — the terminal tool ran and emitted real `tool.start`/`tool.complete` frames.)
 
 ### CI matrix
 
@@ -213,6 +205,6 @@ New `hermes-smoke` job in `.github/workflows/integration.yml` (sibling of `openc
 hermes-smoke:
   strategy:
     matrix:
-      hermes: ["v2026.6.5",   # v0.16.0 — oldest supported (serve + WS hardening)
+      hermes: ["v2026.6.5",   # v0.16.0 — oldest supported (dashboard + WS gateway)
                "v2026.7.7.2"] # current stable pin
 ```
