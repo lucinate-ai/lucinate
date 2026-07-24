@@ -253,6 +253,8 @@ func TestCronsKey_T_TogglesEnabled(t *testing.T) {
 }
 
 func TestCronsForm_RefusesUnsupportedScheduleKind(t *testing.T) {
+	// `at` is still out of scope for the form (one-shot timestamp), so it
+	// loads in the refused state and the save path is suppressed.
 	job := protocol.CronJob{
 		ID:            "weird",
 		Name:          "Weird",
@@ -260,15 +262,174 @@ func TestCronsForm_RefusesUnsupportedScheduleKind(t *testing.T) {
 		Enabled:       true,
 		SessionTarget: "isolated",
 		WakeMode:      "now",
-		Schedule:      protocol.CronSchedule{Kind: "every"},
+		Schedule:      protocol.CronSchedule{Kind: "at", At: "2026-01-01T00:00:00Z"},
 		Payload:       protocol.CronPayload{Kind: "agentTurn", Text: "X"},
 	}
 	form, banner := newEditForm(job)
 	if banner == "" {
-		t.Fatal("expected unsupported banner for schedule.kind=every")
+		t.Fatal("expected unsupported banner for schedule.kind=at")
 	}
 	if form.editingID != "weird" {
 		t.Errorf("expected editingID=weird, got %q", form.editingID)
+	}
+}
+
+func TestCronsForm_EditEveryScheduleSupported(t *testing.T) {
+	everyMs := 900000 // 15m
+	anchor := int64(1700000000000)
+	stagger := 5000
+	job := protocol.CronJob{
+		ID:            "job-every",
+		Name:          "Heartbeat",
+		AgentID:       "agent-1",
+		Enabled:       true,
+		SessionTarget: "isolated",
+		WakeMode:      "now",
+		Schedule: protocol.CronSchedule{
+			Kind:      "every",
+			EveryMs:   &everyMs,
+			AnchorMs:  &anchor,
+			StaggerMs: &stagger,
+		},
+		Payload: protocol.CronPayload{Kind: "agentTurn", Message: "tick"},
+	}
+	form, banner := newEditForm(job)
+	if banner != "" {
+		t.Fatalf("expected no unsupported banner for schedule.kind=every, got %q", banner)
+	}
+	if form.scheduleKind != "every" {
+		t.Errorf("scheduleKind: got %q, want every", form.scheduleKind)
+	}
+	if got := form.interval.Value(); got != "15m" {
+		t.Errorf("interval: got %q, want 15m", got)
+	}
+	// The anchor/stagger the form doesn't surface must be carried so an
+	// edit re-emits them rather than shifting the run phase.
+	if form.scheduleAnchorMs == nil || *form.scheduleAnchorMs != anchor {
+		t.Errorf("anchorMs not carried: %+v", form.scheduleAnchorMs)
+	}
+	if form.scheduleStaggerMs == nil || *form.scheduleStaggerMs != stagger {
+		t.Errorf("staggerMs not carried: %+v", form.scheduleStaggerMs)
+	}
+}
+
+func TestCronsForm_BuildsEveryScheduleAddAndPatch(t *testing.T) {
+	f := newCreateForm()
+	f.name.SetValue("Heartbeat")
+	f.scheduleKind = "every"
+	f.interval.SetValue("1h30m")
+	f.payloadText.SetValue("tick")
+
+	params := buildAddParams(f)
+	if params.Schedule.Kind != "every" {
+		t.Fatalf("Schedule.Kind: %q", params.Schedule.Kind)
+	}
+	if params.Schedule.EveryMs == nil || *params.Schedule.EveryMs != 5400000 {
+		t.Errorf("Schedule.EveryMs: %+v, want 5400000", params.Schedule.EveryMs)
+	}
+	// An `every` schedule must not carry the cron-only expr/tz fields.
+	if params.Schedule.Expr != "" || params.Schedule.Tz != "" {
+		t.Errorf("every schedule leaked expr/tz: expr=%q tz=%q", params.Schedule.Expr, params.Schedule.Tz)
+	}
+
+	f.editingID = "job-1"
+	f.mode = "edit"
+	anchor := int64(1700000000000)
+	f.scheduleAnchorMs = &anchor
+	patch := buildJobPatchMap(f)
+	sched, ok := patch["schedule"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected schedule map, got %T", patch["schedule"])
+	}
+	if sched["kind"] != "every" {
+		t.Errorf("patch schedule.kind: %#v", sched["kind"])
+	}
+	if sched["everyMs"] != 5400000 {
+		t.Errorf("patch schedule.everyMs: %#v, want 5400000", sched["everyMs"])
+	}
+	if _, present := sched["expr"]; present {
+		t.Errorf("every patch must not include expr, got %#v", sched)
+	}
+	if sched["anchorMs"] != anchor {
+		t.Errorf("patch schedule.anchorMs: %#v, want %d", sched["anchorMs"], anchor)
+	}
+}
+
+func TestCronsForm_EveryRequiresValidInterval(t *testing.T) {
+	m, fake := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleListKey(tea.KeyPressMsg{Code: 'd', Text: "d"}) // duplicate → create form
+	m.form.scheduleKind = "every"
+	m.form.interval.SetValue("") // empty is invalid for the every kind
+	m.form.payloadText.SetValue("tick")
+
+	m, cmd := m.submitForm()
+	if cmd != nil {
+		t.Fatal("expected submit to be refused with an empty interval")
+	}
+	if m.form.err == nil || !strings.Contains(m.form.err.Error(), "interval") {
+		t.Errorf("expected an interval error, got %v", m.form.err)
+	}
+	if fake.lastCronAdd != nil {
+		t.Errorf("CronAdd should not have been invoked, got %+v", fake.lastCronAdd)
+	}
+}
+
+func TestCronsForm_SpaceTogglesScheduleKind(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m, _ = m.handleListKey(tea.KeyPressMsg{Code: 'n', Text: "n"}) // new form
+	m.form.focused = formScheduleKind
+	if m.form.scheduleKind != "cron" {
+		t.Fatalf("setup: expected default scheduleKind=cron, got %q", m.form.scheduleKind)
+	}
+	m, _ = m.handleFormKey(tea.KeyPressMsg{Code: ' ', Text: " "})
+	if m.form.scheduleKind != "every" {
+		t.Errorf("expected scheduleKind toggled to every, got %q", m.form.scheduleKind)
+	}
+	m, _ = m.handleFormKey(tea.KeyPressMsg{Code: ' ', Text: " "})
+	if m.form.scheduleKind != "cron" {
+		t.Errorf("expected scheduleKind toggled back to cron, got %q", m.form.scheduleKind)
+	}
+}
+
+func TestFormatEveryInterval_RoundTrips(t *testing.T) {
+	cases := []struct {
+		ms   int
+		want string
+	}{
+		{900000, "15m"},
+		{5400000, "1h30m"},
+		{3600000, "1h"},
+		{90000, "1m30s"},
+		{500, "500ms"},
+		{0, ""},
+	}
+	for _, c := range cases {
+		ms := c.ms
+		if got := formatEveryInterval(&ms); got != c.want {
+			t.Errorf("formatEveryInterval(%d): got %q, want %q", c.ms, got, c.want)
+		}
+		// Non-empty renderings must parse back to the same millisecond value.
+		if c.want != "" {
+			back, err := parseEveryInterval(c.want)
+			if err != nil {
+				t.Errorf("parseEveryInterval(%q): %v", c.want, err)
+			} else if back != c.ms {
+				t.Errorf("round-trip %q: got %d, want %d", c.want, back, c.ms)
+			}
+		}
+	}
+	if got := formatEveryInterval(nil); got != "" {
+		t.Errorf("formatEveryInterval(nil): got %q, want empty", got)
+	}
+}
+
+func TestParseEveryInterval_Rejects(t *testing.T) {
+	for _, in := range []string{"", "  ", "nonsense", "0s", "-5m"} {
+		if _, err := parseEveryInterval(in); err == nil {
+			t.Errorf("parseEveryInterval(%q): expected error, got nil", in)
+		}
 	}
 }
 
@@ -509,12 +670,12 @@ func TestCronsDuplicate_RefusesUnsupportedScheduleKind(t *testing.T) {
 		Name:     "Weird",
 		AgentID:  "agent-1",
 		Enabled:  true,
-		Schedule: protocol.CronSchedule{Kind: "every"},
+		Schedule: protocol.CronSchedule{Kind: "at", At: "2026-01-01T00:00:00Z"},
 		Payload:  protocol.CronPayload{Kind: "agentTurn", Text: "X"},
 	}
 	_, banner := newDuplicateForm(job)
 	if banner == "" {
-		t.Fatal("expected unsupported banner for schedule.kind=every")
+		t.Fatal("expected unsupported banner for schedule.kind=at")
 	}
 	if !strings.Contains(banner, "Duplicate") {
 		t.Errorf("expected banner to mention Duplicate, got %q", banner)

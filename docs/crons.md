@@ -41,19 +41,38 @@ handler emits `goBackFromCronTranscriptMsg` when `chatModel.transcript` is set, 
 `cronsModel.subset`/`selectedID` are preserved across the transcript hop so the user lands back
 on the originating detail page.
 
-## Form is deliberately constrained to `cron` + `agentTurn`
+## Form models `cron` + `every` schedules and `agentTurn` payloads
 
-To avoid a TUI form modelling every union the gateway protocol exposes
-(`CronSchedule.Kind` ∈ `at`/`every`/`cron`; `CronPayload.Kind` ∈ `systemEvent`/`agentTurn`),
-the form is constrained to `cron` schedules and `agentTurn` payloads. Editing (or duplicating) a
-job whose existing kind is anything else loads the form in a refused state:
+The gateway protocol exposes union types (`CronSchedule.Kind` ∈ `at`/`every`/`cron`;
+`CronPayload.Kind` ∈ `systemEvent`/`agentTurn`). Rather than modelling all of them, the form
+covers the two common shapes: `cron` and `every` schedules with an `agentTurn` payload. A
+`scheduleKind` toggle swaps between the cron-expression input and an interval input; the interval
+is a human duration (`15m`, `1h30m`) parsed to `everyMs` via `parseEveryInterval` and rendered
+back with `formatEveryInterval` (the two round-trip exactly, so an untouched interval saves the
+same millisecond value it loaded).
 
-> Edit not supported for schedule kind "every". Use the openclaw CLI.
+`every` originally sat with `at`/`systemEvent` in the "route to the CLI" bucket, and its refusal
+banner (`Edit not supported for schedule kind "every"…`) was the most common one users hit —
+every plain interval job tripped it. It's now modelled; only `at` schedules (one-shot timestamps)
+and `systemEvent` payloads still load the form in a refused state:
 
-The save path is suppressed in this state — we surface the brittleness rather than silently
+> Edit not supported for schedule kind "at". Use the openclaw CLI.
+
+The save path is suppressed in that state — we surface the brittleness rather than silently
 round-trip a truncated representation. The duplicate flow refuses for the same reason, and
 shares `populateFormFromJob` with `newEditForm` so the two flows can't drift in which fields
 they carry over.
+
+### Preserve the fields the form doesn't surface
+
+An `every` schedule can also carry `anchorMs` (the interval's phase) and `staggerMs`, neither of
+which the form shows. If an edit dropped them, changing an unrelated field (the name, the prompt)
+would silently shift every future run. So `populateFormFromJob` stashes them on the form and the
+schedule builders re-emit them verbatim. This is the same "don't truncate on round-trip"
+discipline behind `CronUpdateRaw` below — the edit path must preserve what it can't edit. The
+per-kind schedule builders (`buildScheduleMap`/`buildSchedule`) also emit only the keys valid for
+the selected kind — an `every` patch never carries the cron `expr`/`tz`, since the gateway's
+schedule schema is a per-kind union.
 
 ## Raw-patch edit semantics: why `CronUpdateRaw`
 
