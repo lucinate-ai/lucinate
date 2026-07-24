@@ -40,7 +40,15 @@ fi
 
 if [ -d "$HERMES_DIR/state" ]; then
     info "Removing $HERMES_DIR/state/"
-    rm -rf "$HERMES_DIR/state"
+    if ! rm -rf "$HERMES_DIR/state" 2>/dev/null; then
+        # The gateway container runs as root (its s6 init requires it)
+        # and leaves root-owned files in the bind mount that the host
+        # user can't delete — seen on CI runners. Delete them with the
+        # same privileges they were written with.
+        docker run --rm -v "$HERMES_DIR/state:/state" alpine \
+            sh -c 'rm -rf /state/* /state/..?* /state/.[!.]*' 2>/dev/null || true
+        rm -rf "$HERMES_DIR/state"
+    fi
     ok "State directory removed"
 fi
 
