@@ -57,4 +57,4 @@
 
 - [x] 9.1 Rewrite `docs/backend_hermes.md` for the WebSocket backend (the design record lives in this change's `design.md`)
 - [x] 9.2 Release-notes handling — resolved as **not applicable**: there are no users of the Hermes integration, so this ships as a normal feature change (no breaking-change marker; CHANGELOG stays owned by the release process as always)
-- [ ] 9.3 Sync the delta specs into `openspec/specs/` and archive the change once implementation is verified
+- [x] 9.3 Sync the delta specs into `openspec/specs/` and archive the change once implementation is verified — done (concord clean, deltas synced, archived)

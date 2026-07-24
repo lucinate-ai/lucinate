@@ -2,28 +2,30 @@
 
 ## Purpose
 
-The Hermes backend (`internal/backend/hermes`) talks to a [Nous Research Hermes Agent](https://github.com/nousresearch/hermes-agent) profile via its OpenAI-compatible HTTP server (`/v1/...`). Unlike the OpenAI-compat backend (which treats the remote as a stateless `/v1/chat/completions` sink and keeps client-side identity and history), Hermes is **stateful server-side** — each profile owns its own SOUL, sessions, memories, and runs an API server on its own port — so this backend stays thin and lets the server be the source of truth. It is a sibling of the OpenAI backend, not a subclass; it plugs into the cross-backend connection lifecycle described by the `connections` spec.
+The Hermes backend (`internal/backend/hermes`) talks to a [Nous Research Hermes Agent](https://github.com/nousresearch/hermes-agent) profile via the `tui_gateway` JSON-RPC protocol over a WebSocket to the `hermes dashboard` gateway (`/api/ws`, default port 9119) — the same first-party protocol upstream's desktop app and web dashboard use. Hermes is **stateful server-side** — each profile owns its own SOUL, sessions, and memories — so this backend stays thin and lets the gateway be the source of truth for sessions, history, usage, and abort. It is a sibling of the OpenAI backend, not a subclass; it plugs into the cross-backend connection lifecycle described by the `connections` spec. The supported gateway floor is Hermes `v2026.6.5` (v0.16.0).
 
 ## Requirements
 
 ### Requirement: Backend structure and shared primitives
 
-The Hermes backend SHALL be a sibling of the OpenAI backend, not a subclass. Both SHALL use the shared HTTP / SSE / event-emission primitives in `internal/backend/httpcommon` (request builder with bearer auth, SSE scanner, `protocol.Event` emitter). Beyond those shared primitives the two backends SHALL remain independent: the wire shape, agent model, and history strategy all differ. Because Hermes is stateful server-side (each profile owns its own SOUL, sessions, memories, and runs an API server on its own port), this backend SHALL stay thin and let the server be the source of truth, in contrast to the OpenAI-compat backend which treats the remote as a stateless `/v1/chat/completions` sink and keeps client-side identity and history. The cross-backend connection lifecycle this plugs into is covered by the `connections` spec.
+The Hermes backend (`internal/backend/hermes`) SHALL be a sibling of the OpenAI backend, not a subclass, and SHALL speak the Hermes `tui_gateway` JSON-RPC protocol over a WebSocket to the `hermes dashboard` gateway (endpoint `/api/ws`, default port 9119) rather than an HTTP/SSE transport. It SHALL NOT import `internal/backend/httpcommon`; the OpenAI backend keeps that shared HTTP/SSE plumbing but Hermes no longer shares it. The backend SHALL layer a thin translation over a generic newline-delimited JSON-RPC client in `internal/backend/hermes/rpc`: `backend.Backend` calls become JSON-RPC requests and server event notifications become `protocol.Event` values. Because Hermes is stateful server-side (each profile owns its own SOUL, sessions, memories, and runs the gateway on its own port), this backend SHALL stay thin and let the server be the source of truth. The cross-backend connection lifecycle this plugs into is covered by the `connections` spec.
 
-#### Scenario: Shared HTTP primitives reused, independent wire shape
+#### Scenario: WebSocket JSON-RPC transport, independent of httpcommon
 - **GIVEN** the Hermes and OpenAI backends both live under `internal/backend`
 - **WHEN** the Hermes backend makes requests and emits events
-- **THEN** it uses the shared `internal/backend/httpcommon` request builder with bearer auth, SSE scanner, and `protocol.Event` emitter
-- **AND** its wire shape, agent model, and history strategy remain independent of the OpenAI backend rather than inherited from it
+- **THEN** it speaks JSON-RPC over a WebSocket to the `hermes dashboard` gateway (`/api/ws`) via the `internal/backend/hermes/rpc` client
+- **AND** it does not import `internal/backend/httpcommon`
+- **AND** its agent model and history strategy remain independent of the OpenAI backend rather than inherited from it
 
 ### Requirement: Capabilities reporting
 
-`Backend.Capabilities()` SHALL report the following capability set:
+`Backend.Capabilities()` SHALL report the following capability set for this phase:
 
-- `AuthRecovery: AuthRecoveryAPIKey` — bearer-token auth-recovery modal, same as OpenAI.
-- `AgentManagement: false` — Hermes profiles are configured server-side (`hermes profile create` / `hermes profile delete` on the host), so the TUI's "new agent" and "delete agent" affordances are both hidden. `CreateAgent` and `DeleteAgent` SHALL both return clear errors if ever called regardless.
-- `GatewayStatus: true` — `/status` reports endpoint, auth, model, and (when present) the active `lastResponseID` thread.
-- Everything else SHALL be off — `/compact`, `/think`, `/stats`, `/crons`, and `!!` SHALL render a "not available on this connection" system message.
+- `AuthRecovery: AuthRecoveryAPIKey` — the API-key auth-recovery modal, relabelled for Hermes as the "gateway token" prompt. The stored secret slot holds the gateway session token (`HERMES_DASHBOARD_SESSION_TOKEN`).
+- `AgentManagement: false` — Hermes profiles are configured server-side, so the TUI's "new agent" and "delete agent" affordances are both hidden. `CreateAgent` and `DeleteAgent` SHALL both return clear errors if ever called regardless.
+- `GatewayStatus: true` — `/status` reports the gateway endpoint, auth mode, model, and active session.
+
+The backend SHALL implement the `StatusBackend`, `UsageBackend`, and `CompactBackend` sub-interfaces, so `/status`, `/stats` (plus live header usage), and `/compact` all work. It SHALL NOT implement `ExecBackend`, `ThinkingBackend`, or `CronBackend` in this phase, so `!!`, `/think`, and `/crons` SHALL render a "not available on this connection" system message.
 
 #### Scenario: Agent management is disabled
 - **GIVEN** a connected Hermes backend
@@ -31,144 +33,161 @@ The Hermes backend SHALL be a sibling of the OpenAI backend, not a subclass. Bot
 - **THEN** `AgentManagement` is `false` and the "new agent" and "delete agent" affordances are hidden
 - **AND** `CreateAgent` and `DeleteAgent` return clear errors if called regardless
 
-#### Scenario: Unsupported commands are rejected with a message
-- **WHEN** the user invokes `/compact`, `/think`, `/stats`, `/crons`, or `!!` on a Hermes connection
+#### Scenario: Usage and compact are supported
+- **WHEN** the user invokes `/stats` or `/compact` on a Hermes connection
+- **THEN** the command succeeds because the backend implements `UsageBackend` and `CompactBackend`
+
+#### Scenario: Out-of-phase commands are rejected with a message
+- **WHEN** the user invokes `/think`, `/crons`, or `!!` on a Hermes connection
 - **THEN** a "not available on this connection" system message is rendered
 
-#### Scenario: Auth recovery uses the API-key modal
+#### Scenario: Auth recovery uses the API-key modal for the gateway token
 - **WHEN** capabilities are reported
-- **THEN** `AuthRecovery` is `AuthRecoveryAPIKey`, driving the bearer-token auth-recovery modal, same as OpenAI
+- **THEN** `AuthRecovery` is `AuthRecoveryAPIKey`, driving the auth-recovery modal relabelled as the "gateway token" prompt
 
 ### Requirement: Status payload
 
 `/status` on a Hermes connection SHALL return a `BackendStatus` carrying:
 
-- `Type: "hermes"`, the API base URL, and the auth mode (`"API key"` or `"anonymous"`).
-- The discovered or configured default model — `opts.DefaultModel` SHALL win over the model cached during connect via `profileModel`.
-- `Thread` populated when `lastResponseID` is set, so the user can see whether the next turn will chain onto an existing server-side conversation or start fresh.
+- `Type: "hermes"`, the gateway base URL, and the auth mode (`"gateway token"` or `"anonymous"`).
+- The active model, taken from the `session.create` `info.model` field (or `model.options`' top-level `model`).
+- The active session identifier when a session is open, so the user can see which server-side session the next turn continues.
 
-The renderer SHALL omit the OpenClaw-specific gateway block entirely for Hermes — see the per-section gating in `internal/tui/commands.go` (`formatBackendStatus`).
+The backend SHALL compose this from structured RPC results (`session.create` `info`, `model.options`, `session.usage`) rather than from `session.status`, whose result is a single pre-rendered text blob (`{"output": "…"}`), not structured fields. There is no `verification.status` RPC. The renderer SHALL omit the OpenClaw-specific gateway-health block entirely for Hermes — see the per-section gating in `internal/tui/commands.go` (`formatBackendStatus`).
 
 #### Scenario: Status reports type, endpoint, auth, and model
 - **WHEN** the user runs `/status` on a Hermes connection
-- **THEN** the `BackendStatus` reports `Type: "hermes"`, the API base URL, and the auth mode (`"API key"` or `"anonymous"`)
-- **AND** the model is the discovered or configured default, with `opts.DefaultModel` taking precedence over the `profileModel` cached during connect
+- **THEN** the `BackendStatus` reports `Type: "hermes"`, the gateway base URL, and the auth mode
+- **AND** the model is the one the gateway reports for the active profile via `session.create` `info.model` or `model.options`
 
-#### Scenario: Thread shown when a chain is active
-- **GIVEN** `lastResponseID` is set for the connection
+#### Scenario: Active session shown
+- **GIVEN** a session is open on the connection
 - **WHEN** `/status` renders
-- **THEN** `Thread` is populated so the user can see the next turn will chain onto an existing server-side conversation
-- **AND** the OpenClaw-specific gateway block is omitted from the rendering via the per-section gating in `formatBackendStatus`
+- **THEN** the active session identifier is shown so the user can see which server-side session the next turn continues
+- **AND** the OpenClaw-specific gateway-health block is omitted via the per-section gating in `formatBackendStatus`
 
 ### Requirement: One profile, one agent
 
-`ListAgents` SHALL return a single synthetic entry (ID `hermes`) representing the connected Hermes profile. The display name SHALL be the model surfaced by `GET /v1/models` — Hermes advertises the profile's pinned upstream model there. `CreateAgent` and `DeleteAgent` SHALL both be rejected with clear errors pointing the user at `hermes profile create` / `hermes profile delete` on the host.
-
-`SessionsList` SHALL return one session keyed off the same synthetic ID. `CreateSession` SHALL be a no-op that round-trips the agent ID. There SHALL be no concept of multi-agent or multi-session within a single Hermes connection — to talk to a different personality, the user configures a different Hermes profile (which runs on its own port) and adds it as a separate connection.
+`ListAgents` SHALL return a single synthetic entry (ID `hermes`) representing the connected Hermes profile. The `agents.list` RPC returns `{"processes": [...]}`; when it is empty (the common case), the backend SHALL fall back to one synthetic profile agent, taking the profile name from `session.create` `info.profile_name`. `CreateAgent` and `DeleteAgent` SHALL both be rejected with clear errors pointing the user at server-side profile configuration on the host. There SHALL be no multi-agent concept within a single Hermes connection — to talk to a different personality, the user configures a different Hermes profile (which runs on its own port) and adds it as a separate connection. Sessions within a connection are covered by the "Server-side sessions" requirement.
 
 #### Scenario: Single synthetic agent listed
-- **WHEN** `ListAgents` is called on a Hermes connection
+- **WHEN** `ListAgents` is called on a Hermes connection and `agents.list` returns no processes
 - **THEN** it returns a single synthetic entry with ID `hermes`
-- **AND** the display name is the model surfaced by `GET /v1/models`
+- **AND** the display name reflects the profile the gateway reports
 
 #### Scenario: Agent creation and deletion rejected
 - **WHEN** `CreateAgent` or `DeleteAgent` is called
-- **THEN** it is rejected with a clear error pointing the user at `hermes profile create` / `hermes profile delete` on the host
-
-#### Scenario: Single session, no-op create
-- **WHEN** `SessionsList` is called
-- **THEN** it returns one session keyed off the synthetic `hermes` ID
-- **AND** `CreateSession` is a no-op that round-trips the agent ID
-
-### Requirement: Chat over `/v1/responses` with response-ID chaining
-
-`ChatSend` SHALL post to `/v1/responses` with `stream: true` and SHALL chain via `previous_response_id` rather than a named conversation. Two reasons:
-
-- Hermes maintains conversation continuity server-side from the chained ID, so history is not resent on every turn.
-- Pinning a named conversation per connection meant `/reset` wiped the local last-response pointer but left Hermes' server-side thread alive, so the next chat continued the old conversation. Chaining via `previous_response_id` makes `SessionDelete` actually start a fresh chain. (Regression test: `TestSessionDelete_NextChatStartsFreshChain` in `backend_test.go`.)
-
-The streaming SSE SHALL emit typed events — `response.created`, `response.output_text.delta`, `response.completed` — which the backend dispatches on the `type` field in each `data:` payload. Deltas SHALL accumulate into a string and surface as `protocol.ChatEvent` (state=delta) just like the OpenAI backend; `response.completed` SHALL produce a final event and persist the new response ID.
-
-`ChatAbort` SHALL cancel the streaming request context. The Runs API (`POST /v1/runs/{id}/stop`) exists for tool-heavy turns but SHALL NOT be used in V1 — closing the SSE connection is enough for plain chat.
-
-#### Scenario: Streaming chat chains on the previous response
-- **WHEN** `ChatSend` is invoked
-- **THEN** it posts to `/v1/responses` with `stream: true` and chains via `previous_response_id` rather than a named conversation
-- **AND** history is not resent on each turn because Hermes maintains continuity server-side from the chained ID
-
-#### Scenario: Typed SSE events dispatched
-- **GIVEN** a streaming `/v1/responses` request
-- **WHEN** `data:` payloads arrive
-- **THEN** the backend dispatches on the `type` field for `response.created`, `response.output_text.delta`, and `response.completed`
-- **AND** deltas accumulate into a string and surface as `protocol.ChatEvent` (state=delta), while `response.completed` produces a final event and persists the new response ID
-
-#### Scenario: Reset starts a fresh chain
-- **GIVEN** a connection with an active response chain
-- **WHEN** `SessionDelete` (`/reset`) runs
-- **THEN** the next chat starts a fresh chain because continuity is keyed on `previous_response_id`, not a named conversation
-- **AND** this is pinned by `TestSessionDelete_NextChatStartsFreshChain` in `backend_test.go`
-
-#### Scenario: Abort cancels the stream
-- **WHEN** `ChatAbort` is called during a plain chat turn
-- **THEN** the streaming request context is cancelled and closing the SSE connection is sufficient, without using the `POST /v1/runs/{id}/stop` Runs API in V1
-
-### Requirement: Local per-connection state files
-
-Two small files per connection SHALL live under `~/.lucinate/hermes/<connection-id>/`:
-
-| File                | Purpose                                                                            |
-|---------------------|------------------------------------------------------------------------------------|
-| `last_response_id`  | The most recent response ID, used to chain `previous_response_id` on the next turn |
-| `prompts.jsonl`     | Append-only log of `{response_id, prompt, time}` entries, capped at 100            |
-
-Both files SHALL be mode `0600` and the directory SHALL be `0700`. They SHALL be cleared by `SessionDelete` (`/reset`).
-
-The prompts log SHALL exist because `GET /v1/responses/{id}` on Hermes returns only the assistant output — the user input field is omitted. Without a client-side mirror, the history-walk reconstruction would be assistant-only. The 100-entry cap SHALL match Hermes' server-side LRU cap on stored responses, so the two stay in rough sync.
-
-#### Scenario: State files created with restrictive permissions
-- **WHEN** the Hermes backend persists per-connection state
-- **THEN** `last_response_id` and `prompts.jsonl` are written under `~/.lucinate/hermes/<connection-id>/` with file mode `0600` and directory mode `0700`
-
-#### Scenario: Reset clears local state
-- **WHEN** `SessionDelete` (`/reset`) runs
-- **THEN** both `last_response_id` and `prompts.jsonl` are cleared
-
-#### Scenario: Prompts log mirrors user input
-- **GIVEN** `GET /v1/responses/{id}` returns only assistant output with the user input field omitted
-- **WHEN** a turn completes
-- **THEN** the `{response_id, prompt, time}` entry is appended to `prompts.jsonl`, capped at 100 entries to match Hermes' server-side LRU cap on stored responses
-
-### Requirement: History via walk-back
-
-Hermes has no list-by-conversation endpoint (`GET /v1/conversations/<name>/responses` 404s). To populate the chat scrollback, `ChatHistory` SHALL walk the chain backwards from the stored last-response ID via repeated `GET /v1/responses/{id}`, following `previous_response_id`. The walk SHALL be capped at **3 hops** in `historyWalkLimit` because each hop is a separate round-trip and first-load latency adds up; the chat view does not need a deep transcript on connect.
-
-Each hop SHALL yield the assistant's output text from the server, paired with the user prompt looked up from the local prompts log. Both SHALL be emitted in chronological order (user → assistant per turn) so the chat view renders a normal transcript.
-
-#### Scenario: Scrollback reconstructed by walking the chain
-- **GIVEN** no list-by-conversation endpoint exists (`GET /v1/conversations/<name>/responses` 404s)
-- **WHEN** `ChatHistory` populates the chat scrollback
-- **THEN** it walks the chain backwards from the stored last-response ID via repeated `GET /v1/responses/{id}`, following `previous_response_id`, capped at 3 hops in `historyWalkLimit`
-
-#### Scenario: Each hop pairs assistant output with the stored prompt
-- **WHEN** a history hop is processed
-- **THEN** the assistant's output text from the server is paired with the user prompt looked up from the local prompts log
-- **AND** both are emitted in chronological order (user → assistant per turn) so the chat view renders a normal transcript
+- **THEN** it is rejected with a clear error pointing the user at server-side profile configuration on the host
 
 ### Requirement: Connect and API-key authentication
 
-`Connect(ctx)` SHALL issue `GET /v1/models`, caching the discovered profile name as the synthetic agent's display model. A 401/403 SHALL surface as the canonical `api key required` error so the connecting view routes it to the API-key modal — the same flow as OpenAI.
+`Connect(ctx)` SHALL dial the WebSocket at `/api/ws` (derived from the connection's HTTP base URL), await the server's `gateway.ready` handshake within a timeout, and issue `agents.list` to populate the agent snapshot. The gateway session token SHALL be supplied as the `?token=` query parameter for a loopback bind; it is read from the per-connection secret slot (formerly the `API_SERVER_KEY` bearer key, now the gateway token), with `StoreAPIKey` persisting it through the `secretAwareHermesBackend` shim in `app/factory.go` to `~/.lucinate/secrets/secrets.json`.
 
-The Hermes API server requires `API_SERVER_KEY` to be set on the server side; the client SHALL send `Authorization: Bearer <key>`. The auth modal SHALL call `StoreAPIKey`, which updates the in-memory key on the live backend and (via the `secretAwareHermesBackend` shim in `app/factory.go`) persists it to `~/.lucinate/secrets/secrets.json`.
+A bad or missing token is rejected at the **WebSocket upgrade with HTTP status 403** (the socket never opens; there is no post-open `4401`/`4403` close frame). Connect SHALL map a 403 upgrade rejection to the canonical `api key required` error so the connecting view routes it to the auth-recovery modal — the same flow as OpenAI.
 
-#### Scenario: Connect discovers the profile model
+#### Scenario: Connect dials the gateway and awaits handshake
 - **WHEN** `Connect(ctx)` runs
-- **THEN** it issues `GET /v1/models` and caches the discovered profile name as the synthetic agent's display model
+- **THEN** it dials `ws(s)://…/api/ws?token=<gateway token>`, awaits `gateway.ready`, and issues `agents.list` to populate the agent snapshot
 
-#### Scenario: Unauthorised connect routes to the API-key modal
-- **GIVEN** the Hermes API server requires `API_SERVER_KEY` and the client sends `Authorization: Bearer <key>`
-- **WHEN** a request returns HTTP 401 or 403
-- **THEN** it surfaces as the canonical `api key required` error and the connecting view routes it to the API-key modal, the same flow as OpenAI
+#### Scenario: Bad credential routes to the auth modal
+- **GIVEN** the gateway rejects the WebSocket upgrade with HTTP 403
+- **WHEN** `Connect` fails
+- **THEN** it surfaces as the canonical `api key required` error and the connecting view routes it to the auth-recovery modal
 
-#### Scenario: API key stored and persisted
-- **WHEN** the user submits a key in the auth modal
-- **THEN** `StoreAPIKey` updates the in-memory key on the live backend and persists it to `~/.lucinate/secrets/secrets.json` via the `secretAwareHermesBackend` shim in `app/factory.go`
+#### Scenario: Gateway token stored and persisted
+- **WHEN** the user submits a token in the auth modal
+- **THEN** `StoreAPIKey` updates the in-memory token on the live backend and persists it to `~/.lucinate/secrets/secrets.json` via the `secretAwareHermesBackend` shim in `app/factory.go`
+
+### Requirement: JSON-RPC over WebSocket transport
+
+`internal/backend/hermes/rpc` SHALL provide a generic, Hermes-agnostic client speaking newline-delimited JSON-RPC 2.0 over a WebSocket, using the existing `github.com/gorilla/websocket` dependency (already required by the openclaw-go gateway SDK) rather than introducing a second WebSocket library. Its surface SHALL be small: `Call(ctx, method, params, &result)` for id-correlated request/response with per-call timeout, `Notifications() <-chan Notification` for server-pushed `method:"event"` frames, and `Close()`. The backend SHALL call the ~18 methods it needs with typed param/result structs local to the package; a generated client for the full method registry SHALL NOT be built. Server → client pushes SHALL be treated as `event` notifications carrying `{type, session_id, payload}`, where `session_id` scopes the event to a session.
+
+#### Scenario: Requests are id-correlated calls
+- **WHEN** the backend issues an RPC via `Call(ctx, method, params, &result)`
+- **THEN** the client sends a JSON-RPC request with a unique id and resolves `result` from the matching response, honouring the call context's timeout and cancellation
+
+#### Scenario: Server events fan out on the notification channel
+- **GIVEN** the server pushes a `method:"event"` frame with `params:{type, session_id, payload}`
+- **THEN** it is delivered on `Notifications()` rather than matched to a pending call
+
+### Requirement: Streaming chat via prompt.submit
+
+`ChatSend` SHALL submit a turn via the `prompt.submit` RPC with `{session_id, text}`, using a generated idempotency key as the run id; the RPC returns `{"status": "streaming"}` and the turn's output arrives as event notifications. On turn 1 of a session the skills catalogue SHALL be prepended as a system preamble, as the OpenAI backend does. Streamed `message.delta` events SHALL accumulate per session and surface as `protocol.ChatEvent` (state=delta). `message.complete` carries the turn's usage inline and a `status` field: `status:"complete"` SHALL produce a final event, and `status:"interrupted"` SHALL produce an aborted event. `ChatAbort` SHALL call `session.interrupt` (which returns `{"status":"interrupted"}`) for a real server-side interrupt, not merely dropping the stream; the interrupted turn terminates with a `message.complete` whose `status` is `"interrupted"`. The session SHALL remain usable afterwards.
+
+#### Scenario: Streaming chat over the gateway
+- **WHEN** `ChatSend` is invoked
+- **THEN** it calls `prompt.submit` with `{session_id, text}`, and streamed `message.delta` events accumulate and surface as `protocol.ChatEvent` (state=delta)
+- **AND** `message.complete` produces a final event
+
+#### Scenario: Abort interrupts server-side
+- **WHEN** `ChatAbort` is called mid-turn
+- **THEN** it calls `session.interrupt`, the turn ends with a `message.complete` whose `status` is `"interrupted"` which surfaces as an aborted event, and the session remains usable for the next turn
+
+### Requirement: Event translation to protocol events
+
+Translation from Hermes event notifications to `protocol.Event` SHALL be a pure function so it can be table-tested exhaustively without a socket. Tool events SHALL map to the existing tool-card events: `tool.start` (`{tool_id, name, context}`) → `EventAgent` stream=`tool` phase=`start`, `tool.complete` (`{tool_id, name, args, duration_s, result}`) → phase=`result`. Hermes supplies a `tool_id` on both `tool.start` and `tool.complete`, so the backend SHALL pair start/result by that id directly rather than synthesising one. Success/error card state SHALL be derived from `result.error` (and `result.exit_code`), not from an `isError` field. `thinking.delta` and `reasoning.delta` SHALL map to `EventAgent` stream=`thinking`. `error` events (`{message}`) SHALL surface as `protocol.ChatEvent` state=`error`.
+
+#### Scenario: Tool events render tool cards with the server-supplied id
+- **GIVEN** a `tool.start` followed by a `tool.complete` sharing a `tool_id`
+- **WHEN** the events are translated
+- **THEN** they produce an `EventAgent` start + result pair keyed on that `tool_id`
+- **AND** a `tool.complete` whose `result.error` is non-null (or `exit_code` non-zero) marks the card as an error result
+
+#### Scenario: Translation is a pure, testable function
+- **WHEN** the translation function is called with a notification
+- **THEN** it returns the mapped `protocol.Event` values without requiring a live socket, so it can be table-tested against the Phase 0 golden fixtures
+
+### Requirement: Server-side sessions
+
+Sessions SHALL be backed by the gateway, not synthesised locally. `session.create` returns two identifiers: a short live `session_id` (the handle used by `prompt.submit`, `session.history`, `session.usage`, and `session.interrupt` during the connection) and a timestamped `stored_session_id` (the persisted id). `CreateSession` SHALL call `session.create` (or `session.resume`) and track both. `SessionsList` SHALL map `session.list` to `protocol.SessionsListResult`; its entries are keyed by `stored_session_id` and carry `{title, preview, started_at, message_count, source}`. Only sessions that have at least one message appear in `session.list` — a freshly created empty session is usable but not yet listed. `SessionDelete` SHALL detach an attached live handle first via `session.close` (the gateway refuses to delete an active session) and then call `session.delete` with the stored id. `ChatHistory` SHALL return the full transcript from `session.history` (`{count, messages}`) — both user and assistant turns — with no client-side walk-back or prompts log.
+
+#### Scenario: A session with a turn appears in the list
+- **GIVEN** `CreateSession` then a completed `ChatSend` round-trip
+- **WHEN** `SessionsList` is called
+- **THEN** the session appears keyed by its `stored_session_id` with a non-zero `message_count`
+- **AND** `SessionDelete` calls `session.delete` and removes it
+
+#### Scenario: History comes from the server
+- **GIVEN** a session with one completed round-trip
+- **WHEN** `ChatHistory` is called
+- **THEN** it returns both the user and assistant turns from `session.history` with no client-side reconstruction
+
+### Requirement: Usage and compact over the gateway
+
+The backend SHALL implement `UsageBackend` from the `usage` object carried inline on each `message.complete` event (`{input, output, total, calls, context_used, context_max, context_percent, cost_usd, …}`), with `session.usage` (`{calls, input, output, total}`) as the on-demand refresh for `/stats`; there is no `session.context_breakdown` RPC. It SHALL implement `CompactBackend` via `session.compress`. After a compaction the session history SHALL remain coherent.
+
+#### Scenario: Usage totals reflect the gateway
+- **WHEN** a turn completes
+- **THEN** `UsageBackend` exposes the totals from the `message.complete` `usage` payload, and `/stats` can refresh them via `session.usage`
+
+#### Scenario: Compact succeeds and history stays coherent
+- **WHEN** `/compact` is invoked
+- **THEN** the gateway compresses the session via `session.compress` and subsequent `ChatHistory` remains coherent
+
+### Requirement: Reconnect and supervision
+
+`Supervise` SHALL be a real reconnect loop (modelled on `internal/client`'s supervisor): exponential-backoff dial, `gateway.ready` as the liveness signal, and connection-state transitions notified to the TUI banner. On reconnect the backend SHALL re-issue `session.resume` for the active session before reporting healthy, because the gateway detaches or reaps sessions on WebSocket disconnect. In-flight calls SHALL fail fast with a retryable error.
+
+#### Scenario: Reconnect resumes the active session
+- **GIVEN** an active session and a dropped WebSocket
+- **WHEN** the supervisor reconnects
+- **THEN** it dials with backoff, awaits `gateway.ready`, re-issues `session.resume` for the active session, and only then reports healthy
+- **AND** the next `ChatSend` succeeds
+
+### Requirement: Legacy endpoint migration error
+
+A connection whose stored URL points at the legacy Hermes API server (port `8642` or a `/v1` path) SHALL fail `Connect` with a targeted, actionable error instructing the user to run `hermes dashboard`, repoint the URL to the gateway (default `http://localhost:9119`), and paste the gateway token. There SHALL be no silent auto-migration, because the user must change the server process they run (`gateway run` → `dashboard`).
+
+#### Scenario: Legacy URL yields a migration hint
+- **GIVEN** a stored Hermes connection URL on port `8642` or with a `/v1` path
+- **WHEN** `Connect` runs and the gateway WebSocket is unavailable there
+- **THEN** it fails with a targeted error telling the user to run `hermes dashboard`, repoint the URL to `http://localhost:9119`, and paste the gateway token
+
+### Requirement: Interactive agent requests declined in this phase
+
+Server → client blocking asks from the agent (`approval.request`, `clarify.request`, `sudo.request`, `secret.request`) each carry a `request_id` and are answered by a paired `<type>.respond` RPC (`clarify.respond`/`sudo.respond`/`secret.respond`/`approval.respond`). In this phase the backend SHALL auto-decline every such ask by calling the matching respond method with a deny/cancel value (for `approval.respond`, `{session_id, choice:"deny"}`) and render a visible system message, so a chat turn can never hang the TUI silently. The message SHALL tell the user the request is not supported yet and how to configure the profile for autonomous approval.
+
+#### Scenario: Approval request is declined with a message
+- **GIVEN** the agent emits an `approval.request` (or `clarify`/`sudo`/`secret` request) carrying a `request_id` during a turn
+- **WHEN** the backend receives it
+- **THEN** it calls the paired `<type>.respond` RPC with a deny/cancel value (e.g. `approval.respond {session_id, choice:"deny"}`) and renders a visible system message explaining the request is not supported yet, so the turn does not hang
