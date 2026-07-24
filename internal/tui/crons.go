@@ -174,7 +174,9 @@ type cronFormField int
 const (
 	formName cronFormField = iota
 	formDescription
+	formScheduleKind
 	formCronExpr
+	formInterval
 	formTimezone
 	formAgentID
 	formModel
@@ -219,16 +221,25 @@ type cronForm struct {
 	name           textinput.Model
 	description    textinput.Model
 	cronExpr       textinput.Model
+	interval       textinput.Model // every-schedule interval, e.g. "15m", "1h30m"
 	timezone       textinput.Model
 	agentID        textinput.Model
 	model          textinput.Model
 	payloadText    textarea.Model
 	deliveryTarget textinput.Model // channel for announce, URL for webhook
 
+	scheduleKind  string // "cron" or "every"
 	sessionTarget string // "main" or "isolated"
 	wakeMode      string // "next-heartbeat" or "now"
 	deliveryMode  string // "none", "announce", "webhook"
 	enabled       bool
+
+	// scheduleAnchorMs / scheduleStaggerMs carry an `every` schedule's
+	// anchor and stagger through an edit. The form doesn't surface them,
+	// but the raw patch must re-emit them so editing an unrelated field
+	// (name, payload) doesn't silently shift the job's run phase.
+	scheduleAnchorMs  *int64
+	scheduleStaggerMs *int
 
 	focused     cronFormField
 	saving      bool
@@ -951,6 +962,7 @@ func cronPayloadText(job protocol.CronJob) string {
 func newCreateForm() cronForm {
 	f := cronForm{
 		mode:          "create",
+		scheduleKind:  "cron",
 		sessionTarget: "isolated",
 		wakeMode:      "next-heartbeat",
 		deliveryMode:  "none",
@@ -964,6 +976,9 @@ func newCreateForm() cronForm {
 	f.cronExpr = textinput.New()
 	f.cronExpr.Placeholder = "0 8 * * *"
 	f.cronExpr.CharLimit = 64
+	f.interval = textinput.New()
+	f.interval.Placeholder = "15m"
+	f.interval.CharLimit = 32
 	f.timezone = textinput.New()
 	f.timezone.Placeholder = "Europe/London"
 	f.timezone.CharLimit = 64
@@ -1023,8 +1038,19 @@ func newDuplicateForm(job protocol.CronJob) (cronForm, string) {
 func populateFormFromJob(job protocol.CronJob) (cronForm, string) {
 	f := newCreateForm()
 	f.description.SetValue(job.Description)
-	f.cronExpr.SetValue(job.Schedule.Expr)
-	f.timezone.SetValue(job.Schedule.Tz)
+	switch job.Schedule.Kind {
+	case "", "cron":
+		f.scheduleKind = "cron"
+		f.cronExpr.SetValue(job.Schedule.Expr)
+		f.timezone.SetValue(job.Schedule.Tz)
+	case "every":
+		f.scheduleKind = "every"
+		f.interval.SetValue(formatEveryInterval(job.Schedule.EveryMs))
+		// Carry the anchor/stagger the form doesn't surface so an edit
+		// re-emits them verbatim instead of dropping them.
+		f.scheduleAnchorMs = job.Schedule.AnchorMs
+		f.scheduleStaggerMs = job.Schedule.StaggerMs
+	}
 	f.agentID.SetValue(job.AgentID)
 	f.model.SetValue(job.Payload.Model)
 	// Prefer Message because it is the canonical agentTurn prompt field
@@ -1053,7 +1079,11 @@ func populateFormFromJob(job protocol.CronJob) (cronForm, string) {
 	f.enabled = job.Enabled
 
 	var unsupported string
-	if job.Schedule.Kind != "" && job.Schedule.Kind != "cron" {
+	switch job.Schedule.Kind {
+	case "", "cron", "every":
+		// Modelled by the form.
+	default:
+		// `at` and any future schedule kind still route to the CLI.
 		unsupported = fmt.Sprintf("{action} not supported for schedule kind %q. Use the openclaw CLI.", job.Schedule.Kind)
 	}
 	if job.Payload.Kind != "" && job.Payload.Kind != "agentTurn" && unsupported == "" {
@@ -1101,6 +1131,13 @@ func (m cronsModel) handleFormKey(msg tea.KeyPressMsg) (cronsModel, tea.Cmd) {
 		// and the payload textarea fall through to receive the literal
 		// space character.
 		switch m.form.focused {
+		case formScheduleKind:
+			if m.form.scheduleKind == "cron" {
+				m.form.scheduleKind = "every"
+			} else {
+				m.form.scheduleKind = "cron"
+			}
+			return m, nil
 		case formSessionTarget:
 			if m.form.sessionTarget == "main" {
 				m.form.sessionTarget = "isolated"
@@ -1149,6 +1186,8 @@ func (f *cronForm) activeInput() *textinput.Model {
 		return &f.description
 	case formCronExpr:
 		return &f.cronExpr
+	case formInterval:
+		return &f.interval
 	case formTimezone:
 		return &f.timezone
 	case formAgentID:
@@ -1221,6 +1260,7 @@ func (f *cronForm) refocus() tea.Cmd {
 	f.name.Blur()
 	f.description.Blur()
 	f.cronExpr.Blur()
+	f.interval.Blur()
 	f.timezone.Blur()
 	f.agentID.Blur()
 	f.model.Blur()
@@ -1245,9 +1285,17 @@ func (m cronsModel) submitForm() (cronsModel, tea.Cmd) {
 		m.form.err = fmt.Errorf("name is required")
 		return m, nil
 	}
-	if m.form.cronExpr.Value() == "" {
-		m.form.err = fmt.Errorf("cron expression is required")
-		return m, nil
+	switch m.form.scheduleKind {
+	case "every":
+		if _, err := parseEveryInterval(m.form.interval.Value()); err != nil {
+			m.form.err = fmt.Errorf("interval: %w", err)
+			return m, nil
+		}
+	default:
+		if m.form.cronExpr.Value() == "" {
+			m.form.err = fmt.Errorf("cron expression is required")
+			return m, nil
+		}
 	}
 	if m.form.payloadText.Value() == "" {
 		m.form.err = fmt.Errorf("payload text is required")
@@ -1280,11 +1328,7 @@ func buildAddParams(f cronForm) protocol.CronAddParams {
 		Description:   f.description.Value(),
 		SessionTarget: f.sessionTarget,
 		WakeMode:      f.wakeMode,
-		Schedule: protocol.CronSchedule{
-			Kind: "cron",
-			Expr: f.cronExpr.Value(),
-			Tz:   f.timezone.Value(),
-		},
+		Schedule:      buildSchedule(f),
 		Payload: protocol.CronPayload{
 			Kind: "agentTurn",
 			// agentTurn carries the prompt in `message`. The schema's
@@ -1316,11 +1360,7 @@ func buildJobPatchMap(f cronForm) map[string]any {
 		"description":   f.description.Value(),
 		"sessionTarget": f.sessionTarget,
 		"wakeMode":      f.wakeMode,
-		"schedule": map[string]any{
-			"kind": "cron",
-			"expr": f.cronExpr.Value(),
-			"tz":   f.timezone.Value(),
-		},
+		"schedule":      buildScheduleMap(f),
 		"payload": map[string]any{
 			"kind": "agentTurn",
 			// See buildAddParams for the kind/field-name rationale: agentTurn
@@ -1361,6 +1401,102 @@ func buildDelivery(f cronForm) *protocol.CronDelivery {
 		}
 	}
 	return nil
+}
+
+// buildSchedule turns the form's schedule fields into a typed
+// protocol.CronSchedule for the CronAdd path. For `every`, the anchor and
+// stagger carried off the source job are re-emitted so a duplicate keeps the
+// original phase; the interval is assumed valid because submitForm rejects an
+// unparseable one before this runs.
+func buildSchedule(f cronForm) protocol.CronSchedule {
+	if f.scheduleKind == "every" {
+		ms, _ := parseEveryInterval(f.interval.Value())
+		return protocol.CronSchedule{
+			Kind:      "every",
+			EveryMs:   &ms,
+			AnchorMs:  f.scheduleAnchorMs,
+			StaggerMs: f.scheduleStaggerMs,
+		}
+	}
+	return protocol.CronSchedule{
+		Kind: "cron",
+		Expr: f.cronExpr.Value(),
+		Tz:   f.timezone.Value(),
+	}
+}
+
+// buildScheduleMap is buildSchedule's wire-map counterpart for the raw edit
+// patch. Each kind emits only the keys valid for it — the gateway's schedule
+// schema is a per-kind union, so an `every` patch must not carry the cron
+// `expr`/`tz` fields (and vice versa). anchorMs/staggerMs are included only
+// when the source job carried them so we don't invent a phase the job never
+// had.
+func buildScheduleMap(f cronForm) map[string]any {
+	if f.scheduleKind == "every" {
+		ms, _ := parseEveryInterval(f.interval.Value())
+		sched := map[string]any{
+			"kind":    "every",
+			"everyMs": ms,
+		}
+		if f.scheduleAnchorMs != nil {
+			sched["anchorMs"] = *f.scheduleAnchorMs
+		}
+		if f.scheduleStaggerMs != nil {
+			sched["staggerMs"] = *f.scheduleStaggerMs
+		}
+		return sched
+	}
+	return map[string]any{
+		"kind": "cron",
+		"expr": f.cronExpr.Value(),
+		"tz":   f.timezone.Value(),
+	}
+}
+
+// parseEveryInterval parses a human duration ("15m", "1h30m", "90s") into
+// milliseconds for the `every` schedule kind. A non-positive interval is
+// rejected because the gateway would otherwise busy-loop on it.
+func parseEveryInterval(s string) (int, error) {
+	d, err := time.ParseDuration(strings.TrimSpace(s))
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("must be a positive duration like 15m or 1h30m")
+	}
+	return int(d / time.Millisecond), nil
+}
+
+// formatEveryInterval renders an everyMs value as a compact duration string
+// ("15m", "1h30m") that round-trips exactly through parseEveryInterval. It
+// returns "" for nil / non-positive values so the field renders blank rather
+// than "0s".
+func formatEveryInterval(ms *int) string {
+	if ms == nil || *ms <= 0 {
+		return ""
+	}
+	rem := *ms
+	h := rem / 3600000
+	rem %= 3600000
+	m := rem / 60000
+	rem %= 60000
+	s := rem / 1000
+	msRem := rem % 1000
+
+	var b strings.Builder
+	if h > 0 {
+		fmt.Fprintf(&b, "%dh", h)
+	}
+	if m > 0 {
+		fmt.Fprintf(&b, "%dm", m)
+	}
+	if s > 0 {
+		fmt.Fprintf(&b, "%ds", s)
+	}
+	if msRem > 0 {
+		fmt.Fprintf(&b, "%dms", msRem)
+	}
+	return b.String()
 }
 
 // -----------------------------------------------------------------------------
@@ -1539,7 +1675,9 @@ func (m cronsModel) viewForm() string {
 	}{
 		{"Name", formName, m.form.name.View()},
 		{"Description", formDescription, m.form.description.View()},
-		{"Cron expression", formCronExpr, m.form.cronExpr.View()},
+		{"Schedule kind", formScheduleKind, toggleView(m.form.scheduleKind, "cron", "every")},
+		{cronExprLabel(m.form.scheduleKind), formCronExpr, m.form.cronExpr.View()},
+		{intervalLabel(m.form.scheduleKind), formInterval, m.form.interval.View()},
 		{"Timezone", formTimezone, m.form.timezone.View()},
 		{"Agent ID (optional)", formAgentID, m.form.agentID.View()},
 		{"Model (optional)", formModel, m.form.model.View()},
@@ -1648,6 +1786,24 @@ func deliveryTargetLabel(mode string) string {
 		return "Webhook URL"
 	}
 	return "Delivery target (unused while mode=none)"
+}
+
+// cronExprLabel / intervalLabel flag which of the two schedule-value inputs
+// is live for the selected kind, mirroring deliveryTargetLabel — both rows
+// always render (the form's field-to-line map assumes a fixed row set), so
+// the label is how the inactive one is marked unused.
+func cronExprLabel(kind string) string {
+	if kind == "every" {
+		return "Cron expression (unused while kind=every)"
+	}
+	return "Cron expression"
+}
+
+func intervalLabel(kind string) string {
+	if kind == "cron" {
+		return "Interval (unused while kind=cron)"
+	}
+	return "Interval (e.g. 15m, 1h30m)"
 }
 
 func checkboxView(checked bool) string {
