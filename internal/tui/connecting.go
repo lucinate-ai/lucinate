@@ -92,6 +92,11 @@ func (m *connectingModel) enterAuthModal(conn *config.Connection, b backend.Back
 		m.subState = subStateAuthTokenPrompt
 		ti := textinput.New()
 		ti.Placeholder = "api key"
+		if conn != nil && conn.Type == config.ConnTypeHermes {
+			// Hermes stores its gateway session token in the same
+			// secret slot; label it for what it is.
+			ti.Placeholder = "gateway token"
+		}
 		ti.CharLimit = 512
 		ti.Focus()
 		m.tokenInput = ti

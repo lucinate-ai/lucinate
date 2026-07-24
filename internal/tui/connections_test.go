@@ -281,7 +281,7 @@ func TestConnectionsModel_TypeCycleUpdatesPreset(t *testing.T) {
 	if m.formPreset != presetHermes {
 		t.Errorf("expected Hermes after third Down, got %v", m.formPreset)
 	}
-	if m.urlInput.Value() != "http://127.0.0.1:8642/v1" {
+	if m.urlInput.Value() != "http://localhost:9119" {
 		t.Errorf("Hermes preset did not prefill URL: %q", m.urlInput.Value())
 	}
 	if m.nameInput.Value() != "hermes" {
@@ -354,7 +354,9 @@ func TestConnectionsModel_HermesPresetPersistsAsHermes(t *testing.T) {
 		t.Fatalf("expected Hermes preset, got %v", m.formPreset)
 	}
 
-	m.modelInput.SetValue("hermes-agent")
+	// A stale model value (e.g. left over from a previous preset)
+	// must not persist: Hermes has no model field.
+	m.modelInput.SetValue("stale-model")
 	m, _ = m.submitForm()
 	if m.formErr != "" {
 		t.Fatalf("submit error: %s", m.formErr)
@@ -366,14 +368,14 @@ func TestConnectionsModel_HermesPresetPersistsAsHermes(t *testing.T) {
 	if got.Type != config.ConnTypeHermes {
 		t.Errorf("Hermes preset should persist as Hermes, got %q", got.Type)
 	}
-	if got.URL != "http://127.0.0.1:8642/v1" {
+	if got.URL != "http://localhost:9119" {
 		t.Errorf("URL = %q", got.URL)
 	}
 	if got.Name != "hermes" {
 		t.Errorf("Name = %q", got.Name)
 	}
-	if got.DefaultModel != "hermes-agent" {
-		t.Errorf("DefaultModel = %q", got.DefaultModel)
+	if got.DefaultModel != "" {
+		t.Errorf("DefaultModel should be cleared for Hermes, got %q", got.DefaultModel)
 	}
 }
 

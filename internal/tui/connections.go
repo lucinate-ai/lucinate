@@ -169,13 +169,20 @@ func (p formPreset) connectionType() config.ConnectionType {
 	}
 }
 
-// usesBaseURLAndModel reports whether the preset's persisted type is
-// the OpenAI-compatible HTTP shape — i.e. the form should render
-// "Base URL" + "Default model" rather than "Gateway URL". OpenAI,
-// Ollama, and Hermes all share that shape.
-func (p formPreset) usesBaseURLAndModel() bool {
+// usesBaseURL reports whether the preset's URL field is an HTTP base
+// URL ("Base URL") rather than an OpenClaw gateway URL. OpenAI,
+// Ollama, and Hermes all share that label.
+func (p formPreset) usesBaseURL() bool {
 	t := p.connectionType()
 	return t == config.ConnTypeOpenAI || t == config.ConnTypeHermes
+}
+
+// usesModelField reports whether the form renders the "Default model"
+// input. OpenAI-shaped presets do; Hermes doesn't — the profile pins
+// its model server-side, and the gateway token arrives via the auth
+// modal rather than a form field.
+func (p formPreset) usesModelField() bool {
+	return p.connectionType() == config.ConnTypeOpenAI
 }
 
 // presetForConnection returns the picker preset that best matches an
@@ -428,7 +435,7 @@ func (m *connectionsModel) enterFormForEdit(conn config.Connection) {
 func (m *connectionsModel) applyPresetDefaults(prev formPreset) {
 	const openclawURL = "http://localhost:18789"
 	const ollamaURL = "http://localhost:11434/v1"
-	const hermesURL = "http://127.0.0.1:8642/v1"
+	const hermesURL = "http://localhost:9119"
 	// Step 1: clear any prefill from the previous preset *before*
 	// applying the new one's defaults, so the new preset sees an
 	// empty field and can populate it. Without this ordering,
@@ -469,7 +476,6 @@ func (m *connectionsModel) applyPresetDefaults(prev formPreset) {
 		}
 	case presetHermes:
 		m.urlInput.Placeholder = hermesURL
-		m.modelInput.Placeholder = "hermes-agent"
 		if m.urlInput.Value() == "" {
 			m.urlInput.SetValue(hermesURL)
 		}
@@ -495,7 +501,7 @@ func (m connectionsModel) formFields() []formField {
 		fields = append(fields, formFieldType)
 	}
 	fields = append(fields, formFieldName, formFieldURL)
-	if m.formPreset.usesBaseURLAndModel() {
+	if m.formPreset.usesModelField() {
 		fields = append(fields, formFieldModel)
 	}
 	return fields
@@ -646,6 +652,12 @@ func (m connectionsModel) submitForm() (connectionsModel, tea.Cmd) {
 		Type:         m.formPreset.connectionType(),
 		URL:          url,
 		DefaultModel: strings.TrimSpace(m.modelInput.Value()),
+	}
+	if !m.formPreset.usesModelField() {
+		// Presets without a model input (OpenClaw, Hermes) must not
+		// persist a stale value left over from an earlier type or a
+		// pre-migration Hermes profile name.
+		fields.DefaultModel = ""
 	}
 	if m.editingID == "" {
 		if _, err := m.store.Add(fields); err != nil {
@@ -852,7 +864,7 @@ func (m connectionsModel) viewForm() string {
 	writeLine("")
 
 	urlLabel := "Gateway URL:"
-	if m.formPreset.usesBaseURLAndModel() {
+	if m.formPreset.usesBaseURL() {
 		urlLabel = "Base URL:"
 	}
 	writeLine("  " + urlLabel)
@@ -862,12 +874,8 @@ func (m connectionsModel) viewForm() string {
 	writeLine("")
 
 	modelStart, modelEnd := 0, 0
-	if m.formPreset.usesBaseURLAndModel() {
-		modelLabel := "Default model (optional):"
-		if m.formPreset == presetHermes {
-			modelLabel = "Profile name:"
-		}
-		writeLine("  " + modelLabel)
+	if m.formPreset.usesModelField() {
+		writeLine("  " + "Default model (optional):")
 		modelStart = lineCount
 		writeLine("  " + m.modelInput.View())
 		modelEnd = lineCount - 1

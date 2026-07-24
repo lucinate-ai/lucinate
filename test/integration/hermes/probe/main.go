@@ -1,14 +1,15 @@
 // probe verifies the Hermes backend wiring against a running Hermes
-// API server (typically the Docker container brought up by
-// setup-hermes.sh). It builds the same backend the CLI would, calls
-// Connect, lists models, prints the count. Exits 0 on success and
-// non-zero on failure so setup-hermes.sh can fail fast before the
-// full integration suite runs.
+// gateway (typically the Docker container brought up by
+// setup-hermes.sh). It builds the same backend the CLI would, dials
+// the WebSocket, awaits the gateway.ready handshake, and round-trips
+// session.create + session.list. Exits 0 on success and non-zero on
+// failure so setup-hermes.sh can fail fast before the full
+// integration suite runs.
 //
 // Usage:
 //
-//	LUCINATE_HERMES_BASE_URL=http://localhost:8642/v1 \
-//	  LUCINATE_HERMES_API_KEY=lucinate \
+//	LUCINATE_HERMES_BASE_URL=http://localhost:19119 \
+//	  LUCINATE_HERMES_TOKEN=lucinate \
 //	  go run ./test/integration/hermes/probe
 
 //go:build ignore
@@ -17,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -36,14 +38,13 @@ func run() error {
 	if baseURL == "" {
 		return fmt.Errorf("LUCINATE_HERMES_BASE_URL is not set")
 	}
-	apiKey := os.Getenv("LUCINATE_HERMES_API_KEY")
-	defaultModel := os.Getenv("LUCINATE_HERMES_DEFAULT_MODEL")
+	token := os.Getenv("LUCINATE_HERMES_TOKEN")
 
 	b, err := hermesBackend.New(hermesBackend.Options{
-		ConnectionID: "probe",
-		BaseURL:      baseURL,
-		APIKey:       apiKey,
-		DefaultModel: defaultModel,
+		ConnectionID:   "probe",
+		BaseURL:        baseURL,
+		APIKey:         token,
+		ConnectTimeout: 20 * time.Second,
 	})
 	if err != nil {
 		return fmt.Errorf("backend: %w", err)
@@ -57,10 +58,23 @@ func run() error {
 		return fmt.Errorf("connect: %w", err)
 	}
 
-	models, err := b.ModelsList(ctx)
+	key, err := b.CreateSession(ctx, "hermes", "")
 	if err != nil {
-		return fmt.Errorf("models list: %w", err)
+		return fmt.Errorf("session.create: %w", err)
 	}
-	fmt.Printf("backend probe ok: %d model(s) discovered at %s\n", len(models.Models), baseURL)
+
+	raw, err := b.SessionsList(ctx, "hermes")
+	if err != nil {
+		return fmt.Errorf("session.list: %w", err)
+	}
+	var list struct {
+		Sessions []json.RawMessage `json:"sessions"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return fmt.Errorf("decode session list: %w", err)
+	}
+
+	fmt.Printf("backend probe ok: gateway handshake + session round-trip (session %s, %d listed) at %s\n",
+		key, len(list.Sessions), baseURL)
 	return nil
 }

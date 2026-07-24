@@ -91,6 +91,12 @@ test-integration-openai-teardown:
 test-integration-hermes-setup:
 	./test/integration/setup-hermes.sh
 
+# Echo-leg setup: zero-cost deterministic stub (also drives the
+# scripted tool-call tests). Used by the CI hermes-smoke matrix.
+.PHONY: test-integration-hermes-echo-setup
+test-integration-hermes-echo-setup:
+	./test/integration/setup-hermes.sh --echo
+
 .PHONY: test-integration-hermes
 test-integration-hermes:
 	go test -tags integration_hermes -count=1 -v ./internal/backend/hermes/

@@ -55,11 +55,11 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 
 **Correction from the spike:** the design assumed a separate `session.usage` fetch to attach usage to the final event. In reality `message.complete.payload.usage` is rich and inline (`input/output/total/calls/context_used/context_max/context_percent/cost_usd/…`), so the final event already has everything the header needs. `session.usage` still exists (`{calls,input,output,total}`) for an on-demand `/stats` refresh, but the per-turn path is free. `session.context_breakdown` does **not** exist — dropped.
 
-### WebSocket library: `nhooyr.io/websocket` (`github.com/coder/websocket`)
+### WebSocket library: reuse `gorilla/websocket` (already a dependency)
 
-**Decision:** Adopt `nhooyr.io/websocket` for the WS transport.
+**Decision:** Build the `rpc` client on `github.com/gorilla/websocket` — no new dependency.
 
-**Rationale:** Context-native API (fits our `Call(ctx, …)` shape), no CGo, actively maintained. `gorilla/websocket` is heavier and less context-friendly; the openclaw-go transport is the wrong protocol.
+**Rationale:** gorilla is already a direct dependency: the openclaw-go gateway SDK rides it, and `internal/client`'s dial tests use it in-tree, so it is in the dependency graph permanently. Its `Dialer.DialContext` covers the context-aware dial, and read/write deadlines cover per-call timeouts. Adding `nhooyr.io/websocket` (the original proposal) would mean two WS libraries for one job. The openclaw-go transport itself is still not reusable (it implements the OpenClaw gateway protocol, not generic JSON-RPC), but its supervision pattern is the model.
 
 ### Auth detection: HTTP 403 on the WS upgrade
 
@@ -99,7 +99,7 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 - **Existing connections:** URLs pointing at the legacy API server (`:8642` or a `/v1` path) keep their entry but fail `Connect` with a targeted error instructing the user to run `hermes dashboard`, repoint the URL to the gateway (default `http://localhost:9119`), and paste the gateway token. A failed WS upgrade with **HTTP 403** maps to the canonical `api key required` error so the auth modal opens.
 - **Secrets:** the stored per-connection secret slot (formerly the `API_SERVER_KEY` bearer key) is reused as the gateway token (`HERMES_DASHBOARD_SESSION_TOKEN`); users paste the new token via the existing modal on the first 403.
 - **Removed state:** `~/.lucinate/hermes/<conn-id>/` (`last_response_id`, `prompts.jsonl`) is no longer written or read.
-- **Rollback:** revert the change; the legacy backend and its state files return. No persisted schema changes block a revert. This is called out as a breaking change for Hermes connections in the release notes.
+- **Rollback:** revert the change; the legacy backend and its state files return. No persisted schema changes block a revert. With no users of the Hermes integration, this ships as a normal feature change — no breaking-change callout is needed.
 
 ## Open Questions
 
@@ -128,7 +128,7 @@ Full golden payloads are in [phase0-fixtures.md](phase0-fixtures.md). Summary:
 | `CreateAgent` / `DeleteAgent` | — | rejected; `AgentManagement: false` |
 | `SessionsList` | `session.list` | entries `{id(=stored_session_id), title, preview, started_at, message_count, source}`; only sessions with messages listed |
 | `CreateSession` | `session.create` / `session.resume` | returns **two** ids: live `session_id` + `stored_session_id` |
-| `SessionDelete` | `session.delete {session_id}` | replaces the old local-pointer `/reset` |
+| `SessionDelete` | `session.close` (detach live) + `session.delete {session_id: stored}` | gateway refuses deleting an attached session (4023) |
 | `ChatSend` | `prompt.submit {session_id, text}` → `{status:"streaming"}` | run id = idempotency key; skills catalogue preamble on turn 1 |
 | `ChatAbort` | `session.interrupt {session_id}` | real server-side interrupt (aborted-event shape TBC) |
 | `ChatHistory` | `session.history {session_id}` → `{count, messages}` | full transcript from the server |

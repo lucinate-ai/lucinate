@@ -156,6 +156,24 @@ Not observed (need targeted triggers): `reasoning.delta` (reasoning models only 
 emits `reasoning.available` instead), `tool.output_risk`, `status.update`, and the live
 `approval.request` payload (the `terminal` tool auto-runs; approval needs a shell-hook / risky tool).
 
+## Harness-run discoveries (echo leg, v2026.6.5)
+
+Found while bringing the retooled harness up against the live gateway:
+
+- **`session.delete` refuses an attached session** — code `4023 cannot delete an
+  active session`. The live handle must be detached first via
+  **`session.close {session_id: <live>}` → `{"closed": true}`**; after close the
+  live handle no longer resolves (`4007 session not found`), so the delete must
+  address the **stored** id. The backend's `SessionDelete` does close-then-delete.
+- **`session.usage` returns zeroed totals even after a completed turn** on this
+  version (`cost_status: "unknown"`). The authoritative per-turn usage is the
+  inline `message.complete.payload.usage`; `/stats` may render zeros on older
+  gateways.
+- The inline `custom` provider config (base_url + api_key seeded in
+  `config.yaml`) **works** against the gateway — the earlier OpenRouter-inline
+  failure was endpoint-specific, not a general custom-provider break. The echo
+  and Ollama legs both ride `provider: "custom"`.
+
 ## Still open after this spike
 
 - Live `approval.request` payload (response method `approval.respond {choice:"deny"}` is confirmed; only the request payload is uncaptured) — capture before Phase 2.

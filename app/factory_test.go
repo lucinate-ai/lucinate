@@ -108,22 +108,17 @@ func TestSecretAwareOpenAIBackend_StoreAPIKeyClear(t *testing.T) {
 }
 
 // TestSecretAwareHermesBackend_StoreAPIKeyPersistsToDisk mirrors the
-// OpenAI wrapper test for the Hermes wrapper: the auth-modal Store-
-// APIKey path must persist under the connection ID and update the
-// in-memory copy so subsequent requests carry the new bearer.
+// OpenAI wrapper test for the Hermes wrapper: the auth-modal
+// StoreAPIKey path must persist the gateway token under the connection
+// ID and update the in-memory copy used by the next dial. (Dial-time
+// propagation itself is covered by the hermes package's own tests.)
 func TestSecretAwareHermesBackend_StoreAPIKeyPersistsToDisk(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"data":[]}`)
-	}))
-	defer srv.Close()
 
 	connID := "hermes-conn"
 	inner, err := hermesBackend.New(hermesBackend.Options{
 		ConnectionID: connID,
-		BaseURL:      srv.URL + "/v1",
-		HTTPClient:   srv.Client(),
+		BaseURL:      "http://localhost:9119",
 	})
 	if err != nil {
 		t.Fatalf("hermes.New: %v", err)
@@ -140,19 +135,6 @@ func TestSecretAwareHermesBackend_StoreAPIKeyPersistsToDisk(t *testing.T) {
 
 	if got := config.GetAPIKey(connID); got != "hermes-token" {
 		t.Errorf("config.GetAPIKey(%q) = %q, want hermes-token", connID, got)
-	}
-
-	// In-memory propagation: a follow-up call carries the new bearer.
-	var seen string
-	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = r.Header.Get("Authorization")
-		_, _ = io.WriteString(w, `{"data":[]}`)
-	})
-	if _, err := wrapper.ModelsList(context.Background()); err != nil {
-		t.Fatalf("ModelsList: %v", err)
-	}
-	if seen != "Bearer hermes-token" {
-		t.Errorf("Authorization header = %q, want Bearer hermes-token", seen)
 	}
 }
 

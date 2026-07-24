@@ -4,8 +4,8 @@ The Hermes backend rides Hermes' OpenAI-Responses-compatible HTTP API (`/v1/resp
 
 ## What Changes
 
-- **BREAKING** — Replace the Hermes backend transport entirely: HTTP/SSE against `/v1/responses` → a JSON-RPC-over-WebSocket client speaking the `tui_gateway` protocol against `hermes dashboard` (`/api/ws`). No dual-transport fallback. There are no real users of the Hermes integration today, so a clean break is acceptable.
-- **BREAKING** — Existing Hermes connections that point at the legacy API server (`:8642/v1`) stop connecting. They keep their entry but `Connect` fails with a targeted migration error telling the user to run `hermes dashboard` and repoint the URL (default `http://localhost:9119`) with the gateway token. The user must switch their server process (`gateway run` → `dashboard`), so no silent auto-migration is possible.
+- Replace the Hermes backend transport entirely: HTTP/SSE against `/v1/responses` → a JSON-RPC-over-WebSocket client speaking the `tui_gateway` protocol against `hermes dashboard` (`/api/ws`). No dual-transport fallback. There are no users of the Hermes integration today, so this is a clean swap rather than a breaking change — no compatibility or deprecation path is owed.
+- Any stored Hermes connection that points at the legacy API server (`:8642/v1`) stops connecting. It keeps its entry but `Connect` fails with a targeted migration error telling the user to run `hermes dashboard` and repoint the URL (default `http://localhost:9119`) with the gateway token. The user must switch their server process (`gateway run` → `dashboard`), so no silent auto-migration is possible.
 - Unlock feature parity with OpenClaw where Hermes has the primitive: tool call cards, `/stats` + live header usage, `/compact`, real server-side abort, real session list / history / delete, and `!!` remote exec.
 - Delete the client-side state directory `~/.lucinate/hermes/<conn-id>/` (`last_response_id`, `prompts.jsonl`), the history walk-back, the `/v1/responses` SSE path, and Hermes' use of `internal/backend/httpcommon`.
 - Add a new WebSocket JSON-RPC client (`internal/backend/hermes/rpc`) and a pure event-translation layer, plus real reconnect/supervision (the current `Supervise` is a no-op stub).
@@ -24,7 +24,7 @@ The Hermes backend rides Hermes' OpenAI-Responses-compatible HTTP API (`/v1/resp
 ## Impact
 
 - **Code:** `internal/backend/hermes` rewritten (`backend.go`, `translate.go`, `usage.go`, new `rpc/` package); `prompts.go` deleted. `internal/backend/hermes` stops importing `internal/backend/httpcommon`. `app/factory.go` `secretAwareHermesBackend` shim reused (secret slot repurposed as the gateway token). Connections form for Hermes drops the `/v1` hint and the DefaultModel field.
-- **Dependencies:** new WebSocket library `nhooyr.io/websocket` (a.k.a. `github.com/coder/websocket`) — context-native, no CGo. The openclaw-go SDK transport is not reusable (different protocol) but its supervision pattern is the model.
+- **Dependencies:** none added — the WS transport reuses the existing `github.com/gorilla/websocket` direct dependency (already required by the openclaw-go gateway SDK). The openclaw-go SDK transport is not reusable (different protocol) but its supervision pattern is the model.
 - **State / migration:** `~/.lucinate/hermes/<conn-id>/` removed. Stored per-connection secret is reused as the gateway token; users paste the new token via the existing auth modal on the first HTTP 403 upgrade rejection.
 - **Verification / CI:** `test/integration/hermes/` retooled (`setup-hermes.sh`, `make test-integration-hermes*`); `test/integration/echomodel` grows a scripted tool-call mode; new `hermes-smoke` job in `.github/workflows/integration.yml`.
 - **Docs:** `docs/backend_hermes.md` rewritten. The earlier standalone design draft has been folded into this change's `design.md` (see its Reference appendix).
