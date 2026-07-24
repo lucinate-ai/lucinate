@@ -86,6 +86,12 @@ The `/opsx:*` slash commands and `openspec-*` skills are installed under `.claud
 `openspec archive <id>`. OpenSpec is brownfield-first: write specs for what you are changing —
 don't back-fill specs for untouched code.
 
+When more than one change is in flight, [concord](https://github.com/lucinate-ai/concord) guards
+the archive step: `npx @lucinate-ai/concord ci` reports base-branch drift, delta targets that were
+removed or renamed upstream, name collisions, and requirements claimed by two open changes. Run it
+before archiving and after rebasing onto `main`; the `concord` skill under `.claude/skills/`
+explains each finding, and `.github/workflows/concord.yml` runs the same gate on every PR.
+
 Only a genuinely self-contained fix — a typo, a one-line behaviour tweak with its test — may
 update the spec directly (and the doc if the reasoning changed), skipping the change ceremony.
 When you are unsure whether something clears that bar, it does not: propose the change and let the

@@ -1,0 +1,35 @@
+name: concord
+
+# Guards this repo's OpenSpec deltas against concurrent-edit hazards before an
+# archive can silently clobber someone's work: base-branch drift, targets that
+# were removed or renamed upstream, name collisions, and a requirement claimed
+# by two open changes at once. Uses concord's own composite action, which
+# installs a pinned concord, runs `concord ci`, and renders findings as PR
+# annotations plus a job step summary.
+#
+# See https://github.com/lucinate-ai/concord/blob/main/docs/github-actions.md
+# and the in-repo agent skill at .claude/skills/concord/SKILL.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  concord:
+    name: OpenSpec drift + overlap
+    runs-on: ubuntu-latest
+    steps:
+      # Full history is required: concord reconstructs each targeted
+      # requirement at merge-base(HEAD, base) and at the base tip from git
+      # history alone, so a shallow checkout breaks drift detection.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: lucinate-ai/concord/actions/ci@v1
