@@ -73,11 +73,11 @@ A `backend.Backend` interface plus optional sub-interfaces (`StatusBackend`, `Us
 
 **Rationale:** This is the user's explicit ask — verification must be durable and live in CI/CD, not a one-off local check. The version matrix is the drift alarm: upstream moves fast and a protocol change should break a pinned CI leg, not a user. The spike confirmed the harness can drive real chat and tool turns against the container with an OpenAI-compatible provider, which is exactly what the echomodel leg needs.
 
-### Harness runs `hermes dashboard --insecure`; no socat sidecar
+### Harness binds loopback with a socat sidecar (version-proof)
 
-**Decision:** The container runs `hermes dashboard --host 0.0.0.0 --port 9119 --no-open --skip-build --insecure` and publishes the port directly — a single compose service, no socat sidecar.
+**Decision:** The container runs `hermes dashboard --host 127.0.0.1 --port 9119 --no-open --skip-build` and an `alpine/socat` sidecar in the same network namespace forwards the published port into the loopback bind. The server sees a loopback bind and peer, so token auth stays active on every supported version.
 
-**Correction from the spike:** the design proposed a loopback bind + `alpine/socat` sidecar (its self-described "riskiest single assumption") because a non-loopback bind was assumed to force OAuth. **Tested and false.** Driving `--insecure --host 0.0.0.0` from a genuine non-loopback peer (a sibling container over a Docker network) connected cleanly with `?token=` and returned `gateway.ready`; bad/missing token still gave HTTP 403; a non-loopback `Host` header was accepted (no host-guard rejection). So `--insecure` keeps token-mode on a non-loopback bind and the socat trickery is unnecessary. `--skip-build` serves the prebuilt SPA at `/opt/hermes/hermes_cli/web_dist` (confirmed present).
+**History — this one flip-flopped, both times on live evidence.** The spike found `--insecure --host 0.0.0.0` keeps token-mode on `v2026.6.5` (verified from a genuine non-loopback peer), so the sidecar was briefly dropped. The CI matrix then caught the regression the drift alarm exists for: **`v2026.7.7.2` refuses any non-loopback bind without a registered auth provider** — "There is no unauthenticated public-bind option" — and exits at boot. The loopback + socat shape works across the whole matrix and is the settled topology. `--skip-build` serves the prebuilt SPA at `/opt/hermes/hermes_cli/web_dist` (confirmed present on both tags).
 
 ### Phased delivery; this change is Phases 0–1
 
@@ -175,18 +175,22 @@ internal/backend/hermes/
 
 ### Harness topology (compose)
 
-Single service — `hermes dashboard --insecure --host 0.0.0.0` with the port published directly (the spike proved token-mode survives a non-loopback bind, so no socat sidecar):
+Loopback bind + socat sidecar — the only shape that keeps token auth on every supported version (newer releases refuse non-loopback binds without an auth provider):
 
 ```yaml
 services:
   hermes:
     image: nousresearch/hermes-agent:${HERMES_TAG:-v2026.7.7.2}
-    command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--skip-build", "--insecure"]
-    ports: ["19119:9119"]
+    command: ["dashboard", "--host", "127.0.0.1", "--port", "9119", "--no-open", "--skip-build"]
+    ports: ["19119:19119"]
     extra_hosts: ["host.docker.internal:host-gateway"]
     volumes: ["./state:/opt/data"]
     environment:
       HERMES_DASHBOARD_SESSION_TOKEN: "lucinate"
+  wsproxy:
+    image: alpine/socat
+    network_mode: "service:hermes"
+    command: ["TCP-LISTEN:19119,fork,bind=0.0.0.0", "TCP:127.0.0.1:9119"]
 ```
 
 `--skip-build` serves the prebuilt SPA (`/opt/hermes/hermes_cli/web_dist`, confirmed present). Three inference legs, same as OpenClaw: **Ollama** (`qwen2.5:0.5b` on host, local dev), **Echo** (echomodel stub, zero-cost deterministic CI), **Echo scripted** (echomodel tool-call script). The scripted mode triggers on a magic marker (e.g. `[[tool:shell echo lucinate]]`): the stub replies with an OpenAI-format `tool_calls` response, then a plain-text follow-up carrying the tool result, so Hermes executes the tool for real and emits real `tool.*` frames. (The spike proved this end to end against OpenRouter's `openai/gpt-4o-mini` via the first-class `openrouter` provider — the terminal tool ran and emitted real `tool.start`/`tool.complete` frames.)

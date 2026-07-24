@@ -139,18 +139,20 @@ Phase 1's auto-decline policy: on any of these, call the matching `*.respond` to
 `approval.request` payload wasn't captured (the `terminal` tool auto-runs; approval needs a
 shell-hook or a risky tool to trigger) — capture it before Phase 2.
 
-## Harness host-reachability — RESOLVED (socat not needed)
+## Harness host-reachability — version-dependent; loopback + socat is the settled shape
 
-`dashboard --insecure --host 0.0.0.0` was tested from a **genuine non-loopback peer** (a sibling
-container connecting to `hermes-net:9119` over a Docker network):
+On **`v2026.6.5`**, `dashboard --insecure --host 0.0.0.0` was tested from a genuine non-loopback
+peer: good `?token=` connected (`gateway.ready`), bad/missing token → HTTP 403, non-loopback
+`Host` accepted. Token-mode survived a non-loopback bind on that version.
 
-- good `?token=` → **CONNECTED, `gateway.ready`** — token-mode survives a non-loopback bind.
-- bad / missing token → **HTTP 403** (same as loopback).
-- a non-loopback `Host` header (`hermes-net:9119`) → still connects; **no host-guard rejection**.
+On **`v2026.7.7.2`**, the CI matrix caught the completed hardening: the dashboard **refuses any
+non-loopback bind without a registered auth provider** and exits at boot — "There is no
+unauthenticated public-bind option — to keep it local, bind 127.0.0.1 and tunnel in." `--insecure`
+no longer opts out.
 
-So the original "non-loopback bind forces OAuth, need a socat sidecar" assumption is **wrong** for
-`v2026.6.5`. The harness can bind `0.0.0.0 --insecure` and publish the port directly — a single
-compose service, no socat.
+The harness therefore binds loopback inside the container and forwards the published port with an
+`alpine/socat` sidecar in the same network namespace — token-mode active on every supported
+version. Verified live on both tags via the CI matrix (and locally through socat on v2026.6.5).
 
 Not observed (need targeted triggers): `reasoning.delta` (reasoning models only — gpt-4o-mini
 emits `reasoning.available` instead), `tool.output_risk`, `status.update`, and the live

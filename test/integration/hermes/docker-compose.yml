@@ -6,11 +6,15 @@
 #   bounds protocol drift — the CI matrix runs the oldest supported
 #   tag and the current stable pin as the drift alarm.
 # - Runs the `hermes dashboard` gateway (tui_gateway JSON-RPC over
-#   WebSocket at /api/ws). `--insecure --host 0.0.0.0` keeps token
-#   auth on a non-loopback bind (verified in the Phase 0 spike), so
-#   the port publishes directly — no socat sidecar.
-# - Maps host port 19119 → container 9119 to avoid clashing with a
-#   developer's locally-running Hermes dashboard on the default port.
+#   WebSocket at /api/ws) bound to loopback, which keeps token auth
+#   active. Newer releases (seen on v2026.7.7.2) refuse any
+#   non-loopback bind without a registered auth provider — `--insecure`
+#   no longer opts out — so the published port is forwarded into the
+#   loopback bind by a socat sidecar sharing the container's network
+#   namespace. The server still sees a loopback bind and peer, so
+#   token mode stays active on every supported version.
+# - Maps host port 19119 (socat) → 9119 (dashboard) to avoid clashing
+#   with a developer's locally-running Hermes on the default port.
 # - Mounts ./state as /opt/data so the seeded config.yaml drives the
 #   container and teardown can wipe state cleanly.
 # - Inference routes to the host (echomodel stub or Ollama) via
@@ -23,15 +27,14 @@ services:
       [
         "dashboard",
         "--host",
-        "0.0.0.0",
+        "127.0.0.1",
         "--port",
         "9119",
         "--no-open",
         "--skip-build",
-        "--insecure",
       ]
     ports:
-      - "19119:9119"
+      - "19119:19119"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -40,3 +43,7 @@ services:
       HERMES_DASHBOARD_SESSION_TOKEN: "lucinate"
     # No in-container healthcheck: the upstream image doesn't ship
     # curl/wget, so setup-hermes.sh polls the published port instead.
+  wsproxy:
+    image: alpine/socat
+    network_mode: "service:hermes"
+    command: ["TCP-LISTEN:19119,fork,bind=0.0.0.0", "TCP:127.0.0.1:9119"]

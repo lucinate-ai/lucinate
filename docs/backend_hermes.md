@@ -77,10 +77,12 @@ captured from the live gateway (`testdata/events/`). The quirks worth knowing:
 
 ## Integration harness
 
-`test/integration/hermes/` boots the pinned upstream image with `hermes dashboard --host
-0.0.0.0 --insecure --skip-build` and publishes the port directly. `--insecure` keeps
-token-mode on a non-loopback bind (verified from a genuine non-loopback peer), so no proxy
-sidecar is needed; `--skip-build` works because the published image ships a prebuilt SPA.
+`test/integration/hermes/` boots the pinned upstream image with `hermes dashboard` bound to
+loopback, and an `alpine/socat` sidecar in the same network namespace forwards the published
+port into that bind. Loopback is the only shape that keeps token auth on every supported
+version: `--insecure --host 0.0.0.0` worked on `v2026.6.5` but `v2026.7.7.2` refuses any
+non-loopback bind without a registered auth provider — a change the CI version matrix caught
+on its very first run. `--skip-build` works because the published image ships a prebuilt SPA.
 Inference routes to the host via `provider: "custom"` seeded in `state/config.yaml` — the
 echo leg (`setup-hermes.sh --echo`) points it at the `echomodel` stub, the default leg at
 Ollama. echomodel's scripted mode answers a `[[tool:shell CMD]]` marker with an OpenAI-format
