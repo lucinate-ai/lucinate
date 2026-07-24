@@ -1,0 +1,1 @@
+{"type": "tool.complete", "session_id": "82a46f28", "payload": {"tool_id": "call_QyqcRwF2l2VU6qptv3WtANqV", "name": "terminal", "args": {"command": "false"}, "duration_s": 0.4, "result": {"output": "", "exit_code": 1, "error": "command exited with status 1"}}}

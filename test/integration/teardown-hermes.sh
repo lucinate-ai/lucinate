@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Tears down the Hermes integration test environment:
-#   1. docker compose down -v on the Hermes container.
+#   1. Stops the echo-leg echomodel stub if one is running, then
+#      docker compose down -v on the Hermes container.
 #   2. Removes test/integration/hermes/state/ (the seeded profile config
 #      and any state Hermes wrote to it).
 #   3. Removes .env.hermes.
@@ -18,6 +19,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 HERMES_DIR="$SCRIPT_DIR/hermes"
 COMPOSE_FILE="$HERMES_DIR/docker-compose.yml"
+ECHO_PID_FILE="$HERMES_DIR/echomodel.pid"
+
+if [ -f "$ECHO_PID_FILE" ]; then
+    kill "$(cat "$ECHO_PID_FILE")" 2>/dev/null || true
+    rm -f "$ECHO_PID_FILE" "$HERMES_DIR/echomodel.bin" "$HERMES_DIR/echomodel.log"
+fi
 
 info() { printf "\033[1;34m==>\033[0m %s\n" "$*"; }
 ok()   { printf "\033[1;32m  ✓\033[0m %s\n" "$*"; }
@@ -33,7 +40,15 @@ fi
 
 if [ -d "$HERMES_DIR/state" ]; then
     info "Removing $HERMES_DIR/state/"
-    rm -rf "$HERMES_DIR/state"
+    if ! rm -rf "$HERMES_DIR/state" 2>/dev/null; then
+        # The gateway container runs as root (its s6 init requires it)
+        # and leaves root-owned files in the bind mount that the host
+        # user can't delete — seen on CI runners. Delete them with the
+        # same privileges they were written with.
+        docker run --rm -v "$HERMES_DIR/state:/state" alpine \
+            sh -c 'rm -rf /state/* /state/..?* /state/.[!.]*' 2>/dev/null || true
+        rm -rf "$HERMES_DIR/state"
+    fi
     ok "State directory removed"
 fi
 

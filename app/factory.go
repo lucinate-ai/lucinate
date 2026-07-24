@@ -33,9 +33,10 @@ func (s *secretAwareOpenAIBackend) StoreAPIKey(key string) error {
 
 // secretAwareHermesBackend layers persistence onto the Hermes
 // backend's auth-modal StoreAPIKey for the same reason as its OpenAI
-// sibling. Hermes uses the same Bearer-token auth shape, so the
-// recovery path is identical — we just persist under the connection
-// ID in the secrets store.
+// sibling. The stored secret is the Hermes gateway session token
+// (HERMES_DASHBOARD_SESSION_TOKEN) rather than a bearer key, but the
+// recovery path is identical — we persist under the connection ID in
+// the secrets store.
 type secretAwareHermesBackend struct {
 	*hermesBackend.Backend
 	connID string
@@ -110,16 +111,16 @@ func DefaultBackendFactory(conn *Connection) (Backend, error) {
 		}
 		return &secretAwareOpenAIBackend{Backend: b, connID: conn.ID}, nil
 	case ConnTypeHermes:
-		// Hermes uses the same Bearer-token shape as OpenAI; the
-		// secrets store is the source of truth, no env-var fallback at
-		// this layer (integration tests inject the key via the per-
-		// connection store).
+		// The stored per-connection secret is the gateway session
+		// token; the secrets store is the source of truth, no env-var
+		// fallback at this layer (integration tests inject the token
+		// via the per-connection store). The Hermes profile pins its
+		// model server-side, so no DefaultModel is passed.
 		apiKey := config.GetAPIKey(conn.ID)
 		b, err := hermesBackend.New(hermesBackend.Options{
 			ConnectionID:   conn.ID,
 			BaseURL:        conn.URL,
 			APIKey:         apiKey,
-			DefaultModel:   conn.DefaultModel,
 			ConnectTimeout: connectTimeout,
 		})
 		if err != nil {

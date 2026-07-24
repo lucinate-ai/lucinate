@@ -1,0 +1,1 @@
+{"type": "gateway.ready", "payload": {"skin": {"name": "default", "colors": {"banner_border": "#CD7F32", "banner_title": "#FFD700"}, "branding": {"agent_name": "Hermes Agent", "welcome": "Welcome to Hermes Agent! Type your message or /help for commands.", "prompt_symbol": "❯"}}}}

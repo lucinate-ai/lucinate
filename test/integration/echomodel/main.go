@@ -20,6 +20,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -67,12 +68,12 @@ func (s *server) route(w http.ResponseWriter, r *http.Request) {
 func (s *server) ollamaTags(w http.ResponseWriter) {
 	writeJSON(w, map[string]any{
 		"models": []map[string]any{{
-			"name":       s.model,
-			"model":      s.model,
-			"size":       1,
-			"digest":     "echo",
+			"name":        s.model,
+			"model":       s.model,
+			"size":        1,
+			"digest":      "echo",
 			"modified_at": "2026-01-01T00:00:00Z",
-			"details":    s.details(),
+			"details":     s.details(),
 		}},
 	})
 }
@@ -177,14 +178,34 @@ type openAIChatRequest struct {
 	} `json:"messages"`
 }
 
+// toolMarkerRe is the scripted-mode trigger: a prompt containing
+// [[tool:shell CMD]] makes the stub reply with an OpenAI-format
+// tool_calls invocation of Hermes' terminal tool running CMD, then a
+// plain text turn once the tool result comes back. Hermes executes the
+// tool for real and emits real tool.start / tool.complete frames over
+// the WS — integration tests assert on that protocol structure, not on
+// model behaviour.
+var toolMarkerRe = regexp.MustCompile(`\[\[tool:shell ([^\]]+)\]\]`)
+
 func (s *server) openAIChat(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	var req openAIChatRequest
 	_ = json.Unmarshal(body, &req)
 
-	reply := "echo: " + openAILastUser(req)
 	created := time.Now().Unix()
 	id := "echo-cmpl"
+
+	if m := toolMarkerRe.FindStringSubmatch(openAILastUser(req)); m != nil && !hasToolResult(req) {
+		s.openAIToolCall(w, req, strings.TrimSpace(m[1]), created, id)
+		return
+	}
+
+	reply := "echo: " + openAILastUser(req)
+	if lastTool := lastToolResult(req); lastTool != "" {
+		// Follow-up request carrying the executed tool's output: close
+		// the turn with a deterministic plain-text reply.
+		reply = "tool-ok: " + lastTool
+	}
 
 	if !req.Stream {
 		writeJSON(w, map[string]any{
@@ -238,6 +259,90 @@ func openAILastUser(req openAIChatRequest) string {
 		break
 	}
 	return "ok"
+}
+
+// hasToolResult reports whether the conversation already carries a
+// tool-role message — i.e. the scripted call has been executed and
+// this request wants the closing text turn.
+func hasToolResult(req openAIChatRequest) bool {
+	for _, m := range req.Messages {
+		if m.Role == "tool" {
+			return true
+		}
+	}
+	return false
+}
+
+// lastToolResult returns the content of the newest tool-role message,
+// or "" when there is none.
+func lastToolResult(req openAIChatRequest) string {
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role != "tool" {
+			continue
+		}
+		if c, ok := req.Messages[i].Content.(string); ok {
+			return strings.TrimSpace(c)
+		}
+		return ""
+	}
+	return ""
+}
+
+// openAIToolCall answers with a tool_calls completion invoking Hermes'
+// terminal tool, in both streaming and non-streaming shapes.
+func (s *server) openAIToolCall(w http.ResponseWriter, req openAIChatRequest, command string, created int64, id string) {
+	args, _ := json.Marshal(map[string]string{"command": command})
+	toolCalls := []map[string]any{{
+		"id":   "call_echo_scripted",
+		"type": "function",
+		"function": map[string]any{
+			"name":      "terminal",
+			"arguments": string(args),
+		},
+	}}
+
+	if !req.Stream {
+		writeJSON(w, map[string]any{
+			"id": id, "object": "chat.completion", "created": created, "model": s.model,
+			"choices": []map[string]any{{
+				"index": 0,
+				"message": map[string]any{
+					"role": "assistant", "content": nil, "tool_calls": toolCalls,
+				},
+				"finish_reason": "tool_calls",
+			}},
+			"usage": map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	flusher, _ := w.(http.Flusher)
+	chunk := func(delta map[string]any, finish any) {
+		payload, _ := json.Marshal(map[string]any{
+			"id": id, "object": "chat.completion.chunk", "created": created, "model": s.model,
+			"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": finish}},
+		})
+		fmt.Fprintf(w, "data: %s\n\n", payload)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+	streamCalls := []map[string]any{{
+		"index": 0,
+		"id":    "call_echo_scripted",
+		"type":  "function",
+		"function": map[string]any{
+			"name":      "terminal",
+			"arguments": string(args),
+		},
+	}}
+	chunk(map[string]any{"role": "assistant", "tool_calls": streamCalls}, nil)
+	chunk(map[string]any{}, "tool_calls")
+	fmt.Fprint(w, "data: [DONE]\n\n")
+	if flusher != nil {
+		flusher.Flush()
+	}
 }
 
 // --- helpers -------------------------------------------------------------

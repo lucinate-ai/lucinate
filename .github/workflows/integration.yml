@@ -1,4 +1,4 @@
-name: Integration (openclaw)
+name: Integration (backends)
 
 # Smoke-tests the gateway connection (protocol negotiation, device pairing,
 # and a chat round-trip) against a matrix of OpenClaw gateway versions, using a
@@ -58,3 +58,49 @@ jobs:
       - name: Teardown
         if: always()
         run: ./test/integration/teardown-openclaw.sh
+
+  hermes-smoke:
+    name: hermes ${{ matrix.hermes }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Sweep the supported Hermes gateway window. Each entry is the
+        # nousresearch/hermes-agent image tag. Keep exactly two pins:
+        #   - the oldest supported release (v2026.6.5 / v0.16.0 — first
+        #     with the dashboard WS gateway and hardened token auth)
+        #   - the current stable pin (also the HERMES_TAG default in
+        #     test/integration/setup-hermes.sh + hermes/docker-compose.yml;
+        #     bump all three together)
+        # Upstream's WS surface is not a stability-guaranteed API — this
+        # matrix is the drift alarm, so a protocol change breaks a pinned
+        # CI leg rather than a user.
+        hermes:
+          - "v2026.6.5"   # oldest supported
+          - "v2026.7.7.2" # current stable pin
+    env:
+      HERMES_TAG: ${{ matrix.hermes }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Set up integration env (echo model)
+        run: ./test/integration/setup-hermes.sh --echo
+
+      - name: Hermes backend integration tests
+        run: make test-integration-hermes
+
+      - name: Gateway logs (on failure)
+        if: failure()
+        run: docker compose -f test/integration/hermes/docker-compose.yml logs hermes || true
+
+      - name: Echo model logs (on failure)
+        if: failure()
+        run: cat test/integration/hermes/echomodel.log || true
+
+      - name: Teardown
+        if: always()
+        run: ./test/integration/teardown-hermes.sh
