@@ -59,24 +59,37 @@ Reach for the spec for "what should happen"; the doc for "why, and what to watch
 
 ### Making a change
 
-For any non-trivial change to behaviour, work through OpenSpec rather than editing a spec by
-hand — the delta gets reviewed before it lands in the spec:
+**Before implementing any material change to behaviour, stop and route it through OpenSpec — do
+not start editing code or specs first.** A material change is anything past a trivial fix: a new
+command / key binding / event handler, a new form field or view, a changed state machine, a
+broadened or narrowed capability, a new gateway RPC surfaced in the TUI. For these, redirect the
+user to the OpenSpec flow and land the proposal *before* writing implementation code, so the delta
+is reviewed before it ships:
 
 1. `/opsx:propose <kebab-id>` (optionally `/opsx:explore` first to think it through) scaffolds
    `openspec/changes/<id>/` with `proposal.md`, `design.md`, `tasks.md`, and delta specs under
-   `specs/<domain>/spec.md` using `## ADDED` / `## MODIFIED` / `## REMOVED Requirements`.
+   `specs/<domain>/spec.md` using `## ADDED` / `## MODIFIED` / `## REMOVED` / `## RENAMED
+   Requirements`.
 2. Implement against `tasks.md` (`/opsx:apply`), keeping code, tests, and the delta in step.
-3. `/opsx:archive` merges the delta into `openspec/specs/` and moves the change to
-   `openspec/changes/archive/`.
+3. `/opsx:archive` (or `openspec archive <id>`) merges the delta into `openspec/specs/` and moves
+   the change to `openspec/changes/archive/`.
+
+**Never hand-edit files under `openspec/specs/` for a material change.** That directory is the
+source of truth, and `openspec archive` is what writes it — by merging the reviewed delta. Treat
+`openspec/specs/**` as generated: change the delta, then archive. Editing a spec directly and
+retrofitting a change afterwards forces the archive into rename/reorder reconciliation and skips
+the review the delta exists to provide — if you catch yourself having done this, revert the SOT
+edit and let `openspec archive` re-apply the delta.
 
 The `/opsx:*` slash commands and `openspec-*` skills are installed under `.claude/`. Useful CLI:
 `openspec list [--specs]`, `openspec show <item>`, `openspec validate --specs`,
 `openspec archive <id>`. OpenSpec is brownfield-first: write specs for what you are changing —
 don't back-fill specs for untouched code.
 
-Small, self-contained fixes (a typo, a one-line behaviour tweak with its test) may update the
-spec directly — and the doc if the reasoning changed — without the full change ceremony where it
-adds no value.
+Only a genuinely self-contained fix — a typo, a one-line behaviour tweak with its test — may
+update the spec directly (and the doc if the reasoning changed), skipping the change ceremony.
+When you are unsure whether something clears that bar, it does not: propose the change and let the
+user decide. Do not reclassify a feature as a "small fix" to skip the flow.
 
 ## Testing requirements
 
