@@ -1,3 +1,8 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: Create and edit form constrained to cron schedules and agentTurn payloads`
+- TO: `### Requirement: Create and edit form constrained to cron/every schedules and agentTurn payloads`
+
 ## MODIFIED Requirements
 
 ### Requirement: Create and edit form constrained to cron/every schedules and agentTurn payloads

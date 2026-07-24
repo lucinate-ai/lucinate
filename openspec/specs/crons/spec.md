@@ -3,9 +3,7 @@
 ## Purpose
 
 Provide an in-TUI browser (`internal/tui/crons.go`) that lets users list, inspect, run, edit, create, and delete the gateway's scheduled jobs without leaving lucinate. Cron is gateway-side scheduling, not a lucinate concept — only backends that implement `backend.CronBackend` expose the view. This spec covers the two entry points, the capability surface, the four substates (list, detail, form, confirm-delete), the transcript view, raw-patch edit semantics, payload field mapping, the duplicate flow, and what is deliberately out of scope.
-
 ## Requirements
-
 ### Requirement: Cron browser availability gated on CronBackend
 
 The cron browser SHALL only be exposed for backends that implement `backend.CronBackend`, because cron is gateway-side scheduling rather than a lucinate concept. Capability SHALL also be reported as `Capabilities.Cron` so embedders can hide the entry up-front.
@@ -203,42 +201,6 @@ The transcript chat view SHALL set `chatModel.transcript = true`. With no input 
 - **WHEN** the user presses `Esc`
 - **THEN** the chat key handler emits `goBackFromCronTranscriptMsg`, `AppModel` switches back to `viewCrons`, and the preserved `cronsModel.subset`/`selectedID` land the user on the originating detail page
 
-### Requirement: Create and edit form constrained to cron/every schedules and agentTurn payloads
-
-The create and edit form SHALL share `cronForm` and the `cronFormField` enum (14 fields, tab-ordered). The gateway protocol exposes union types (`CronSchedule.Kind` ∈ `at`/`every`/`cron`; `CronPayload.Kind` ∈ `systemEvent`/`agentTurn`); to keep the TUI form tractable it SHALL model the two common shapes — `cron` and `every` schedules, and `agentTurn` payloads — and route the rest to the CLI. A `scheduleKind` toggle (`cron`/`every`) SHALL select between a cron-expression input and an interval input; the interval SHALL be a human duration (e.g. `15m`, `1h30m`) parsed to `everyMs`. Because the form does not surface an `every` schedule's `anchorMs`/`staggerMs`, those SHALL be carried off the source job and re-emitted on save so an edit does not silently shift the job's run phase.
-
-Editing a job whose schedule kind is `at` (or whose payload kind is `systemEvent`) SHALL load the form in a refused state showing the banner:
-
-> Edit not supported for schedule kind "at". Use the openclaw CLI.
-
-The save path SHALL be suppressed in this state — the system surfaces the brittleness rather than silently round-tripping a truncated representation.
-
-Tab/Shift+Tab SHALL navigate fields. Space SHALL toggle the cycle/checkbox controls (`scheduleKind`, `sessionTarget`, `wakeMode`, `deliveryMode`, `enabled`). Inside the payload `textarea`, Enter SHALL insert a newline; Ctrl+S (or Alt+Enter) SHALL save from anywhere; Esc SHALL cancel and return to whichever substate opened the form.
-
-#### Scenario: Editing an every schedule is supported
-
-- **GIVEN** a job whose schedule kind is `every` and payload kind is `agentTurn`
-- **WHEN** the user opens the edit form
-- **THEN** the form loads with `scheduleKind=every`, the interval pre-populated from `everyMs`, and the `anchorMs`/`staggerMs` carried so a save re-emits them
-- **AND** submitting sends a `schedule` of kind `every` carrying `everyMs` (and no cron `expr`/`tz`)
-
-#### Scenario: Editing an unmodelled kind is refused
-
-- **GIVEN** a job whose schedule kind is `at` or whose payload kind is not `agentTurn`
-- **WHEN** the user opens the edit form
-- **THEN** the form loads in a refused state showing `Edit not supported for schedule kind "at". Use the openclaw CLI.` and the save path is suppressed
-
-#### Scenario: Interval is validated on save
-
-- **GIVEN** the edit form with `scheduleKind=every`
-- **WHEN** the user submits with an empty or unparseable interval
-- **THEN** the save is refused with an interval error and no gateway call is made
-
-#### Scenario: Form navigation and controls
-
-- **WHEN** the user interacts with the form
-- **THEN** Tab/Shift+Tab navigate fields, Space toggles the cycle/checkbox controls (`scheduleKind`, `sessionTarget`, `wakeMode`, `deliveryMode`, `enabled`), Enter inside the payload `textarea` inserts a newline, Ctrl+S or Alt+Enter saves from anywhere, and Esc cancels back to the opening substate
-
 ### Requirement: Duplicate flow pre-populates a new job
 
 Pressing `d` on the list substate SHALL open the same form as `n`, but pre-populated from the highlighted job. The form SHALL stay in `mode=create` with `editingID=""`, so submission goes through `CronAdd` (not `CronUpdateRaw`) and produces a brand-new job rather than mutating the source. The name SHALL be prefixed with `Copy of ` so the duplicate is visually distinguishable in the list before the user edits it; every other field — schedule (cron expression/timezone or every-interval), agent, model, payload, session/wake, delivery, enabled — SHALL be copied verbatim. `populateFormFromJob` SHALL be shared with `newEditForm` so the two flows can't drift in which fields they carry over. Duplicating a job whose schedule kind is `at` (or whose payload kind is anything other than `agentTurn`) SHALL be refused with the same banner the edit flow shows, for the same reason: the TUI form would silently truncate the unmodelled union fields.
@@ -323,3 +285,46 @@ The cron browser SHALL NOT implement the following, which are deliberately out o
 
 - **WHEN** the run-history table is populated
 - **THEN** it shows at most the most recent 10 entries, with no pagination beyond that
+
+#### Scenario: at schedules and systemEvent payloads route to the CLI
+
+- **GIVEN** a job whose schedule kind is `at` or whose payload kind is `systemEvent`
+- **WHEN** the user opens it for edit or duplicate
+- **THEN** the form loads refused and the user is pointed at the openclaw CLI, because those unions are not modelled by the form
+
+### Requirement: Create and edit form constrained to cron/every schedules and agentTurn payloads
+
+The create and edit form SHALL share `cronForm` and the `cronFormField` enum (14 fields, tab-ordered). The gateway protocol exposes union types (`CronSchedule.Kind` ∈ `at`/`every`/`cron`; `CronPayload.Kind` ∈ `systemEvent`/`agentTurn`); to keep the TUI form tractable it SHALL model the two common shapes — `cron` and `every` schedules, and `agentTurn` payloads — and route the rest to the CLI. A `scheduleKind` toggle (`cron`/`every`) SHALL select between a cron-expression input and an interval input; the interval SHALL be a human duration (e.g. `15m`, `1h30m`) parsed to `everyMs`. Because the form does not surface an `every` schedule's `anchorMs`/`staggerMs`, those SHALL be carried off the source job and re-emitted on save so an edit does not silently shift the job's run phase.
+
+Editing a job whose schedule kind is `at` (or whose payload kind is `systemEvent`) SHALL load the form in a refused state showing the banner:
+
+> Edit not supported for schedule kind "at". Use the openclaw CLI.
+
+The save path SHALL be suppressed in this state — the system surfaces the brittleness rather than silently round-tripping a truncated representation.
+
+Tab/Shift+Tab SHALL navigate fields. Space SHALL toggle the cycle/checkbox controls (`scheduleKind`, `sessionTarget`, `wakeMode`, `deliveryMode`, `enabled`). Inside the payload `textarea`, Enter SHALL insert a newline; Ctrl+S (or Alt+Enter) SHALL save from anywhere; Esc SHALL cancel and return to whichever substate opened the form.
+
+#### Scenario: Editing an every schedule is supported
+
+- **GIVEN** a job whose schedule kind is `every` and payload kind is `agentTurn`
+- **WHEN** the user opens the edit form
+- **THEN** the form loads with `scheduleKind=every`, the interval pre-populated from `everyMs`, and the `anchorMs`/`staggerMs` carried so a save re-emits them
+- **AND** submitting sends a `schedule` of kind `every` carrying `everyMs` (and no cron `expr`/`tz`)
+
+#### Scenario: Editing an unmodelled kind is refused
+
+- **GIVEN** a job whose schedule kind is `at` or whose payload kind is not `agentTurn`
+- **WHEN** the user opens the edit form
+- **THEN** the form loads in a refused state showing `Edit not supported for schedule kind "at". Use the openclaw CLI.` and the save path is suppressed
+
+#### Scenario: Interval is validated on save
+
+- **GIVEN** the edit form with `scheduleKind=every`
+- **WHEN** the user submits with an empty or unparseable interval
+- **THEN** the save is refused with an interval error and no gateway call is made
+
+#### Scenario: Form navigation and controls
+
+- **WHEN** the user interacts with the form
+- **THEN** Tab/Shift+Tab navigate fields, Space toggles the cycle/checkbox controls (`scheduleKind`, `sessionTarget`, `wakeMode`, `deliveryMode`, `enabled`), Enter inside the payload `textarea` inserts a newline, Ctrl+S or Alt+Enter saves from anywhere, and Esc cancels back to the opening substate
+
