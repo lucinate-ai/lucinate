@@ -224,7 +224,10 @@ func (m *chatModel) gateNavigation(label string, replacesChat bool, navCmd tea.C
 		prompt: prompt,
 		nav:    navCmd,
 	}
-	m.notify(prompt)
+	// The prompt renders as its own band directly above the input (see
+	// renderNavConfirm) rather than as a top-of-screen notification, so
+	// reflow to shrink the viewport by the row it now occupies.
+	m.applyLayout()
 	return nil
 }
 

@@ -476,6 +476,27 @@ func (m *chatModel) pendingHeight() int {
 	return lipgloss.Height(s)
 }
 
+// renderNavConfirm renders the pending navigation-confirm prompt as a band
+// pinned directly above the input, where the user types their y/n answer.
+// Returns "" when no confirmation is pending. Padded to the chat width so
+// the accent styling reads as a coherent band.
+func (m *chatModel) renderNavConfirm() string {
+	if m.pendingNavConfirm == nil {
+		return ""
+	}
+	return navConfirmStyle.Width(m.width).Render(" " + m.pendingNavConfirm.prompt)
+}
+
+// navConfirmHeight reports the rendered row count of the navigation-confirm
+// prompt, so applyLayout can reserve space for it. 0 when none is pending.
+func (m *chatModel) navConfirmHeight() int {
+	s := m.renderNavConfirm()
+	if s == "" {
+		return 0
+	}
+	return lipgloss.Height(s)
+}
+
 // renderToolStripExpanded lists the current turn's tools one per line. Entries
 // past maxToolStripRows are folded into a leading "…N earlier" summary so the
 // newest (typically running) tools stay on screen.
