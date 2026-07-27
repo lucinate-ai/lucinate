@@ -1044,21 +1044,25 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			// have either been read or no longer apply.
 			m.clearNotifications()
 
-			// Resolve a pending routine-cancel-on-navigation prompt. Done
-			// before the generic pendingConfirm path because the nav
-			// gate must end the routine synchronously so the log file
-			// is closed before the chatModel is potentially replaced.
+			// Resolve a pending navigation-confirm prompt (a routine cancel
+			// and/or queued-message discard). Done before the generic
+			// pendingConfirm path because the nav gate must end the routine
+			// synchronously so the log file is closed before the chatModel
+			// is potentially replaced.
 			if m.pendingNavConfirm != nil {
 				m.textarea.Reset()
 				m.refreshCompletionMenu()
 				confirm := m.pendingNavConfirm
+				hadRoutine := m.activeRoutine != nil
 				m.pendingNavConfirm = nil
 				lower := strings.ToLower(text)
 				if lower == "y" || lower == "yes" {
 					var cmds []tea.Cmd
-					// Abort any in-flight turn the routine kicked off so a
+					// Abort any in-flight turn and clear the send queue so a
 					// follow-up startRoutineMsg (the /routine <name> path)
-					// finds a clean controller and m.sending == false.
+					// finds a clean controller with m.sending == false, and
+					// no queued messages are left stranded on the outgoing
+					// chat model.
 					if m.sending {
 						if cmd := m.cancelTurn(); cmd != nil {
 							cmds = append(cmds, cmd)
@@ -1071,7 +1075,11 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 					m.updateViewport()
 					return m, tea.Batch(cmds...)
 				}
-				m.notify("Cancelled — routine continues.")
+				if hadRoutine {
+					m.notify("Cancelled — routine continues.")
+				} else {
+					m.notify("Cancelled — queued messages kept.")
+				}
 				m.updateViewport()
 				return m, nil
 			}
