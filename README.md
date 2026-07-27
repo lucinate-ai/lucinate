@@ -26,7 +26,7 @@ No file browsers, no task boards, no dashboards. Just chat.
 - **Markdown rendering** for assistant messages
 - **Tool call cards** — when the agent invokes a tool, an inline card shows what's running, what arguments it got, and whether it succeeded or failed (OpenClaw)
 - **Shell commands** — run locally with `!` or remotely on the gateway with `!!`
-- **Message queueing** so you can keep typing while the agent is responding
+- **Message queueing** so you can keep typing while the agent is responding — and if you switch agents or connections with messages still queued, lucinate asks before dropping them
 - **Scroll and copy like a native** — the wheel scrolls history, click-drag selects and copies on release, and `↑`/`↓` recall what you typed. All three, no fighting.
 - **Local agent skills** loaded from `~/.agents/skills/` — invoke as a slash command (`/review`) or drop one mid-message (`use /review on the diff`)
 - **Routines** — author multi-step prompt sequences once, replay them with `/routine <name>`. Auto-advance after each reply, or step through manually. Manage them in-TUI with `/routines`.
