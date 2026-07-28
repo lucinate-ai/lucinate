@@ -3,9 +3,7 @@
 ## Purpose
 
 `lucinate send` is a non-TUI entry point that dispatches a single chat turn through a stored connection / agent / session and (by default) prints the assistant's first complete reply to stdout. It is the scripting surface alongside the interactive TUI, and it deliberately reuses the TUI's connection store, backend factory, and event channel so retry / auth / capability behaviour stays consistent across both modes. This spec covers the `app.Send` lifecycle, the default-session rule, detach semantics, the `ask` alias, the embedder seam, reply-text extraction, and the deliberate non-goals. The user-facing CLI shape is documented in the README's one-shot-mode section.
-
 ## Requirements
-
 ### Requirement: Send lifecycle pipeline
 
 `app.Send` (`app/send.go`) SHALL run an eight-step pipeline:
@@ -53,26 +51,31 @@
 
 ### Requirement: Default session selection
 
-The default-key rule SHALL be shared with the TUI agent picker so `lucinate send` and "select agent → main" land on the same gateway-side session:
+The default-key rule SHALL be shared with the TUI agent picker so `lucinate send` and "select agent → open" land on the same gateway-side session. When `--session` is unset, `app.Send` SHALL first prefer the external-messaging conversation the user holds with the agent (via `backend.PickMessagingSessionKey`; see the `sessions` spec, `Messaging-conversation default session`), and only when there is none SHALL it fall back to the shared default:
 
-| Agent | `--session` unset → key passed to `CreateSession` |
+| Agent | `--session` unset, no messaging conversation → key passed to `CreateSession` |
 |-------|---------------------------------------------------|
 | Default agent (`agent.ID == list.DefaultID`) | `list.MainKey` |
 | Any other agent                              | `"main"` (literal)                                |
 
 If the same key already exists on the gateway, `CreateSession` SHALL resume it; if not, the gateway SHALL provision one. From the script's point of view, `lucinate send --connection X --agent Y "hello"` repeats into the same conversation forever unless `--session` is supplied.
 
-The literal-`"main"` fallback for non-default agents matches what the TUI passes when the user picks a non-default agent and accepts the picker's "main" session. Backends that don't keep server-side session state (OpenAI, Hermes) SHALL ignore the key shape and route by `agentID` regardless.
+The literal-`"main"` fallback for non-default agents matches what the TUI passes when the user opens a non-default agent that has no messaging conversation. Backends that don't keep server-side session state (OpenAI, Hermes) SHALL ignore the key shape and route by `agentID` regardless, and expose no messaging conversation so the fallback always applies.
+
+#### Scenario: Messaging conversation preferred when present
+- **GIVEN** the chosen agent has an external-messaging direct conversation and `--session` is unset
+- **WHEN** the session key is defaulted
+- **THEN** the messaging conversation's key is passed to `CreateSession`
 
 #### Scenario: Default agent uses the main-session key
-- **GIVEN** the chosen agent is the default agent (`agent.ID == list.DefaultID`) and `--session` is unset
+- **GIVEN** the chosen agent is the default agent (`agent.ID == list.DefaultID`), has no messaging conversation, and `--session` is unset
 - **WHEN** the session key is defaulted
 - **THEN** `list.MainKey` is passed to `CreateSession`
 
 #### Scenario: Non-default agent falls back to literal "main"
-- **GIVEN** the chosen agent is not the default agent and `--session` is unset
+- **GIVEN** the chosen agent is not the default agent, has no messaging conversation, and `--session` is unset
 - **WHEN** the session key is defaulted
-- **THEN** the literal string `"main"` is passed to `CreateSession`, matching what the TUI passes when the user accepts the picker's "main" session
+- **THEN** the literal string `"main"` is passed to `CreateSession`, matching what the TUI passes when the user opens a non-default agent with no messaging conversation
 
 #### Scenario: Repeated sends land in the same conversation
 - **GIVEN** `--session` is not supplied
@@ -226,3 +229,4 @@ If a backend ever changes the wire shape, both consumers update together — the
 #### Scenario: Auth errors bubble instead of opening a modal
 - **WHEN** a `token-mismatch` or `401` auth error occurs during `Send`
 - **THEN** it bubbles up as a normal error rather than opening an auth-recovery modal
+
