@@ -759,6 +759,45 @@ func TestView_NotificationPlacement(t *testing.T) {
 	}
 }
 
+// The navigation-confirm prompt must render as a band directly above the
+// input — the bottommost content region — not as a top-of-screen info
+// notification, so the y/n question sits where the user's answer is typed.
+func TestView_NavConfirmPlacement(t *testing.T) {
+	m := newChatModel(newFakeBackend(), "s", "a", "agent", "", config.DefaultPreferences(), false, "", "", false)
+	m.setSize(80, 24)
+	m.historyLoading = false
+	m.messages = []chatMessage{{role: "user", content: "TRANSCRIPT_MARKER"}}
+	m.pendingMessages = []string{"QUEUED_MARKER"}
+	m.notify("COPIED_MARKER")
+	m.notifyError("ERROR_MARKER")
+	m.pendingNavConfirm = &pendingNavConfirm{prompt: "NAVCONFIRM_MARKER"}
+	m.updateViewport()
+	m.applyLayout()
+
+	view := ansi.Strip(m.View())
+	idx := map[string]int{
+		"info":       strings.Index(view, "COPIED_MARKER"),
+		"transcript": strings.Index(view, "TRANSCRIPT_MARKER"),
+		"queued":     strings.Index(view, "QUEUED_MARKER"),
+		"error":      strings.Index(view, "ERROR_MARKER"),
+		"navconfirm": strings.Index(view, "NAVCONFIRM_MARKER"),
+	}
+	for name, i := range idx {
+		if i < 0 {
+			t.Fatalf("%s marker not found in view:\n%s", name, view)
+		}
+	}
+	// The prompt sits below the transcript (not pinned to the top like an
+	// info notification) and below the queued footer and error band — it is
+	// the last region before the input.
+	if idx["navconfirm"] <= idx["transcript"] {
+		t.Errorf("nav-confirm prompt should render below the transcript, not at the top (transcript=%d, navconfirm=%d)", idx["transcript"], idx["navconfirm"])
+	}
+	if idx["navconfirm"] <= idx["queued"] || idx["navconfirm"] <= idx["error"] {
+		t.Errorf("nav-confirm prompt should be the bottommost region, below the queued footer and error band (queued=%d, error=%d, navconfirm=%d)", idx["queued"], idx["error"], idx["navconfirm"])
+	}
+}
+
 func TestNarrowLayout_Threshold(t *testing.T) {
 	tests := []struct {
 		name       string

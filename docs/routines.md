@@ -134,6 +134,11 @@ reason the gate exists rather than just a courtesy prompt. On `y` the gate cance
 turn (`cancelTurn`) and ends the routine (`endRoutine`) before dispatching. `startRoutine` keeps a
 defensive `if m.activeRoutine != nil` guard, but in normal flow the gate runs first.
 
+The same gate now guards **queued messages** too, so it can fire with no routine active at all:
+navigations that replace the chat model wholesale (`/agents`, `/agent`, `/agent <name>`,
+`/connections`) would otherwise drop the send queue silently. See the navigation-gate section in
+the `commands` doc for that side of it.
+
 ## Notifications live outside the message list, on purpose
 
 Routine state changes and errors are ephemeral notifications, not chat rows (see the `chat-ux`

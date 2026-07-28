@@ -3,7 +3,7 @@
 The behavioural contract for slash commands lives in
 [`openspec/specs/commands/spec.md`](../openspec/specs/commands/spec.md) — dispatch and
 interception, the full built-in command catalogue, tab completion, the yes/no confirmation
-pattern, and the routine-active navigation gate are all captured there as requirements and
+pattern, and the navigation gate are all captured there as requirements and
 scenarios. This file keeps the hard-won lessons, pitfalls, and design rationale behind those
 commands: the "why it works this odd way" that the spec's requirements don't dwell on.
 
@@ -72,10 +72,27 @@ When `runningStatus` is set, the handler animates the same braille spinner used 
 assistant turns, and the result handler calls `replacePendingSystem` to swap the placeholder for
 the outcome line **in place** — no stale "Compacting session…" stuck above the result.
 
-## Routine-active navigation gate: keep the two flows apart
+## Navigation gate: confirm before losing a routine or queued messages
 
-Slash commands that strand or replace the chat model route through `gateNavigation()`
-(`internal/tui/routines_chat.go`) when a routine is active, so navigating away doesn't silently
-abandon a running routine. The `pendingNavConfirm` state is kept **independent** of the generic
-`pendingConfirmation` on purpose, so the two confirmation flows don't compete over the same UI
-state. See the `routines` spec (slash commands and gating) for the full rationale.
+Slash commands that leave the current chat route through `gateNavigation()`
+(`internal/tui/routines_chat.go`), which asks for a y/n confirmation before anything the user
+can't get back is thrown away. Two things qualify:
+
+- an **active routine** — any navigation that strands or replaces the chat model cancels it
+  (closing its log), so navigating away doesn't silently abandon a running routine; and
+- **queued messages** — the send queue (messages typed while the agent was busy and not yet
+  delivered) is dropped when the chat model is rebuilt wholesale. Only the navigations that
+  actually replace it pass `replacesChat=true` — `/agents`, `/agent`, `/agent <name>`, and
+  `/connections`. Overlay navigations that return to the same chat model (`/crons`, `/sessions`,
+  `/routines`, export) keep the queue, so they don't warn about it.
+
+The prompt is assembled from whatever is genuinely at risk, so it reads "… will cancel the
+active routine "x"", "… will discard 2 queued messages", or both joined with "and" — and it
+renders as a band pinned **directly above the input** (`renderNavConfirm`), where the answer is
+typed, rather than as a top-of-screen notification that was easy to miss. On `y` the handler
+aborts any in-flight turn and clears the queue (`cancelTurn`) and ends the routine
+(`endRoutine`) before dispatching; on anything else nothing is lost.
+
+The `pendingNavConfirm` state is kept **independent** of the generic `pendingConfirmation` on
+purpose, so the two confirmation flows don't compete over the same UI state. See the `routines`
+spec (slash commands and gating) for the full rationale.

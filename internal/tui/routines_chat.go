@@ -185,24 +185,49 @@ func (m *chatModel) cycleRoutineMode() {
 	}
 }
 
-// gateNavigation returns navCmd unchanged when no routine is active, or
-// queues a y/n confirmation that — on confirm — ends the active routine
-// (closing its log) and then runs navCmd. Used to wrap slash commands
-// that strand or replace the chat model the routine lives on.
+// gateNavigation returns navCmd unchanged when the navigation is
+// harmless, or queues a y/n confirmation when it would lose work the
+// user can't get back. Two things can be lost:
+//
+//   - an active routine — any navigation that strands or replaces the
+//     chat model cancels it (closing its log), and
+//   - queued messages — navigations that replace the chat model wholesale
+//     drop the send queue (messages typed while the agent was busy and
+//     not yet delivered), so callers pass replacesChat=true for those.
+//
+// On confirm the caller's handler ends the routine synchronously and
+// clears the queue before navCmd fires; on decline the prompt is
+// dismissed and nothing is lost. When neither a routine nor a queued
+// message is at risk, navCmd is returned to run immediately.
 //
 // label is the short verb phrase that completes "Switching agents",
 // "Opening sessions", etc., and is rendered into the prompt text.
-func (m *chatModel) gateNavigation(label string, navCmd tea.Cmd) tea.Cmd {
-	if m.activeRoutine == nil {
+func (m *chatModel) gateNavigation(label string, replacesChat bool, navCmd tea.Cmd) tea.Cmd {
+	var effects []string
+	if m.activeRoutine != nil {
+		effects = append(effects, fmt.Sprintf("cancel the active routine %q", m.activeRoutine.routine.Name))
+	}
+	if replacesChat {
+		if n := len(m.pendingMessages); n > 0 {
+			noun := "message"
+			if n != 1 {
+				noun = "messages"
+			}
+			effects = append(effects, fmt.Sprintf("discard %d queued %s", n, noun))
+		}
+	}
+	if len(effects) == 0 {
 		return navCmd
 	}
-	prompt := fmt.Sprintf("Routine %q is active. %s will cancel it. Continue? (y/n)",
-		m.activeRoutine.routine.Name, label)
+	prompt := fmt.Sprintf("%s will %s. Continue? (y/n)", label, strings.Join(effects, " and "))
 	m.pendingNavConfirm = &pendingNavConfirm{
 		prompt: prompt,
 		nav:    navCmd,
 	}
-	m.notify(prompt)
+	// The prompt renders as its own band directly above the input (see
+	// renderNavConfirm) rather than as a top-of-screen notification, so
+	// reflow to shrink the viewport by the row it now occupies.
+	m.applyLayout()
 	return nil
 }
 

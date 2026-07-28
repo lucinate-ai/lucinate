@@ -404,6 +404,7 @@ func (m *chatModel) applyLayout() {
 	h -= len(m.notifications)
 	h -= m.toolStripHeight()
 	h -= m.pendingHeight()
+	h -= m.navConfirmHeight()
 	if h < 1 {
 		h = 1
 	}

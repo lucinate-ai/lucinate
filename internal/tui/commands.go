@@ -35,12 +35,13 @@ type pendingConfirmation struct {
 }
 
 // pendingNavConfirm queues a y/n prompt that gates a navigation command.
-// Used when the user runs /agents, /agent <name>, /sessions, /crons, or
-// /connections while a routine is active — those navigations replace
-// (or strand) the chat model that owns the routine controller, so the
-// user is asked to confirm the cancel first. On y, endRoutine runs
-// synchronously (closing the log) and `nav` fires; on anything else, the
-// prompt is dismissed and the routine continues.
+// Queued by gateNavigation when a slash command would leave the current
+// chat and lose work the user can't get back — an active routine (any
+// nav that strands or replaces the chat model cancels it) and/or queued
+// messages (navs that replace the chat model wholesale drop the send
+// queue). On y, endRoutine runs synchronously (closing the log), the
+// queue is cleared, and `nav` fires; on anything else, the prompt is
+// dismissed and nothing is lost.
 type pendingNavConfirm struct {
 	prompt string
 	nav    tea.Cmd
@@ -226,7 +227,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		// self-termination isn't possible. See requestExitMsg.
 		return true, func() tea.Msg { return requestExitMsg{} }
 	case "/agents":
-		return true, m.gateNavigation("Switching agents", func() tea.Msg { return goBackMsg{} })
+		return true, m.gateNavigation("Switching agents", true, func() tea.Msg { return goBackMsg{} })
 	case "/models":
 		sessionKey := m.sessionKey
 		currentModelID := m.modelID
@@ -303,7 +304,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		// backward-compatible alias.
 		return true, func() tea.Msg { return showConfigMsg{} }
 	case "/connections":
-		return true, m.gateNavigation("Switching connections", func() tea.Msg { return showConnectionsMsg{} })
+		return true, m.gateNavigation("Switching connections", true, func() tea.Msg { return showConnectionsMsg{} })
 	case "/crons", "/crons all":
 		if _, ok := m.backend.(backend.CronBackend); !ok {
 			m.appendMessage(chatMessage{
@@ -319,7 +320,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			filterAgentID = ""
 			filterLabel = "all agents"
 		}
-		return true, m.gateNavigation("Opening crons", func() tea.Msg {
+		return true, m.gateNavigation("Opening crons", false, func() tea.Msg {
 			return showCronsMsg{filterAgentID: filterAgentID, filterLabel: filterLabel}
 		})
 	case "/sessions":
@@ -327,7 +328,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		agentName := m.agentName
 		modelID := m.modelID
 		sessionKey := m.sessionKey
-		return true, m.gateNavigation("Opening sessions", func() tea.Msg {
+		return true, m.gateNavigation("Opening sessions", false, func() tea.Msg {
 			return showSessionsMsg{
 				agentID:   agentID,
 				agentName: agentName,
@@ -405,7 +406,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 	// gateway events (routinesModel.Update doesn't consume them) so the
 	// nav is gated.
 	if command == "/routines" {
-		return true, m.gateNavigation("Opening the routines manager", func() tea.Msg { return showRoutinesMsg{} })
+		return true, m.gateNavigation("Opening the routines manager", false, func() tea.Msg { return showRoutinesMsg{} })
 	}
 
 	// /model with optional argument.
@@ -482,7 +483,7 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 func (m *chatModel) handleAgentCommand(text string) (bool, tea.Cmd) {
 	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
 	if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" {
-		return true, m.gateNavigation("Switching agents", func() tea.Msg { return goBackMsg{} })
+		return true, m.gateNavigation("Switching agents", true, func() tea.Msg { return goBackMsg{} })
 	}
 
 	query := strings.ToLower(strings.TrimSpace(parts[1]))
@@ -525,7 +526,7 @@ func (m *chatModel) handleAgentCommand(text string) (bool, tea.Cmd) {
 			err:        err,
 		}
 	}
-	return true, m.gateNavigation("Switching agents", switchCmd)
+	return true, m.gateNavigation("Switching agents", true, switchCmd)
 }
 
 // handleCronCommand handles `/cron <name>`. Bare `/cron` is an error —
@@ -919,7 +920,7 @@ func (m *chatModel) handleRoutineCommand(text string) (bool, tea.Cmd) {
 	name := strings.TrimSpace(parts[1])
 	if m.activeRoutine != nil {
 		label := fmt.Sprintf("Starting routine %q", name)
-		return true, m.gateNavigation(label, func() tea.Msg {
+		return true, m.gateNavigation(label, false, func() tea.Msg {
 			return startRoutineMsg{name: name}
 		})
 	}
@@ -1288,7 +1289,7 @@ func (m *chatModel) handleExportCommand(text string) (bool, tea.Cmd) {
 			m.updateViewport()
 			return true, nil
 		}
-		return true, m.gateNavigation("Exporting to routine", func() tea.Msg {
+		return true, m.gateNavigation("Exporting to routine", false, func() tea.Msg {
 			return showRoutinesMsg{prefillSteps: steps}
 		})
 	default:

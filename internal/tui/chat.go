@@ -1044,21 +1044,28 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			// have either been read or no longer apply.
 			m.clearNotifications()
 
-			// Resolve a pending routine-cancel-on-navigation prompt. Done
-			// before the generic pendingConfirm path because the nav
-			// gate must end the routine synchronously so the log file
-			// is closed before the chatModel is potentially replaced.
+			// Resolve a pending navigation-confirm prompt (a routine cancel
+			// and/or queued-message discard). Done before the generic
+			// pendingConfirm path because the nav gate must end the routine
+			// synchronously so the log file is closed before the chatModel
+			// is potentially replaced.
 			if m.pendingNavConfirm != nil {
 				m.textarea.Reset()
 				m.refreshCompletionMenu()
 				confirm := m.pendingNavConfirm
+				hadRoutine := m.activeRoutine != nil
 				m.pendingNavConfirm = nil
+				// The prompt band is gone now the question is answered;
+				// reflow so the viewport reclaims its row.
+				m.applyLayout()
 				lower := strings.ToLower(text)
 				if lower == "y" || lower == "yes" {
 					var cmds []tea.Cmd
-					// Abort any in-flight turn the routine kicked off so a
+					// Abort any in-flight turn and clear the send queue so a
 					// follow-up startRoutineMsg (the /routine <name> path)
-					// finds a clean controller and m.sending == false.
+					// finds a clean controller with m.sending == false, and
+					// no queued messages are left stranded on the outgoing
+					// chat model.
 					if m.sending {
 						if cmd := m.cancelTurn(); cmd != nil {
 							cmds = append(cmds, cmd)
@@ -1071,7 +1078,11 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 					m.updateViewport()
 					return m, tea.Batch(cmds...)
 				}
-				m.notify("Cancelled — routine continues.")
+				if hadRoutine {
+					m.notify("Cancelled — routine continues.")
+				} else {
+					m.notify("Cancelled — queued messages kept.")
+				}
 				m.updateViewport()
 				return m, nil
 			}
@@ -1611,6 +1622,7 @@ func (m chatModel) View() string {
 	errorNotifications := m.renderErrorNotifications()
 	toolStrip := m.renderToolActivity()
 	pending := m.renderPendingMessages()
+	navConfirm := m.renderNavConfirm()
 
 	// The View is assembled top→bottom in this region order:
 	//   header
@@ -1620,7 +1632,8 @@ func (m chatModel) View() string {
 	//   routine status
 	//   tool-activity strip  (what's running)
 	//   queued messages      (what's next)
-	//   error notifications  (bottommost, below the queue)
+	//   error notifications  (below the queue)
+	//   nav-confirm prompt   (bottommost, directly above the input)
 	//   input
 	//   help
 	if m.hideInput {
@@ -1640,6 +1653,9 @@ func (m chatModel) View() string {
 		}
 		if errorNotifications != "" {
 			parts = append(parts, errorNotifications)
+		}
+		if navConfirm != "" {
+			parts = append(parts, navConfirm)
 		}
 		parts = append(parts, help)
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -1668,6 +1684,9 @@ func (m chatModel) View() string {
 	}
 	if errorNotifications != "" {
 		parts = append(parts, errorNotifications)
+	}
+	if navConfirm != "" {
+		parts = append(parts, navConfirm)
 	}
 	parts = append(parts, input, help)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)

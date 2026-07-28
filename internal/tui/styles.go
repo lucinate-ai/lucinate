@@ -63,6 +63,14 @@ var (
 			Foreground(errClr).
 			Bold(true)
 
+	// Navigation-confirm prompt — the y/n band pinned directly above the
+	// input when a switch would discard queued messages or cancel a
+	// routine. Accent-coloured and bold so it reads as "needs an answer"
+	// without the alarm of error red.
+	navConfirmStyle = lipgloss.NewStyle().
+			Foreground(accent).
+			Bold(true)
+
 	// Connection-status badge styles, sized to read against the purple
 	// header background where the badge is rendered.
 	headerBadgeWarnStyle = lipgloss.NewStyle().

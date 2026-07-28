@@ -121,6 +121,96 @@ func TestSlashCommand_Agent_NoMatchReturnsFailureMsg(t *testing.T) {
 	}
 }
 
+func TestSlashCommand_Agent_BareWithQueuedMessages_Warns(t *testing.T) {
+	m := newSlashTestModel()
+	m.sending = true
+	m.pendingMessages = []string{"first", "second"}
+
+	handled, cmd := m.handleSlashCommand("/agent")
+	if !handled {
+		t.Fatal("expected /agent to be handled")
+	}
+	// The gate holds navigation behind a confirm, so nothing runs yet.
+	if cmd != nil {
+		t.Fatal("expected no immediate command while the confirm is pending")
+	}
+	if m.pendingNavConfirm == nil {
+		t.Fatal("expected a pending navigation confirm to be queued")
+	}
+	if !strings.Contains(m.pendingNavConfirm.prompt, "discard 2 queued messages") {
+		t.Errorf("expected prompt to warn about 2 queued messages, got %q", m.pendingNavConfirm.prompt)
+	}
+	// The queue stays intact until the user answers the prompt.
+	if len(m.pendingMessages) != 2 {
+		t.Errorf("expected queue to be preserved until confirmed, got %d", len(m.pendingMessages))
+	}
+	// The deferred navigation is still the agent-picker switch.
+	if m.pendingNavConfirm.nav == nil {
+		t.Fatal("expected the deferred navigation to be preserved")
+	}
+	if _, ok := m.pendingNavConfirm.nav().(goBackMsg); !ok {
+		t.Errorf("expected deferred goBackMsg, got %T", m.pendingNavConfirm.nav())
+	}
+}
+
+func TestSlashCommand_Agent_BareSingleQueuedMessage_WarnsSingular(t *testing.T) {
+	m := newSlashTestModel()
+	m.sending = true
+	m.pendingMessages = []string{"only one"}
+
+	if _, _ = m.handleSlashCommand("/agent"); m.pendingNavConfirm == nil {
+		t.Fatal("expected a pending navigation confirm to be queued")
+	}
+	prompt := m.pendingNavConfirm.prompt
+	if !strings.Contains(prompt, "discard 1 queued message") || strings.Contains(prompt, "queued messages") {
+		t.Errorf("expected singular queued-message wording, got %q", prompt)
+	}
+}
+
+func TestSlashCommand_Agent_BareEmptyQueue_NoWarn(t *testing.T) {
+	m := newSlashTestModel()
+	// No queued messages: switching agents loses nothing, so it goes
+	// straight to the picker without a confirm.
+	handled, cmd := m.handleSlashCommand("/agent")
+	if !handled {
+		t.Fatal("expected /agent to be handled")
+	}
+	if m.pendingNavConfirm != nil {
+		t.Fatal("did not expect a confirm with an empty queue")
+	}
+	if cmd == nil {
+		t.Fatal("expected an immediate goBackMsg cmd")
+	}
+	if _, ok := cmd().(goBackMsg); !ok {
+		t.Errorf("expected goBackMsg, got %T", cmd())
+	}
+}
+
+func TestSlashCommand_OverlayNav_WithQueuedMessages_DoesNotWarn(t *testing.T) {
+	m := newSlashTestModel()
+	m.sending = true
+	m.pendingMessages = []string{"first", "second"}
+
+	// Opening crons overlays the chat and returns to the same model, so
+	// the queue survives — no warning, navigation runs immediately.
+	handled, cmd := m.handleSlashCommand("/crons")
+	if !handled {
+		t.Fatal("expected /crons to be handled")
+	}
+	if m.pendingNavConfirm != nil {
+		t.Fatal("did not expect a confirm for an overlay navigation")
+	}
+	if cmd == nil {
+		t.Fatal("expected /crons to return a showCronsMsg cmd")
+	}
+	if _, ok := cmd().(showCronsMsg); !ok {
+		t.Errorf("expected showCronsMsg, got %T", cmd())
+	}
+	if len(m.pendingMessages) != 2 {
+		t.Errorf("expected queue to be preserved, got %d", len(m.pendingMessages))
+	}
+}
+
 func TestSlashCommand_Mouse_OnOffEmitMsg(t *testing.T) {
 	for _, action := range []string{"on", "off", "toggle"} {
 		m := newSlashTestModel()
