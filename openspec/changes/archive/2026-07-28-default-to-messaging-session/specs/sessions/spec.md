@@ -46,7 +46,7 @@ The same default-key rule (messaging preference, then the `MainKey`/`"main"` fal
 - **WHEN** the user opens the agent from the picker or the in-chat `/agent` switch
 - **THEN** the session key is the messaging conversation's key, so the conversation and its history are resumed
 
-#### Scenario: Deterministic restore when there is no messaging conversation
+#### Scenario: Deterministic restore on restart
 - **GIVEN** an agent with no external-messaging conversation
 - **WHEN** its session is created
 - **THEN** the key falls back to `MainKey` for the default agent, or the literal `"main"` (derived from the agent ID) otherwise

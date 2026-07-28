@@ -32,3 +32,8 @@ The literal-`"main"` fallback for non-default agents matches what the TUI passes
 - **GIVEN** `--session` is not supplied
 - **WHEN** `lucinate send --connection X --agent Y "hello"` is run repeatedly
 - **THEN** `CreateSession` resumes the existing key if present or the gateway provisions one, so the turns repeat into the same conversation
+
+#### Scenario: Stateless backends route by agent
+- **GIVEN** an OpenAI or Hermes backend that keeps no server-side session state
+- **WHEN** a session key is passed
+- **THEN** the backend ignores the key shape and routes by `agentID`
