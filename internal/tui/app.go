@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -996,24 +997,45 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 				// the resolved session key for event filtering.
 				b := m.backend
 				agentID := item.agent.ID
-				createKey := "main"
+				// Fallback when the agent has no messaging
+				// conversation: the connection's default-agent
+				// MainKey, otherwise the literal "main".
+				fallbackKey := "main"
 				if item.sessionKey == m.selectModel.mainKey {
-					createKey = item.sessionKey
+					fallbackKey = item.sessionKey
 				}
 				// Honour an explicit `lucinate chat --session <key>`
-				// override; this beats both the literal "main" and
-				// the connection's default-agent MainKey. One-shot:
-				// cleared so a later selection on the same picker
-				// doesn't keep landing on the original key.
+				// override; this beats both the messaging session and
+				// the fallback. One-shot: cleared so a later selection
+				// on the same picker doesn't keep landing on the
+				// original key.
+				overrideKey := ""
 				if m.initialSession != "" {
-					createKey = m.initialSession
+					overrideKey = m.initialSession
 					m.initialSession = ""
 				}
 				timeout := m.requestTimeoutFromPrefs()
 				return m, func() tea.Msg {
 					ctx, cancel := context.WithTimeout(context.Background(), timeout)
 					defer cancel()
+					createKey := overrideKey
+					source := "override"
+					if createKey == "" {
+						// Prefer the messaging conversation (e.g. a
+						// Telegram DM) the user talks to this agent
+						// on; fall back when there is none.
+						if msgKey := backend.PickMessagingSessionKey(ctx, b, agentID); msgKey != "" {
+							createKey = msgKey
+							source = "messaging"
+						} else {
+							createKey = fallbackKey
+							source = "fallback"
+						}
+					}
 					key, err := b.CreateSession(ctx, agentID, createKey)
+					slog.Debug("open agent: chose session",
+						"agent", agentID, "source", source,
+						"requestedKey", createKey, "resolvedKey", key, "err", err)
 					return sessionCreatedMsg{
 						sessionKey: key,
 						agentID:    agentID,

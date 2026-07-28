@@ -517,7 +517,14 @@ func (m *chatModel) handleAgentCommand(text string) (bool, tea.Cmd) {
 		if match.Model != nil {
 			modelID = match.Model.Primary
 		}
-		key, err := b.CreateSession(ctx, match.ID, "main")
+		// Land on the messaging conversation (e.g. a Telegram DM) the
+		// user talks to this agent on; fall back to "main" when there
+		// is none.
+		createKey := "main"
+		if msgKey := backend.PickMessagingSessionKey(ctx, b, match.ID); msgKey != "" {
+			createKey = msgKey
+		}
+		key, err := b.CreateSession(ctx, match.ID, createKey)
 		return sessionCreatedMsg{
 			sessionKey: key,
 			agentID:    match.ID,

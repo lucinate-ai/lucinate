@@ -166,7 +166,14 @@ func Send(ctx context.Context, opts SendOptions) error {
 
 	createKey := opts.Session
 	if createKey == "" {
-		createKey = defaultSessionKey(agentList, agent)
+		// Prefer the messaging conversation (e.g. a Telegram DM) the
+		// user talks to this agent on, mirroring the TUI. Fall back to
+		// the "main session" pick when there is none.
+		if msgKey := backend.PickMessagingSessionKey(ctx, b, agent.ID); msgKey != "" {
+			createKey = msgKey
+		} else {
+			createKey = defaultSessionKey(agentList, agent)
+		}
 	}
 	sessionKey, err := b.CreateSession(ctx, agent.ID, createKey)
 	if err != nil {

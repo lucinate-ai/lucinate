@@ -9,17 +9,44 @@ requirements don't dwell on.
 
 ## Why session keys are deterministic
 
-The session key is deterministic for non-default agents (based on agent ID) so the same session
-is restored on restart rather than spawning a fresh conversation each launch. The same
-default-key rule is reused by the one-shot CLI mode (`lucinate send`): it uses `MainKey` for the
-default agent and the literal `"main"` for any other agent, so a scripted dispatch lands on the
-same conversation as "open the picker, pick the agent, hit enter". Keeping both entry points on
-the same key rule is the whole point — otherwise a scripted send and an interactive pick would
-drift onto different conversations.
+When an agent has no messaging conversation (see the next section), the fallback session key is
+deterministic for non-default agents (based on agent ID) so the same session is restored on
+restart rather than spawning a fresh conversation each launch. That fallback rule is reused by
+the one-shot CLI mode (`lucinate send`): it uses `MainKey` for the default agent and the literal
+`"main"` for any other agent, so a scripted dispatch lands on the same conversation as "open the
+picker, pick the agent, hit enter". Keeping both entry points on the same key rule is the whole
+point — otherwise a scripted send and an interactive pick would drift onto different
+conversations.
 
 The `lucinate chat --session <key>` override is deliberately **one-shot** — cleared once
 consumed in the `viewSelect` block so a follow-up agent pick on the same picker doesn't keep
-landing on the original key.
+landing on the original key. It beats the messaging-conversation preference too.
+
+## Why opening an agent prefers its messaging conversation
+
+When you reach an agent through an external messaging channel, the real conversation lives in a
+channel-tied session the gateway minted — a key like `agent:main:telegram:direct:123456789`.
+Opening the agent onto a blank `main` bucket would hide the history and context you came to see,
+so `backend.PickMessagingSessionKey` looks up the agent's sessions and prefers that conversation
+before falling back to the `main`/`MainKey` rule above.
+
+Two things are deliberate about how it finds that session:
+
+- **It reads structured fields, never the key.** The `channel`, `kind`, and
+  `origin`/`deliveryContext` fields on each `sessions.list` row already carry the channel, the
+  direct-vs-group kind, and the peer identity. Those are the signals we match on. The five-part
+  key format is the gateway's to own — parsing it here would couple us to a shape we don't
+  control, and the structured fields carry the same information without that coupling.
+- **Most-recently-updated wins when there is more than one.** Nothing the client can see says
+  which human is "you", so if an agent has several messaging DMs we take the most recent one. It
+  is a heuristic, and we accept it: the alternative (asking the gateway which channel account is
+  connected via `channels.status`) turned out not to carry the sender identity either, so it
+  cannot pin down the conversation any better.
+
+The lookup fails safe. A `sessions.list` error, an unexpected response, or simply no messaging
+session all collapse to "" and fall back to the old default — opening an agent is never blocked
+on this extra call. Backends with no messaging sessions (OpenAI-compatible, Hermes) always fall
+back, so their behaviour is unchanged.
 
 ## Why history and stats load in parallel
 
