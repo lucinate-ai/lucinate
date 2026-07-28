@@ -3,9 +3,7 @@
 ## Purpose
 
 Routines are ordered prompt sequences stored on disk and replayed against the active session via `/routine <name>`. Each step is a complete user message; the controller dispatches them one at a time, optionally auto-advancing after each assistant reply. Routines are a chat-only concept — there is no gateway counterpart, and every backend works with them. The user-facing surface is `/routine <name>` (activate) and `/routines` (manage). This spec covers the STEPS.md file format, disk storage, the routine controller lifecycle, the auto-advance hook, stale-event filtering, assistant directives, logging, the manager view, slash-command gating, notifications, the status row, and key bindings.
-
 ## Requirements
-
 ### Requirement: STEPS.md file format
 
 Each routine SHALL be stored as a single `STEPS.md` file in plain markdown. Optional YAML frontmatter delimited by `---` lines carries routine metadata; the body is split into steps on lines containing exactly `---`. The recognised frontmatter fields are `name` (informational), `mode` (`auto` | `manual`; default `manual`), and `log` (absolute or relative-to-cwd path; omit to disable logging). A representative file:
@@ -462,10 +460,12 @@ The system SHALL register two entries in `slashCommands`:
 Only one routine SHALL run at a time per session. Both commands SHALL route through `gateNavigation()` (`routines_chat.go`) when a routine is already active, showing:
 
 ```
-Routine "demo" is active. Starting routine "other" will cancel it. Continue? (y/n)
+Starting routine "other" will cancel the active routine "demo". Continue? (y/n)
 ```
 
 The same gate SHALL cover the navigations that strand or replace the chat model — `/agents`, `/agent <name>`, `/sessions`, `/crons`, `/crons all`, `/connections` — for the same reason: the active routine controller can't survive a chat-view reset, and silently dropping it would leak the open log file. On `y`, the gate SHALL cancel any in-flight turn (`cancelTurn`) and end the routine (`endRoutine`) before dispatching the navigation. On `n` or Esc the prompt SHALL clear and the routine SHALL continue. `startRoutine` itself still has a defensive `if m.activeRoutine != nil` guard, but in normal flow the gate runs first.
+
+The prompt SHALL render as a band pinned directly above the input, not as a top-of-screen notification. The same gate SHALL also guard **queued messages** and can therefore fire with no routine active — the chat-replacing navigations (`/agents`, `/agent`, `/agent <name>`, `/connections`) would otherwise drop the send queue silently. See the `commands` spec (navigation gate) for that dimension.
 
 #### Scenario: Bare /routine is an error
 
@@ -476,7 +476,7 @@ The same gate SHALL cover the navigations that strand or replace the chat model 
 
 - **GIVEN** routine `demo` is active
 - **WHEN** the user runs `/routine other` (or a stranding navigation such as `/agents`, `/agent <name>`, `/sessions`, `/crons`, `/crons all`, `/connections`)
-- **THEN** `gateNavigation()` shows the "Continue? (y/n)" prompt
+- **THEN** `gateNavigation()` shows the "Continue? (y/n)" prompt as a band directly above the input
 - **AND** on `y` it cancels the in-flight turn via `cancelTurn` and ends the routine via `endRoutine` before dispatching the navigation
 - **AND** on `n` or Esc the prompt clears and the routine continues
 
@@ -599,3 +599,4 @@ The manual smoke procedure SHALL be:
 - **GIVEN** a `demo` routine on disk
 - **WHEN** an operator follows the smoke procedure
 - **THEN** manual stepping, completion notification, auto-advance, an assistant `/routine:stop`, logging output, and the navigation gate all behave as described
+

@@ -3,9 +3,7 @@
 ## Purpose
 
 Define the interactive chat surface of lucinate: how the input box interprets key bindings, how sent messages stream back with animated feedback, how the header bar reports agent, model, context usage, connection and update state, how the view regions are stacked and how ephemeral notifications, routine status, and tool activity are surfaced. It also covers message recall, extended-thinking levels, history depth and mid-turn resync, connect timeout, and the mouse-driven scrolling and selection model. This is a faithful reformat of the chat-ux maintainer doc.
-
 ## Requirements
-
 ### Requirement: Input key bindings
 
 The chat input box SHALL interpret the following key bindings:
@@ -228,21 +226,27 @@ The badge SHALL be suppressed once the user has seen it: `prefs.LatestSeenVersio
 5. **Routine status row** — when a routine is active.
 6. **Tool-activity strip** — what the agent is running this turn (collapses to a summary when idle).
 7. **Queued-message footer** — messages typed while a turn streams, awaiting dispatch.
-8. **Error notifications** — error one-shots; the bottommost region above the input.
-9. **Input box.**
-10. **Help line.**
+8. **Error notifications** — error one-shots.
+9. **Navigation-confirm prompt** — the y/n band shown while a `pendingNavConfirm` is pending (a routine cancel and/or queued-message discard); the bottommost region above the input, where the answer is typed.
+10. **Input box.**
+11. **Help line.**
 
-Informational and error notifications SHALL be deliberately split to opposite ends. An informational confirmation reads naturally at the top beside the status bar, while an error surfaces at the bottom next to the input, where the user will act on it. Both SHALL be drawn from the same `chatModel.notifications` store, filtered on the `isError` flag by `renderInfoNotifications` / `renderErrorNotifications`.
+Informational and error notifications SHALL be deliberately split to opposite ends. An informational confirmation reads naturally at the top beside the status bar, while an error surfaces at the bottom next to the input, where the user will act on it. Both SHALL be drawn from the same `chatModel.notifications` store, filtered on the `isError` flag by `renderInfoNotifications` / `renderErrorNotifications`. The navigation-confirm prompt SHALL be rendered separately by `renderNavConfirm` off the `pendingNavConfirm` state — not the notification store — so it is present exactly while the question is pending and clears the instant it is answered.
 
 #### Scenario: Fixed top-to-bottom region order
 - **WHEN** `chatModel.View()` assembles the chat view
-- **THEN** regions render in order: header, info notifications, conversation viewport, completion menu, routine status row, tool-activity strip, queued-message footer, error notifications, input box, help line
+- **THEN** regions render in order: header, info notifications, conversation viewport, completion menu, routine status row, tool-activity strip, queued-message footer, error notifications, navigation-confirm prompt, input box, help line
 - **AND** each region between header and input reserves viewport height via `applyLayout` and renders only when it has content
 
 #### Scenario: Notifications split to opposite ends
 - **GIVEN** the shared `chatModel.notifications` store filtered on `isError`
 - **WHEN** notifications render
-- **THEN** informational rows pin to the top just below the header via `renderInfoNotifications` and error rows drop to the bottommost region above the input via `renderErrorNotifications`
+- **THEN** informational rows pin to the top just below the header via `renderInfoNotifications` and error rows drop toward the bottom above the input via `renderErrorNotifications`
+
+#### Scenario: Navigation-confirm prompt sits directly above the input
+- **GIVEN** a `pendingNavConfirm` is pending
+- **WHEN** `chatModel.View()` assembles the chat view
+- **THEN** `renderNavConfirm` draws the prompt as the bottommost region above the input box, below the error-notification region, and `applyLayout` reserves its height
 
 ### Requirement: Notifications
 
@@ -397,3 +401,4 @@ Page Up/Down SHALL still scroll a page at a time. `/mouse off` SHALL opt out of 
 - **WHEN** the user runs `/mouse off`
 - **THEN** capture is opted out, handing click-drag back to the terminal's native selection at the cost of wheel scrolling
 - **AND** `/mouse on` restores the default; Page Up/Down still scroll a page at a time
+
