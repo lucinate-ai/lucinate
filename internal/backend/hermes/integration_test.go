@@ -273,6 +273,14 @@ func TestIntegration_AbortMidStream(t *testing.T) {
 	if _, err := b.ChatSend(ctx, key, backend.ChatSendParams{Message: "Write a very long 500-word essay about computing history."}); err != nil {
 		t.Fatalf("ChatSend: %v", err)
 	}
+	// Abort only once the stream is visibly under way. On v2026.7.x
+	// gateways an interrupt that lands while the agent is still
+	// initialising (before message.start) cancels the turn without
+	// emitting any terminal frame, so aborting straight after ChatSend
+	// races agent init and can wait forever. Once a chat event has
+	// arrived the interrupt takes the cooperative path and the turn
+	// always terminates — which is the mid-stream abort this test pins.
+	ev := waitLiveChatEvent(t, b, 60*time.Second, "delta", "final")
 	if err := b.ChatAbort(ctx, key, ""); err != nil {
 		t.Fatalf("ChatAbort: %v", err)
 	}
@@ -280,8 +288,11 @@ func TestIntegration_AbortMidStream(t *testing.T) {
 	// win the race and complete before the interrupt lands, so either
 	// terminal state is legitimate — the point is the turn terminates
 	// and the session survives. The interrupted→aborted mapping itself
-	// is pinned by the unit tests against the captured fixture.
-	waitLiveChatEvent(t, b, 60*time.Second, "aborted", "final")
+	// is pinned by the unit tests against the captured fixture. When
+	// the final was already consumed above, no further frame follows.
+	if ev.State != "final" {
+		waitLiveChatEvent(t, b, 60*time.Second, "aborted", "final")
+	}
 
 	// Session usable after the abort.
 	if _, err := b.ChatSend(ctx, key, backend.ChatSendParams{Message: "Reply with exactly: ok"}); err != nil {
