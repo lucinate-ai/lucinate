@@ -126,44 +126,6 @@ func TestTranslate_InterruptedTurnAborts(t *testing.T) {
 	}
 }
 
-// A run absorbed by the abort fallback swallows the gateway's late
-// frames — no delta re-opens the finalised row and no second terminal
-// event surfaces — while the next run translates normally again.
-func TestTranslate_AbsorbedRunSwallowsLateFrames(t *testing.T) {
-	tr := newTranslator()
-	tr.SetRun("s1", "run-1")
-
-	ce := decodeChatEvent(t, tr.AbsorbRun("s1"))
-	if ce.State != "aborted" || ce.RunID != "run-1" || ce.SessionKey != "s1" {
-		t.Fatalf("synthesised abort envelope = %+v", ce)
-	}
-	if _, active := tr.ActiveRun("s1"); active {
-		t.Fatal("run should be terminal after AbsorbRun")
-	}
-
-	late := []string{
-		`{"type":"message.delta","session_id":"s1","payload":{"text":"late"}}`,
-		`{"type":"message.complete","session_id":"s1","payload":{"text":"late","status":"interrupted"}}`,
-		`{"type":"error","session_id":"s1","payload":{"message":"boom"}}`,
-	}
-	for _, f := range late {
-		events, _ := tr.Translate(rpc.Notification{Method: "event", Params: json.RawMessage(f)})
-		if len(events) != 0 {
-			t.Fatalf("late frame surfaced events: %s", f)
-		}
-	}
-
-	tr.SetRun("s1", "run-2")
-	events, _ := tr.Translate(rpc.Notification{Method: "event", Params: json.RawMessage(
-		`{"type":"message.complete","session_id":"s1","payload":{"text":"ok","status":"complete"}}`)})
-	if len(events) != 1 {
-		t.Fatalf("next run events = %d, want 1", len(events))
-	}
-	if ce := decodeChatEvent(t, events[0]); ce.State != "final" || ce.RunID != "run-2" {
-		t.Fatalf("next run should translate normally: %+v", ce)
-	}
-}
-
 // tool.start / tool.complete pair by the server-supplied tool_id and
 // land in the data shape the TUI's tool cards decode.
 func TestTranslate_ToolPairUsesServerID(t *testing.T) {

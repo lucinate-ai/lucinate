@@ -112,7 +112,7 @@ A bad or missing token is rejected at the **WebSocket upgrade with HTTP status 4
 
 ### Requirement: Streaming chat via prompt.submit
 
-`ChatSend` SHALL submit a turn via the `prompt.submit` RPC with `{session_id, text}`, using a generated idempotency key as the run id; the RPC returns `{"status": "streaming"}` and the turn's output arrives as event notifications. On turn 1 of a session the skills catalogue SHALL be prepended as a system preamble, as the OpenAI backend does. Streamed `message.delta` events SHALL accumulate per session and surface as `protocol.ChatEvent` (state=delta). `message.complete` carries the turn's usage inline and a `status` field: `status:"complete"` SHALL produce a final event, and `status:"interrupted"` SHALL produce an aborted event. `ChatAbort` SHALL call `session.interrupt` (which returns `{"status":"interrupted"}`) for a real server-side interrupt, not merely dropping the stream; the interrupted turn normally terminates with a `message.complete` whose `status` is `"interrupted"`. Gateways in the v2026.7.x line cancel a turn whose interrupt lands before `message.start` (during agent initialisation) without emitting any terminal frame; after an acknowledged `session.interrupt`, if the in-flight run has produced no terminal chat event within a short grace period, the backend SHALL synthesise the aborted event locally and SHALL drop the gateway's late chat frames for that run so no second terminal event surfaces. The session SHALL remain usable afterwards.
+`ChatSend` SHALL submit a turn via the `prompt.submit` RPC with `{session_id, text}`, using a generated idempotency key as the run id; the RPC returns `{"status": "streaming"}` and the turn's output arrives as event notifications. On turn 1 of a session the skills catalogue SHALL be prepended as a system preamble, as the OpenAI backend does. Streamed `message.delta` events SHALL accumulate per session and surface as `protocol.ChatEvent` (state=delta). `message.complete` carries the turn's usage inline and a `status` field: `status:"complete"` SHALL produce a final event, and `status:"interrupted"` SHALL produce an aborted event. `ChatAbort` SHALL call `session.interrupt` (which returns `{"status":"interrupted"}`) for a real server-side interrupt, not merely dropping the stream; the interrupted turn terminates with a `message.complete` whose `status` is `"interrupted"`. The session SHALL remain usable afterwards.
 
 #### Scenario: Streaming chat over the gateway
 - **WHEN** `ChatSend` is invoked
@@ -122,12 +122,6 @@ A bad or missing token is rejected at the **WebSocket upgrade with HTTP status 4
 #### Scenario: Abort interrupts server-side
 - **WHEN** `ChatAbort` is called mid-turn
 - **THEN** it calls `session.interrupt`, the turn ends with a `message.complete` whose `status` is `"interrupted"` which surfaces as an aborted event, and the session remains usable for the next turn
-
-#### Scenario: Abort with no terminal frame from the gateway
-- **GIVEN** an acknowledged `session.interrupt` on a gateway that cancels the turn without emitting any terminal event (seen on v2026.7.x when the interrupt lands before `message.start`)
-- **WHEN** the grace period elapses with no terminal chat event for the in-flight run
-- **THEN** the backend synthesises the aborted event for that run and drops the gateway's late chat frames for it
-- **AND** the session remains usable for the next turn
 
 ### Requirement: Event translation to protocol events
 

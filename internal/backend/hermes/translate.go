@@ -75,65 +75,25 @@ type askPayload struct {
 // I/O-free so the whole mapping is table-testable against the Phase 0
 // fixtures; the only state is the per-session delta accumulator (the
 // TUI expects each chat delta to carry the full text so far, while the
-// gateway sends increments), the per-session run id, and the run's
-// terminal/absorbed flags backing the abort fallback.
+// gateway sends increments) and the per-session run id.
 //
-// Not safe for concurrent use: the backend guards every access (the
-// event pump, ChatSend, and the abort-fallback timer) with its mutex.
+// Not safe for concurrent use: the backend's single event pump owns it.
 type Translator struct {
 	acc    map[string]*strings.Builder
 	runIDs map[string]string
-	// terminal marks sessions whose current run has already produced a
-	// terminal chat event (final/aborted/error), so the abort fallback
-	// knows whether anything is still in flight.
-	terminal map[string]bool
-	// absorbed maps a session to the run id the abort fallback already
-	// terminated locally; late server frames for that run are dropped
-	// so the TUI never sees a second terminal event. Cleared by the
-	// next SetRun.
-	absorbed map[string]string
 }
 
 func newTranslator() *Translator {
 	return &Translator{
-		acc:      make(map[string]*strings.Builder),
-		runIDs:   make(map[string]string),
-		terminal: make(map[string]bool),
-		absorbed: make(map[string]string),
+		acc:    make(map[string]*strings.Builder),
+		runIDs: make(map[string]string),
 	}
 }
 
 // SetRun records the run id ChatSend generated for a session, so chat
-// events carry the id the TUI keys its streaming row on. It also opens
-// a fresh run: the previous run's terminal state and any absorbed mark
-// are reset.
+// events carry the id the TUI keys its streaming row on.
 func (t *Translator) SetRun(sessionID, runID string) {
 	t.runIDs[sessionID] = runID
-	t.terminal[sessionID] = false
-	delete(t.absorbed, sessionID)
-}
-
-// ActiveRun reports the session's current run id and whether that run
-// is still awaiting a terminal chat event. Sessions that never saw a
-// ChatSend have no run and report false.
-func (t *Translator) ActiveRun(sessionID string) (string, bool) {
-	runID, ok := t.runIDs[sessionID]
-	if !ok {
-		return "", false
-	}
-	return runID, !t.terminal[sessionID]
-}
-
-// AbsorbRun terminates the session's current run locally: it returns
-// the synthesised aborted event for it and marks the run absorbed so
-// any late server frames for it are dropped. Used by the abort
-// fallback when the gateway never emits a terminal frame.
-func (t *Translator) AbsorbRun(sessionID string) protocol.Event {
-	runID := t.runIDs[sessionID]
-	t.terminal[sessionID] = true
-	t.absorbed[sessionID] = runID
-	delete(t.acc, sessionID)
-	return chatAbortedEvent(runID, sessionID)
 }
 
 // InjectSystemLine splices a "System: …" notice into the session's
@@ -169,11 +129,6 @@ func (t *Translator) Translate(n rpc.Notification) ([]protocol.Event, *Ask) {
 	}
 	sid := env.SessionID
 	runID := t.runIDs[sid]
-	// A run the abort fallback already terminated locally: swallow the
-	// gateway's late chat frames for it so the TUI never sees a second
-	// terminal event (or a delta re-opening a finalised row).
-	mark, marked := t.absorbed[sid]
-	absorbed := marked && mark == runID
 
 	switch env.Type {
 	case "message.start":
@@ -184,9 +139,6 @@ func (t *Translator) Translate(n rpc.Notification) ([]protocol.Event, *Ask) {
 	case "message.delta":
 		var p textPayload
 		_ = json.Unmarshal(env.Payload, &p)
-		if absorbed {
-			return nil, nil
-		}
 		b := t.acc[sid]
 		if b == nil {
 			b = &strings.Builder{}
@@ -199,10 +151,6 @@ func (t *Translator) Translate(n rpc.Notification) ([]protocol.Event, *Ask) {
 		var p completePayload
 		_ = json.Unmarshal(env.Payload, &p)
 		delete(t.acc, sid)
-		t.terminal[sid] = true
-		if absorbed {
-			return nil, nil
-		}
 		if p.Status == "interrupted" {
 			return []protocol.Event{chatAbortedEvent(runID, sid)}, nil
 		}
@@ -214,10 +162,6 @@ func (t *Translator) Translate(n rpc.Notification) ([]protocol.Event, *Ask) {
 		}
 		_ = json.Unmarshal(env.Payload, &p)
 		delete(t.acc, sid)
-		t.terminal[sid] = true
-		if absorbed {
-			return nil, nil
-		}
 		return []protocol.Event{chatErrorEvent(runID, sid, p.Message)}, nil
 
 	case "tool.generating":
