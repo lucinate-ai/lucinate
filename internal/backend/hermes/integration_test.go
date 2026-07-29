@@ -280,7 +280,11 @@ func TestIntegration_AbortMidStream(t *testing.T) {
 	// win the race and complete before the interrupt lands, so either
 	// terminal state is legitimate — the point is the turn terminates
 	// and the session survives. The interrupted→aborted mapping itself
-	// is pinned by the unit tests against the captured fixture.
+	// is pinned by the unit tests against the captured fixture. A third
+	// outcome exists on v2026.7.x gateways: an interrupt landing before
+	// message.start kills the turn with no terminal frame at all, which
+	// the backend's abort fallback converts into the aborted event —
+	// also covered by the unit tests, exercised for real here.
 	waitLiveChatEvent(t, b, 60*time.Second, "aborted", "final")
 
 	// Session usable after the abort.

@@ -51,6 +51,16 @@ const syntheticAgentID = "hermes"
 // the caller didn't configure one.
 const defaultConnectTimeout = 10 * time.Second
 
+// abortFallbackGrace is how long ChatAbort waits for the gateway to
+// terminate the interrupted turn itself before synthesising the
+// aborted event locally. Gateways in the v2026.7.x line cancel a turn
+// interrupted during agent initialisation (before message.start)
+// without emitting any terminal frame, which would otherwise leave the
+// TUI streaming forever. A real interrupted message.complete lands
+// well inside this window; when it arrives late instead, the
+// translator absorbs it. Variable so tests can shorten the wait.
+var abortFallbackGrace = 2 * time.Second
+
 // legacyEndpointHint is the migration error for connections still
 // pointing at the pre-WebSocket Hermes API server. There is no silent
 // auto-migration: the user has to switch the server process they run.
@@ -668,9 +678,13 @@ func skillsPreamble(skills []backend.SkillCatalogEntry) string {
 }
 
 // ChatAbort interrupts the turn server-side. The gateway acknowledges
-// with {"status":"interrupted"} and terminates the turn with a
-// message.complete whose status is "interrupted", which the Translator
-// surfaces as the aborted event — nothing is synthesised locally.
+// with {"status":"interrupted"} and normally terminates the turn with
+// a message.complete whose status is "interrupted", which the
+// Translator surfaces as the aborted event. Gateways in the v2026.7.x
+// line have one hole: an interrupt that lands while the agent is still
+// initialising (before message.start) cancels the turn without
+// emitting any terminal frame, so a fallback timer synthesises the
+// aborted event when the gateway stays silent.
 func (b *Backend) ChatAbort(ctx context.Context, sessionKey, runID string) error {
 	sess, err := b.resolve(ctx, sessionKey)
 	if err != nil {
@@ -680,7 +694,38 @@ func (b *Backend) ChatAbort(ctx context.Context, sessionKey, runID string) error
 	if err != nil {
 		return err
 	}
-	return cli.Call(ctx, "session.interrupt", map[string]string{"session_id": sess.live}, nil)
+	if err := cli.Call(ctx, "session.interrupt", map[string]string{"session_id": sess.live}, nil); err != nil {
+		return err
+	}
+	b.armAbortFallback(sess.live)
+	return nil
+}
+
+// armAbortFallback starts the grace timer for an acknowledged
+// interrupt. If the session's in-flight run still has no terminal chat
+// event when the timer fires, the run is terminated locally: the
+// synthesised aborted event is emitted and any late gateway frames for
+// the run are absorbed by the translator. A turn that already
+// terminated (the interrupt raced a completed turn) arms nothing, so
+// no spurious aborted event follows a final.
+func (b *Backend) armAbortFallback(sid string) {
+	b.mu.Lock()
+	runID, active := b.tr.ActiveRun(sid)
+	b.mu.Unlock()
+	if !active {
+		return
+	}
+	time.AfterFunc(abortFallbackGrace, func() {
+		b.mu.Lock()
+		nowID, stillActive := b.tr.ActiveRun(sid)
+		if b.closed || !stillActive || nowID != runID {
+			b.mu.Unlock()
+			return
+		}
+		ev := b.tr.AbsorbRun(sid)
+		b.mu.Unlock()
+		b.emit(ev)
+	})
 }
 
 // historyMessage tolerates the gateway's transcript shapes: content as
