@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] - 2026-07-29
+### Added
+- feat(crons): support editing every-interval schedules in the TUI form (#184)
+- feat(hermes): replace HTTP backend with tui_gateway WebSocket client (#183)
+- feat(tui): confirm before dropping queued messages on chat switch
+- feat: open the agent's messaging conversation by default
+
+### Changed
+- build(deps): bump actions/setup-go from 6 to 7 in the actions group
+- build(deps): bump actions/setup-go from 6 to 7 in the actions group (#181)
+- docs: adopt OpenSpec for spec-driven development (#182)
+- docs: archive the default-to-messaging-session OpenSpec change
+- docs: archive the replace-hermes-ws-backend OpenSpec change
+- test(hermes): abort only once the stream has started
+
 ## [1.23.0] - 2026-07-13
 ### Added
 - feat: run a named cron job with /cron (#172)
