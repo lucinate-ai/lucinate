@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 )
 
 func newSlashTestModel() *chatModel {
@@ -501,6 +503,160 @@ func TestSlashCommand_Model_TrailingWhitespaceOpensPicker(t *testing.T) {
 			t.Errorf("expected showModelPickerMsg for %q, got %T", input, cmd())
 		}
 	}
+}
+
+// TestSlashCommand_Model_SwitchMatching drives the async closure behind
+// `/model <name>` — the part that actually talks to the gateway. The
+// tiering matters: an exact hit must win even when an earlier entry in
+// the list is a substring match, otherwise `/model gpt-4o` could land on
+// `gpt-4o-mini` purely because of catalogue order.
+func TestSlashCommand_Model_SwitchMatching(t *testing.T) {
+	catalogue := []protocol.ModelChoice{
+		{ID: "gpt-4o-mini", Name: "GPT-4o mini", Provider: "openai"},
+		{ID: "gpt-4o", Name: "GPT-4o", Provider: "openai"},
+		{ID: "claude-sonnet-4", Name: "Claude Sonnet 4", Provider: "anthropic"},
+	}
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "exact id beats an earlier substring match",
+			input: "/model gpt-4o",
+			want:  "openai/gpt-4o",
+		},
+		{
+			name:  "exact display name matches",
+			input: "/model claude sonnet 4",
+			want:  "anthropic/claude-sonnet-4",
+		},
+		{
+			name:  "matching is case-insensitive",
+			input: "/model CLAUDE-SONNET-4",
+			want:  "anthropic/claude-sonnet-4",
+		},
+		{
+			name:  "substring falls back when nothing matches exactly",
+			input: "/model sonnet",
+			want:  "anthropic/claude-sonnet-4",
+		},
+		{
+			name:    "no match reports an error",
+			input:   "/model llama",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newSlashTestModel()
+			fake := m.backend.(*fakeBackend)
+			fake.models = catalogue
+			m.sessionKey = "sess-1"
+
+			handled, cmd := m.handleSlashCommand(tt.input)
+			if !handled || cmd == nil {
+				t.Fatalf("expected %q to return a switch cmd", tt.input)
+			}
+			msg, ok := cmd().(modelSwitchedMsg)
+			if !ok {
+				t.Fatalf("expected modelSwitchedMsg, got %T", cmd())
+			}
+
+			if tt.wantErr {
+				if msg.err == nil {
+					t.Fatalf("expected an error for %q, got modelID %q", tt.input, msg.modelID)
+				}
+				if fake.patchedModelID != "" {
+					t.Errorf("expected no patch on a failed lookup, got %q", fake.patchedModelID)
+				}
+				return
+			}
+
+			if msg.err != nil {
+				t.Fatalf("unexpected error: %v", msg.err)
+			}
+			// The qualified reference is the whole point — a bare id is
+			// what the gateway rejects.
+			if msg.modelID != tt.want {
+				t.Errorf("modelID = %q, want %q", msg.modelID, tt.want)
+			}
+			if fake.patchedModelID != tt.want {
+				t.Errorf("patched %q, want %q", fake.patchedModelID, tt.want)
+			}
+			if fake.patchedSessionKey != "sess-1" {
+				t.Errorf("patched session %q, want %q", fake.patchedSessionKey, "sess-1")
+			}
+		})
+	}
+}
+
+// A provider-less backend (openai, hermes) has nothing to qualify with,
+// so the bare id must go through untouched.
+func TestSlashCommand_Model_SwitchKeepsBareIDWithoutProvider(t *testing.T) {
+	m := newSlashTestModel()
+	fake := m.backend.(*fakeBackend)
+	fake.models = []protocol.ModelChoice{{ID: "gpt-4o", Name: "GPT-4o"}}
+
+	_, cmd := m.handleSlashCommand("/model gpt-4o")
+	msg, ok := cmd().(modelSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected modelSwitchedMsg, got %T", cmd())
+	}
+	if msg.err != nil {
+		t.Fatalf("unexpected error: %v", msg.err)
+	}
+	if msg.modelID != "gpt-4o" {
+		t.Errorf("modelID = %q, want bare %q", msg.modelID, "gpt-4o")
+	}
+	if fake.patchedModelID != "gpt-4o" {
+		t.Errorf("patched %q, want bare %q", fake.patchedModelID, "gpt-4o")
+	}
+}
+
+// Both gateway calls can fail independently, and each must surface as an
+// inline error rather than a silent no-op that leaves the header showing
+// a model the session isn't on.
+func TestSlashCommand_Model_SwitchSurfacesBackendErrors(t *testing.T) {
+	t.Run("models list fails", func(t *testing.T) {
+		m := newSlashTestModel()
+		fake := m.backend.(*fakeBackend)
+		fake.modelsListErr = errors.New("gateway unreachable")
+
+		_, cmd := m.handleSlashCommand("/model sonnet")
+		msg, ok := cmd().(modelSwitchedMsg)
+		if !ok {
+			t.Fatalf("expected modelSwitchedMsg, got %T", cmd())
+		}
+		if msg.err == nil {
+			t.Fatal("expected the list error to surface")
+		}
+		if !strings.Contains(msg.err.Error(), "gateway unreachable") {
+			t.Errorf("expected the underlying error, got: %v", msg.err)
+		}
+	})
+
+	t.Run("patch fails", func(t *testing.T) {
+		m := newSlashTestModel()
+		fake := m.backend.(*fakeBackend)
+		fake.models = []protocol.ModelChoice{{ID: "claude-sonnet-4", Provider: "anthropic"}}
+		fake.patchModelErr = errors.New("model not allowed")
+
+		_, cmd := m.handleSlashCommand("/model sonnet")
+		msg, ok := cmd().(modelSwitchedMsg)
+		if !ok {
+			t.Fatalf("expected modelSwitchedMsg, got %T", cmd())
+		}
+		if msg.err == nil {
+			t.Fatal("expected the patch error to surface")
+		}
+		if msg.modelID != "" {
+			t.Errorf("expected no modelID on a failed patch, got %q", msg.modelID)
+		}
+	})
 }
 
 func TestSlashCommand_Model_SwitchReturnsCmd(t *testing.T) {
