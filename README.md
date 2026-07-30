@@ -168,8 +168,9 @@ Type these in the chat input. As soon as you type `/`, a menu shows every matchi
 | `/crons` | List and manage gateway cron jobs (default: filter by current agent; `/crons all` shows global) — OpenClaw only |
 | `/cron <name>` | Run a named cron job now, after a y/n confirmation — OpenClaw only |
 | `/header <hex>` | Set the chat header background for the current agent to a hex colour (e.g. `#4FC3F7`); the override sticks to that agent and persists across runs. Bare `/header` reports the current agent's value, `/header reset` restores the default. |
-| `/models` | Open the model picker (filter as you type) |
+| `/model` | Open the model picker (filter as you type); the model in use is marked `(current)` |
 | `/model <name>` | Switch model (fuzzy match) |
+| `/models` | Alias for `/model` |
 | `/mouse on\|off` | Mouse capture (on by default: wheel scrolls, drag copies; off: your terminal's native selection) |
 | `/reset` | Delete session and start fresh (with confirmation) |
 | `/routine <name>` | Activate a stored multi-step routine in the current session |

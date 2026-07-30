@@ -397,37 +397,53 @@ func TestSlashCommand_Skills_Populated(t *testing.T) {
 	}
 }
 
-func TestSlashCommand_Model_BareReportsCurrentModel(t *testing.T) {
+func TestSlashCommand_Model_BareOpensPicker(t *testing.T) {
 	m := newSlashTestModel()
-	m.modelID = "claude-opus-4-8"
+	m.sessionKey = "sess-1"
+	m.modelID = "anthropic/claude-opus-4-8"
+	before := len(m.messages)
+
 	handled, cmd := m.handleSlashCommand("/model")
 	if !handled {
 		t.Fatal("expected /model to be handled")
 	}
-	if cmd != nil {
-		t.Error("expected bare /model to return no cmd (inline report only)")
+	if cmd == nil {
+		t.Fatal("expected bare /model to return a picker cmd")
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.role != "system" || last.errMsg != "" {
-		t.Errorf("expected a system content row, got: %+v", last)
+	msg, ok := cmd().(showModelPickerMsg)
+	if !ok {
+		t.Fatalf("expected showModelPickerMsg, got %T", cmd())
 	}
-	if !strings.Contains(last.content, "claude-opus-4-8") {
-		t.Errorf("expected current model in report, got: %q", last.content)
+	if msg.sessionKey != "sess-1" {
+		t.Errorf("sessionKey = %q, want %q", msg.sessionKey, "sess-1")
+	}
+	if msg.currentModelID != "anthropic/claude-opus-4-8" {
+		t.Errorf("currentModelID = %q, want %q", msg.currentModelID, "anthropic/claude-opus-4-8")
+	}
+	// The picker replaces the old inline report, so nothing is appended
+	// to the chat on the way there.
+	if len(m.messages) != before {
+		t.Errorf("expected no system message, got %d new row(s)", len(m.messages)-before)
 	}
 }
 
-func TestSlashCommand_Model_BareWithoutModelReportsDefault(t *testing.T) {
+// A session with no model set still opens the picker; the empty reference
+// simply means no row is pre-selected or marked.
+func TestSlashCommand_Model_BareWithoutModelOpensPicker(t *testing.T) {
 	m := newSlashTestModel()
-	handled, _ := m.handleSlashCommand("/model")
+	handled, cmd := m.handleSlashCommand("/model")
 	if !handled {
 		t.Fatal("expected /model to be handled")
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.role != "system" || last.errMsg != "" {
-		t.Errorf("expected a system content row, got: %+v", last)
+	if cmd == nil {
+		t.Fatal("expected bare /model to return a picker cmd")
 	}
-	if !strings.Contains(last.content, "gateway default") {
-		t.Errorf("expected gateway-default fallback, got: %q", last.content)
+	msg, ok := cmd().(showModelPickerMsg)
+	if !ok {
+		t.Fatalf("expected showModelPickerMsg, got %T", cmd())
+	}
+	if msg.currentModelID != "" {
+		t.Errorf("currentModelID = %q, want empty", msg.currentModelID)
 	}
 }
 
@@ -442,6 +458,48 @@ func TestSlashCommand_Models_ReturnsPickerCmd(t *testing.T) {
 	}
 	if _, ok := cmd().(showModelPickerMsg); !ok {
 		t.Errorf("expected showModelPickerMsg, got %T", cmd())
+	}
+}
+
+// /models is an alias, not a second implementation: both tokens must seed
+// the picker identically.
+func TestSlashCommand_Model_AndModelsAreEquivalent(t *testing.T) {
+	pick := func(input string) showModelPickerMsg {
+		t.Helper()
+		m := newSlashTestModel()
+		m.sessionKey = "sess-1"
+		m.modelID = "anthropic/claude-opus-4-8"
+		handled, cmd := m.handleSlashCommand(input)
+		if !handled || cmd == nil {
+			t.Fatalf("expected %q to return a picker cmd", input)
+		}
+		msg, ok := cmd().(showModelPickerMsg)
+		if !ok {
+			t.Fatalf("expected showModelPickerMsg for %q, got %T", input, cmd())
+		}
+		return msg
+	}
+
+	if singular, plural := pick("/model"), pick("/models"); singular != plural {
+		t.Errorf("/model = %+v, /models = %+v; want identical", singular, plural)
+	}
+}
+
+// Trailing whitespace normalises to the bare form, so it must reach the
+// picker rather than the empty-query switch path.
+func TestSlashCommand_Model_TrailingWhitespaceOpensPicker(t *testing.T) {
+	for _, input := range []string{"/model ", "/model   ", "/models  "} {
+		m := newSlashTestModel()
+		handled, cmd := m.handleSlashCommand(input)
+		if !handled {
+			t.Fatalf("expected %q to be handled", input)
+		}
+		if cmd == nil {
+			t.Fatalf("expected %q to return a picker cmd", input)
+		}
+		if _, ok := cmd().(showModelPickerMsg); !ok {
+			t.Errorf("expected showModelPickerMsg for %q, got %T", input, cmd())
+		}
 	}
 }
 
