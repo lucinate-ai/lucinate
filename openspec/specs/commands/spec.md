@@ -73,9 +73,9 @@ on connections that do not support them (see the `connections` spec — capabili
 | `/header <hex>` | Set the chat header background for the current agent to a hex colour (e.g. `#4FC3F7`, `#F0C`); persisted per agent across runs |
 | `/header reset` | Restore the default header colour for the current agent (also accepts `default` or `off`) |
 | `/help`, `/commands` | Print static help text; appends skill count if any are loaded |
-| `/model` | Report the model in use for the current session |
+| `/model` | Open the model picker (filter as you type) |
 | `/model <name>` | Switch model |
-| `/models` | Open the model picker (filter as you type) |
+| `/models` | Alias for /model — opens the model picker |
 | `/mouse` | Report the current mouse-capture state |
 | `/mouse on` | Enable mouse capture (the default): wheel scrolls history, click-drag selects and copies — see the `chat-ux` spec |
 | `/mouse off` | Disable capture, handing click-drag back to the terminal's native selection (wheel scrolling stops) |
@@ -127,17 +127,19 @@ back to the picker.
 - **THEN** `agentSwitchFailedMsg` renders the failure inline as a system message
 - **AND** the user is not bounced back to the picker
 
-### Requirement: /model reports and switches the session model
+### Requirement: /model opens the picker and switches the session model
 
-`handleModelCommand()` SHALL report the current model for the active session when called
-with no argument (falling back to `gateway default` when `m.modelID` is empty), pointing the
-user at `/models` and `/model <name>` to change it. With a name it SHALL call
-`client.ModelsList()` to retrieve available models from the gateway, fuzzy-match against
-model IDs and names (exact match first, then substring), then call
+`handleModelCommand()` SHALL open the model picker when called with no argument, behaving
+identically to `/models` — the same `showModelPickerMsg` carrying the active session key and
+the current model reference. Bare `/model` SHALL NOT emit a textual report of the model in
+use; the picker is the answer to "which model am I on?" (see the `chat-ux` spec — the picker
+marks the model in use). `/models` (plural) SHALL remain as an alias for the same behaviour.
+
+With a name it SHALL call `client.ModelsList()` to retrieve available models from the gateway,
+fuzzy-match against model IDs and names (exact match first, then substring), then call
 `client.SessionPatchModel(sessionKey, modelRef)` and update `m.modelID` in the header.
-`/models` (plural) SHALL open the picker via `showModelPickerMsg`.
 
-Both switch paths — the `/model <name>` command and the `/models` picker — SHALL patch with
+Both switch paths — the `/model <name>` command and the picker — SHALL patch with
 the **qualified `<provider>/<id>` reference** produced by `qualifiedModelRef()`
 (`internal/tui/models.go`), not the bare id. `models.list` reports a provider-local id (e.g.
 `deepseek/deepseek-v4-pro`) alongside a separate `provider` field (e.g. `openrouter`), but
@@ -146,9 +148,18 @@ fully-qualified form (`openrouter/deepseek/deepseek-v4-pro`). Sending the bare i
 gateway reject the switch with `INVALID_REQUEST: model not allowed: <id>`. Backends that
 leave `provider` empty (openai, hermes) SHALL keep the bare id unchanged.
 
-#### Scenario: Bare /model reports the current model
+#### Scenario: Bare /model opens the picker
 - **WHEN** the user submits `/model` with no argument
-- **THEN** the current session model is reported (or `gateway default` when `m.modelID` is empty) and the user is pointed at `/models` and `/model <name>`
+- **THEN** the model picker opens, seeded with the active session key and the current model reference
+- **AND** no `Model: <id>` system message is appended to the chat
+
+#### Scenario: /model and /models are equivalent with no argument
+- **WHEN** the user submits `/model` and, separately, `/models`
+- **THEN** both open the model picker with the same session key and current model reference
+
+#### Scenario: Trailing whitespace still counts as no argument
+- **WHEN** the user submits `/model` followed only by spaces
+- **THEN** the picker opens, exactly as for bare `/model`
 
 #### Scenario: /model switches with a qualified reference
 - **WHEN** the user submits `/model <name>`
