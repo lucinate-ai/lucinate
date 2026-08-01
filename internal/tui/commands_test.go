@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 )
 
 func newSlashTestModel() *chatModel {
@@ -397,37 +399,53 @@ func TestSlashCommand_Skills_Populated(t *testing.T) {
 	}
 }
 
-func TestSlashCommand_Model_BareReportsCurrentModel(t *testing.T) {
+func TestSlashCommand_Model_BareOpensPicker(t *testing.T) {
 	m := newSlashTestModel()
-	m.modelID = "claude-opus-4-8"
+	m.sessionKey = "sess-1"
+	m.modelID = "anthropic/claude-opus-4-8"
+	before := len(m.messages)
+
 	handled, cmd := m.handleSlashCommand("/model")
 	if !handled {
 		t.Fatal("expected /model to be handled")
 	}
-	if cmd != nil {
-		t.Error("expected bare /model to return no cmd (inline report only)")
+	if cmd == nil {
+		t.Fatal("expected bare /model to return a picker cmd")
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.role != "system" || last.errMsg != "" {
-		t.Errorf("expected a system content row, got: %+v", last)
+	msg, ok := cmd().(showModelPickerMsg)
+	if !ok {
+		t.Fatalf("expected showModelPickerMsg, got %T", cmd())
 	}
-	if !strings.Contains(last.content, "claude-opus-4-8") {
-		t.Errorf("expected current model in report, got: %q", last.content)
+	if msg.sessionKey != "sess-1" {
+		t.Errorf("sessionKey = %q, want %q", msg.sessionKey, "sess-1")
+	}
+	if msg.currentModelID != "anthropic/claude-opus-4-8" {
+		t.Errorf("currentModelID = %q, want %q", msg.currentModelID, "anthropic/claude-opus-4-8")
+	}
+	// The picker replaces the old inline report, so nothing is appended
+	// to the chat on the way there.
+	if len(m.messages) != before {
+		t.Errorf("expected no system message, got %d new row(s)", len(m.messages)-before)
 	}
 }
 
-func TestSlashCommand_Model_BareWithoutModelReportsDefault(t *testing.T) {
+// A session with no model set still opens the picker; the empty reference
+// simply means no row is pre-selected or marked.
+func TestSlashCommand_Model_BareWithoutModelOpensPicker(t *testing.T) {
 	m := newSlashTestModel()
-	handled, _ := m.handleSlashCommand("/model")
+	handled, cmd := m.handleSlashCommand("/model")
 	if !handled {
 		t.Fatal("expected /model to be handled")
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.role != "system" || last.errMsg != "" {
-		t.Errorf("expected a system content row, got: %+v", last)
+	if cmd == nil {
+		t.Fatal("expected bare /model to return a picker cmd")
 	}
-	if !strings.Contains(last.content, "gateway default") {
-		t.Errorf("expected gateway-default fallback, got: %q", last.content)
+	msg, ok := cmd().(showModelPickerMsg)
+	if !ok {
+		t.Fatalf("expected showModelPickerMsg, got %T", cmd())
+	}
+	if msg.currentModelID != "" {
+		t.Errorf("currentModelID = %q, want empty", msg.currentModelID)
 	}
 }
 
@@ -443,6 +461,202 @@ func TestSlashCommand_Models_ReturnsPickerCmd(t *testing.T) {
 	if _, ok := cmd().(showModelPickerMsg); !ok {
 		t.Errorf("expected showModelPickerMsg, got %T", cmd())
 	}
+}
+
+// /models is an alias, not a second implementation: both tokens must seed
+// the picker identically.
+func TestSlashCommand_Model_AndModelsAreEquivalent(t *testing.T) {
+	pick := func(input string) showModelPickerMsg {
+		t.Helper()
+		m := newSlashTestModel()
+		m.sessionKey = "sess-1"
+		m.modelID = "anthropic/claude-opus-4-8"
+		handled, cmd := m.handleSlashCommand(input)
+		if !handled || cmd == nil {
+			t.Fatalf("expected %q to return a picker cmd", input)
+		}
+		msg, ok := cmd().(showModelPickerMsg)
+		if !ok {
+			t.Fatalf("expected showModelPickerMsg for %q, got %T", input, cmd())
+		}
+		return msg
+	}
+
+	if singular, plural := pick("/model"), pick("/models"); singular != plural {
+		t.Errorf("/model = %+v, /models = %+v; want identical", singular, plural)
+	}
+}
+
+// Trailing whitespace normalises to the bare form, so it must reach the
+// picker rather than the empty-query switch path.
+func TestSlashCommand_Model_TrailingWhitespaceOpensPicker(t *testing.T) {
+	for _, input := range []string{"/model ", "/model   ", "/models  "} {
+		m := newSlashTestModel()
+		handled, cmd := m.handleSlashCommand(input)
+		if !handled {
+			t.Fatalf("expected %q to be handled", input)
+		}
+		if cmd == nil {
+			t.Fatalf("expected %q to return a picker cmd", input)
+		}
+		if _, ok := cmd().(showModelPickerMsg); !ok {
+			t.Errorf("expected showModelPickerMsg for %q, got %T", input, cmd())
+		}
+	}
+}
+
+// TestSlashCommand_Model_SwitchMatching drives the async closure behind
+// `/model <name>` — the part that actually talks to the gateway. The
+// tiering matters: an exact hit must win even when an earlier entry in
+// the list is a substring match, otherwise `/model gpt-4o` could land on
+// `gpt-4o-mini` purely because of catalogue order.
+func TestSlashCommand_Model_SwitchMatching(t *testing.T) {
+	catalogue := []protocol.ModelChoice{
+		{ID: "gpt-4o-mini", Name: "GPT-4o mini", Provider: "openai"},
+		{ID: "gpt-4o", Name: "GPT-4o", Provider: "openai"},
+		{ID: "claude-sonnet-4", Name: "Claude Sonnet 4", Provider: "anthropic"},
+	}
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "exact id beats an earlier substring match",
+			input: "/model gpt-4o",
+			want:  "openai/gpt-4o",
+		},
+		{
+			name:  "exact display name matches",
+			input: "/model claude sonnet 4",
+			want:  "anthropic/claude-sonnet-4",
+		},
+		{
+			name:  "matching is case-insensitive",
+			input: "/model CLAUDE-SONNET-4",
+			want:  "anthropic/claude-sonnet-4",
+		},
+		{
+			name:  "substring falls back when nothing matches exactly",
+			input: "/model sonnet",
+			want:  "anthropic/claude-sonnet-4",
+		},
+		{
+			name:    "no match reports an error",
+			input:   "/model llama",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newSlashTestModel()
+			fake := m.backend.(*fakeBackend)
+			fake.models = catalogue
+			m.sessionKey = "sess-1"
+
+			handled, cmd := m.handleSlashCommand(tt.input)
+			if !handled || cmd == nil {
+				t.Fatalf("expected %q to return a switch cmd", tt.input)
+			}
+			msg, ok := cmd().(modelSwitchedMsg)
+			if !ok {
+				t.Fatalf("expected modelSwitchedMsg, got %T", cmd())
+			}
+
+			if tt.wantErr {
+				if msg.err == nil {
+					t.Fatalf("expected an error for %q, got modelID %q", tt.input, msg.modelID)
+				}
+				if fake.patchedModelID != "" {
+					t.Errorf("expected no patch on a failed lookup, got %q", fake.patchedModelID)
+				}
+				return
+			}
+
+			if msg.err != nil {
+				t.Fatalf("unexpected error: %v", msg.err)
+			}
+			// The qualified reference is the whole point — a bare id is
+			// what the gateway rejects.
+			if msg.modelID != tt.want {
+				t.Errorf("modelID = %q, want %q", msg.modelID, tt.want)
+			}
+			if fake.patchedModelID != tt.want {
+				t.Errorf("patched %q, want %q", fake.patchedModelID, tt.want)
+			}
+			if fake.patchedSessionKey != "sess-1" {
+				t.Errorf("patched session %q, want %q", fake.patchedSessionKey, "sess-1")
+			}
+		})
+	}
+}
+
+// A provider-less backend (openai, hermes) has nothing to qualify with,
+// so the bare id must go through untouched.
+func TestSlashCommand_Model_SwitchKeepsBareIDWithoutProvider(t *testing.T) {
+	m := newSlashTestModel()
+	fake := m.backend.(*fakeBackend)
+	fake.models = []protocol.ModelChoice{{ID: "gpt-4o", Name: "GPT-4o"}}
+
+	_, cmd := m.handleSlashCommand("/model gpt-4o")
+	msg, ok := cmd().(modelSwitchedMsg)
+	if !ok {
+		t.Fatalf("expected modelSwitchedMsg, got %T", cmd())
+	}
+	if msg.err != nil {
+		t.Fatalf("unexpected error: %v", msg.err)
+	}
+	if msg.modelID != "gpt-4o" {
+		t.Errorf("modelID = %q, want bare %q", msg.modelID, "gpt-4o")
+	}
+	if fake.patchedModelID != "gpt-4o" {
+		t.Errorf("patched %q, want bare %q", fake.patchedModelID, "gpt-4o")
+	}
+}
+
+// Both gateway calls can fail independently, and each must surface as an
+// inline error rather than a silent no-op that leaves the header showing
+// a model the session isn't on.
+func TestSlashCommand_Model_SwitchSurfacesBackendErrors(t *testing.T) {
+	t.Run("models list fails", func(t *testing.T) {
+		m := newSlashTestModel()
+		fake := m.backend.(*fakeBackend)
+		fake.modelsListErr = errors.New("gateway unreachable")
+
+		_, cmd := m.handleSlashCommand("/model sonnet")
+		msg, ok := cmd().(modelSwitchedMsg)
+		if !ok {
+			t.Fatalf("expected modelSwitchedMsg, got %T", cmd())
+		}
+		if msg.err == nil {
+			t.Fatal("expected the list error to surface")
+		}
+		if !strings.Contains(msg.err.Error(), "gateway unreachable") {
+			t.Errorf("expected the underlying error, got: %v", msg.err)
+		}
+	})
+
+	t.Run("patch fails", func(t *testing.T) {
+		m := newSlashTestModel()
+		fake := m.backend.(*fakeBackend)
+		fake.models = []protocol.ModelChoice{{ID: "claude-sonnet-4", Provider: "anthropic"}}
+		fake.patchModelErr = errors.New("model not allowed")
+
+		_, cmd := m.handleSlashCommand("/model sonnet")
+		msg, ok := cmd().(modelSwitchedMsg)
+		if !ok {
+			t.Fatalf("expected modelSwitchedMsg, got %T", cmd())
+		}
+		if msg.err == nil {
+			t.Fatal("expected the patch error to surface")
+		}
+		if msg.modelID != "" {
+			t.Errorf("expected no modelID on a failed patch, got %q", msg.modelID)
+		}
+	})
 }
 
 func TestSlashCommand_Model_SwitchReturnsCmd(t *testing.T) {

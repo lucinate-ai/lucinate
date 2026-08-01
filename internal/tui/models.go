@@ -48,8 +48,29 @@ func qualifiedModelRef(mc protocol.ModelChoice) string {
 	return mc.Provider + "/" + mc.ID
 }
 
-// modelDelegate renders each model row in the picker.
-type modelDelegate struct{}
+// isCurrentModel reports whether mc is the model the session is using.
+// currentModelID is the qualified "<provider>/<id>" reference (from the
+// session or the agent's model.primary), so match on the qualified ref;
+// the bare-id fallback keeps backends that leave Provider empty (openai,
+// hermes) working. An empty currentModelID matches nothing.
+//
+// Both the picker's pre-selection and the "(current)" marker go through
+// this one predicate, so the highlighted row and the marked row can never
+// disagree about which model is in use.
+func isCurrentModel(mc protocol.ModelChoice, currentModelID string) bool {
+	if currentModelID == "" {
+		return false
+	}
+	return qualifiedModelRef(mc) == currentModelID || mc.ID == currentModelID
+}
+
+// modelDelegate renders each model row in the picker. currentModelID is
+// carried here rather than on modelItem because it is presentation state:
+// modelItem is what the fuzzy filter reorders and whose FilterValue is the
+// search haystack, and the marker has no business leaking into either.
+type modelDelegate struct {
+	currentModelID string
+}
 
 func (d modelDelegate) Height() int                             { return 2 }
 func (d modelDelegate) Spacing() int                            { return 1 }
@@ -71,17 +92,27 @@ func (d modelDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 		subtitle = i.model.Provider + " · " + i.model.ID
 	}
 
+	// The marker rides on the title line, in both style branches, so it
+	// survives the two things pre-selection does not: a typed filter (the
+	// picker opens straight into filtering) and a moved cursor.
+	marker := ""
+	if isCurrentModel(i.model, d.currentModelID) {
+		marker = lipgloss.NewStyle().Foreground(subtle).Render(" (current)")
+	}
+
 	if index == m.Index() {
 		str := lipgloss.NewStyle().
 			Foreground(accent).
 			Bold(true).
 			Render(fmt.Sprintf("> %s", title))
+		str += marker
 		str += "\n" + lipgloss.NewStyle().
 			Foreground(subtle).
 			Render(fmt.Sprintf("  %s", subtitle))
 		fmt.Fprint(w, str)
 	} else {
 		str := fmt.Sprintf("  %s", title)
+		str += marker
 		str += "\n" + lipgloss.NewStyle().
 			Foreground(subtle).
 			Render(fmt.Sprintf("  %s", subtitle))
@@ -124,7 +155,7 @@ type modelPickerModel struct {
 }
 
 func newModelPickerModel(b backend.Backend, sessionKey, currentModelID string, hideHints bool, activeConn *config.Connection, disableExitKeys bool) modelPickerModel {
-	l := list.New(nil, modelDelegate{}, 0, 0)
+	l := list.New(nil, modelDelegate{currentModelID: currentModelID}, 0, 0)
 	// Title is rendered explicitly above the list (see View) because
 	// bubbles replaces the list's built-in title with the filter
 	// prompt while typing, which would hide the screen name during
@@ -183,16 +214,13 @@ func (m modelPickerModel) Update(msg tea.Msg) (modelPickerModel, tea.Cmd) {
 		m.list.SetItems(items)
 		// Pre-select the active model so Enter on an empty filter
 		// picks "the one you already have" rather than a surprising
-		// jump to the top of the list. currentModelID is the qualified
-		// "<provider>/<id>" reference (from agent.Model.Primary), so
-		// match it against the qualified ref; the bare-id fallback keeps
-		// backends without a provider (openai, hermes) working.
-		if m.currentModelID != "" {
-			for idx, mc := range msg.models {
-				if qualifiedModelRef(mc) == m.currentModelID || mc.ID == m.currentModelID {
-					m.list.Select(idx)
-					break
-				}
+		// jump to the top of the list. The row is also marked
+		// "(current)" by modelDelegate — same predicate, so the two
+		// always agree.
+		for idx, mc := range msg.models {
+			if isCurrentModel(mc, m.currentModelID) {
+				m.list.Select(idx)
+				break
 			}
 		}
 		// Drop straight into filter-typing mode so the user doesn't

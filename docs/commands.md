@@ -9,7 +9,8 @@ commands: the "why it works this odd way" that the spec's requirements don't dwe
 
 ## `model not allowed`: patch with the qualified reference
 
-Both switch paths — the `/model <name>` command and the `/models` picker — patch with the
+Both switch paths — the `/model <name>` command and the picker (opened by bare `/model`, or
+its `/models` alias) — patch with the
 **qualified `<provider>/<id>` reference** produced by `qualifiedModelRef()`
 (`internal/tui/models.go`), not the bare id. `models.list` reports a provider-local id (e.g.
 `deepseek/deepseek-v4-pro`) alongside a separate `provider` field (e.g. `openrouter`), but

@@ -32,14 +32,14 @@ type fakeBackend struct {
 
 	// Recorded auth-modal calls — exposed to tests so they can assert
 	// the right path was taken (clear vs reset vs store).
-	storedToken    string
-	storedAPIKey   string
-	clearedToken   bool
-	resetIdentity  bool
+	storedToken   string
+	storedAPIKey  string
+	clearedToken  bool
+	resetIdentity bool
 
 	// Recorded DeleteAgent calls so tests can assert keep-files /
 	// delete-files routing.
-	deletedAgents []backend.DeleteAgentParams
+	deletedAgents  []backend.DeleteAgentParams
 	deleteAgentErr error
 
 	// createSessionHook, when non-nil, replaces the default
@@ -55,11 +55,11 @@ type fakeBackend struct {
 
 	// Cron RPC seams — tests pre-seed jobs / runs / errors and read
 	// back the recorded calls through these fields.
-	cronJobs        []protocol.CronJob
-	cronRuns        []protocol.CronRunLogEntry
-	cronListErr     error
-	cronRunsErr     error
-	cronRunErr      error
+	cronJobs          []protocol.CronJob
+	cronRuns          []protocol.CronRunLogEntry
+	cronListErr       error
+	cronRunsErr       error
+	cronRunErr        error
 	lastCronAdd       *protocol.CronAddParams
 	lastCronUpdate    *protocol.CronUpdateParams
 	lastCronUpdateRaw map[string]any
@@ -76,6 +76,19 @@ type fakeBackend struct {
 	// chat.history response so tests can stage the various gateway
 	// content shapes (string content, block arrays, mixed turns).
 	chatHistoryHook func(ctx context.Context, sessionKey string, limit int) (json.RawMessage, error)
+
+	// Model seams. models is the catalogue ModelsList reports (empty by
+	// default, matching a gateway with nothing configured); modelsListErr
+	// forces the lookup to fail. The patched* fields record the last
+	// SessionPatchModel call so tests can assert the *qualified*
+	// "<provider>/<id>" reference was sent — the bare id is what the
+	// gateway rejects as "model not allowed", so recording the argument
+	// is the only way to catch that regression.
+	models            []protocol.ModelChoice
+	modelsListErr     error
+	patchedModelID    string
+	patchedSessionKey string
+	patchModelErr     error
 }
 
 func newFakeBackend() *fakeBackend {
@@ -95,9 +108,9 @@ func newFakeBackend() *fakeBackend {
 	}
 }
 
-func (f *fakeBackend) Connect(ctx context.Context) error  { return f.connectErr }
-func (f *fakeBackend) Close() error                       { return nil }
-func (f *fakeBackend) Events() <-chan protocol.Event      { return f.events }
+func (f *fakeBackend) Connect(ctx context.Context) error { return f.connectErr }
+func (f *fakeBackend) Close() error                      { return nil }
+func (f *fakeBackend) Events() <-chan protocol.Event     { return f.events }
 func (f *fakeBackend) Supervise(ctx context.Context, notify func(client.ConnState)) {
 	<-ctx.Done()
 }
@@ -136,9 +149,17 @@ func (f *fakeBackend) ChatHistory(ctx context.Context, sessionKey string, limit 
 	return json.RawMessage(`{"messages":[]}`), nil
 }
 func (f *fakeBackend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, error) {
-	return &protocol.ModelsListResult{}, nil
+	if f.modelsListErr != nil {
+		return nil, f.modelsListErr
+	}
+	return &protocol.ModelsListResult{Models: f.models}, nil
 }
 func (f *fakeBackend) SessionPatchModel(ctx context.Context, sessionKey, modelID string) error {
+	if f.patchModelErr != nil {
+		return f.patchModelErr
+	}
+	f.patchedSessionKey = sessionKey
+	f.patchedModelID = modelID
 	return nil
 }
 func (f *fakeBackend) Capabilities() backend.Capabilities { return f.caps }

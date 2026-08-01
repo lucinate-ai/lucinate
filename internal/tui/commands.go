@@ -76,9 +76,9 @@ const helpBody = `/quit, /exit — quit lucinate
 /header — show current chat header colour
 /header <hex> — set chat header background to a hex colour (e.g. #112233 or #F0C)
 /header reset — restore the default header colour
-/models — open model picker (filter as you type)
-/model — show the model in use for this session
+/model — open model picker (filter as you type)
 /model <name> — switch model directly
+/models — alias for /model
 /mouse on|off — mouse capture (on, the default: wheel scrolls history, drag selects & copies; off: native terminal selection)
 /record on|off — toggle live transcript capture for this session (bare /record shows state)
 /reset — delete session and start fresh
@@ -228,7 +228,12 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return true, func() tea.Msg { return requestExitMsg{} }
 	case "/agents":
 		return true, m.gateNavigation("Switching agents", true, func() tea.Msg { return goBackMsg{} })
-	case "/models":
+	// Bare /model opens the picker; /models is the plural alias kept for
+	// muscle memory. Both build the same message, so there is one way for
+	// the picker to be constructed. `/model <name>` is not matched here —
+	// the switch tests the whole token, so it falls through to the
+	// argument-bearing prefix check below.
+	case "/model", "/models":
 		sessionKey := m.sessionKey
 		currentModelID := m.modelID
 		return true, func() tea.Msg {
@@ -409,8 +414,9 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return true, m.gateNavigation("Opening the routines manager", false, func() tea.Msg { return showRoutinesMsg{} })
 	}
 
-	// /model with optional argument.
-	if command == "/model" || strings.HasPrefix(command, "/model ") {
+	// /model <name> switches directly. Bare /model is not tested here —
+	// the switch above already matched it and opened the picker.
+	if strings.HasPrefix(command, "/model ") {
 		return m.handleModelCommand(text)
 	}
 
@@ -611,25 +617,29 @@ func matchCronJobs(jobs []protocol.CronJob, query string) []protocol.CronJob {
 	}
 }
 
-// handleModelCommand handles `/model` and `/model <name>`. Bare `/model`
-// reports the model in use for the active session; `/models` opens the
-// picker to change it.
+// handleModelCommand handles `/model <name>` — the direct switch. Bare
+// `/model` (and its `/models` alias) never reaches here: handleSlashCommand
+// matches the whole token in its switch and opens the picker, so only the
+// argument-bearing prefix check routes here.
 func (m *chatModel) handleModelCommand(text string) (bool, tea.Cmd) {
 	parts := strings.SplitN(strings.TrimSpace(text), " ", 2)
-	if len(parts) == 1 || strings.TrimSpace(parts[1]) == "" {
-		model := m.modelID
-		if model == "" {
-			model = "gateway default"
-		}
-		m.appendMessage(chatMessage{
-			role:    "system",
-			content: fmt.Sprintf("Model: %s\nUse /models to open the picker, or /model <name> to switch.", model),
-		})
-		m.updateViewport()
-		return true, nil
+	query := ""
+	if len(parts) > 1 {
+		query = strings.ToLower(strings.TrimSpace(parts[1]))
 	}
-
-	query := strings.ToLower(strings.TrimSpace(parts[1]))
+	// Defensive: an empty query would substring-match the first model in
+	// the list rather than nothing, so send it to the picker instead. Not
+	// reachable today — the switch catches every whitespace-only form.
+	if query == "" {
+		sessionKey := m.sessionKey
+		currentModelID := m.modelID
+		return true, func() tea.Msg {
+			return showModelPickerMsg{
+				sessionKey:     sessionKey,
+				currentModelID: currentModelID,
+			}
+		}
+	}
 	b := m.backend
 	sessionKey := m.sessionKey
 	return true, func() tea.Msg {
