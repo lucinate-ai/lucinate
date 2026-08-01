@@ -104,3 +104,24 @@ jobs:
       - name: Teardown
         if: always()
         run: ./test/integration/teardown-hermes.sh
+
+  # Fixed-name aggregate gate so branch protection can require one stable check
+  # instead of the version-specific matrix job names, which change whenever the
+  # gateway/hermes pins are bumped. Requiring those directly would leave a stale
+  # context pending forever after a bump and block every PR.
+  integration-gate:
+    name: integration-gate
+    needs: [openclaw-smoke, hermes-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify backend smoke jobs passed
+        run: |
+          if [ "${{ needs.openclaw-smoke.result }}" != "success" ] \
+            || [ "${{ needs.hermes-smoke.result }}" != "success" ]; then
+            echo "One or more backend smoke jobs did not succeed:"
+            echo "  openclaw-smoke: ${{ needs.openclaw-smoke.result }}"
+            echo "  hermes-smoke:   ${{ needs.hermes-smoke.result }}"
+            exit 1
+          fi
+          echo "All backend smoke jobs succeeded."
