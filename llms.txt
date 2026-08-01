@@ -1,0 +1,5 @@
+# lucinate — Terminal-native AI chat
+
+An open source TUI client for AI agents. Chat, think, execute — all from your terminal.
+
+Site: https://lucinate.ai
