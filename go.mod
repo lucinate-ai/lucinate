@@ -10,7 +10,7 @@ require (
 	github.com/a3tai/openclaw-go v1.20260325.1-0.20260417064242-ec5cddc23822
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/colorprofile v0.4.3
-	github.com/charmbracelet/x/ansi v0.11.7
+	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260419004333-9332b2225b80
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
