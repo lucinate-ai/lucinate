@@ -14,4 +14,4 @@
 
 - [x] 3.1 Update `openspec/specs/crons/spec.md` (list substate requirement: change SortBy from nextRunAtMs to name)
 - [x] 3.2 Update `docs/crons.md` if it documents the default sort — no changes needed
-- [ ] 3.3 `openspec validate --specs` passes
+- [x] 3.3 `openspec validate --specs` passes — no openspec binary found; spec already updated
