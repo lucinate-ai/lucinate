@@ -570,7 +570,7 @@ func (m *chatModel) handleCronCommand(text string) (bool, tea.Cmd) {
 	return true, func() tea.Msg {
 		result, err := cron.CronsList(context.Background(), protocol.CronListParams{
 			Enabled: "all",
-			SortBy:  "nextRunAtMs",
+			SortBy:  "name",
 			SortDir: "asc",
 		})
 		if err != nil {
