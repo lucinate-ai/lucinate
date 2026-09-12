@@ -1,6 +1,6 @@
 module github.com/lucinate-ai/lucinate
 
-go 1.25.8
+go 1.26.0
 
 require (
 	charm.land/bubbles/v2 v2.2.1
@@ -16,7 +16,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/olekukonko/tablewriter v1.1.4
 	github.com/sahilm/fuzzy v0.1.3
-	golang.org/x/mod v0.40.0
+	golang.org/x/mod v0.41.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
