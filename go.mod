@@ -14,7 +14,7 @@ require (
 	github.com/charmbracelet/x/exp/teatest/v2 v2.0.0-20260419004333-9332b2225b80
 	github.com/gorilla/websocket v1.5.3
 	github.com/joho/godotenv v1.5.1
-	github.com/olekukonko/tablewriter v1.1.4
+	github.com/olekukonko/tablewriter v1.1.5
 	github.com/sahilm/fuzzy v0.1.3
 	golang.org/x/mod v0.41.0
 	gopkg.in/yaml.v3 v3.0.1
