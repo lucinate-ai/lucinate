@@ -415,6 +415,14 @@ type showCronsMsg struct {
 // goBackFromCronsMsg signals the AppModel to return from the cron view.
 type goBackFromCronsMsg struct{}
 
+// showRoomsMsg signals the AppModel to switch to the rooms view (Hermes
+// hosted "Bot Mode" group chats).
+type showRoomsMsg struct{}
+
+// goBackFromRoomsMsg signals the AppModel to return from the rooms view
+// to the chat it was opened from.
+type goBackFromRoomsMsg struct{}
+
 // goBackFromCronTranscriptMsg signals the AppModel to return from the
 // read-only cron transcript view (a chat model with transcript=true)
 // to the cron detail screen that opened it. The cronsModel's subset/

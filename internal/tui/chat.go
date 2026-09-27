@@ -161,9 +161,9 @@ type chatModel struct {
 	agentID            string
 	agentName          string
 	sending            bool
-	runID              string // active run ID for cancellation
+	runID              string          // active run ID for cancellation
 	finalisedRuns      finalisedRunSet // bounded LRU of run IDs we have already finalised; chat events still bearing one of these IDs are stale duplicates emitted by the gateway after final and must not corrupt the next run's placeholder
-	gen                uint64 // generation counter stamped onto every newly-appended chatMessage; bumped after each turn finalises so the just-finalised turn can be replaced by a server-canonical refresh while the next turn's live state survives the merge
+	gen                uint64          // generation counter stamped onto every newly-appended chatMessage; bumped after each turn finalises so the just-finalised turn can be replaced by a server-canonical refresh while the next turn's live state survives the merge
 	pendingMessages    []string
 	historyBrowseIndex int    // bash-style up-arrow recall position; -1 when not browsing, 0 = most recent user message, N = N user messages back
 	historyBrowseValue string // textarea contents last placed by history navigation; lets repeated up/down keep walking until the user edits
@@ -459,6 +459,11 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 	ta.SetHeight(inputHeight)
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
+	// Draw the terminal's real cursor instead of the textarea's virtual
+	// one. With the virtual cursor the app renders a block while the
+	// terminal paints its own caret, which reads as two blinking cursors
+	// side by side; chatModel.Cursor() positions the real one instead.
+	ta.SetVirtualCursor(false)
 
 	// Bubbles' default cursor renders its on-frame as
 	// `Style.Reverse(true).Render(char)`. With the library default of
@@ -504,20 +509,20 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 	}
 
 	return chatModel{
-		viewport:        vp,
-		textarea:        ta,
-		backend:         b,
-		connName:        connName,
-		sessionKey:      sessionKey,
-		agentID:         agentID,
-		agentName:       agentName,
-		renderer:        renderer,
-		modelID:         modelID,
-		prefs:           prefs,
-		historyLimit:    prefs.HistoryLimit,
-		historyLoading:  true,
-		hideInput:       hideInput,
-		terminalFocused: true,
+		viewport:           vp,
+		textarea:           ta,
+		backend:            b,
+		connName:           connName,
+		sessionKey:         sessionKey,
+		agentID:            agentID,
+		agentName:          agentName,
+		renderer:           renderer,
+		modelID:            modelID,
+		prefs:              prefs,
+		historyLimit:       prefs.HistoryLimit,
+		historyLoading:     true,
+		hideInput:          hideInput,
+		terminalFocused:    true,
 		pendingMessages:    pending,
 		historyBrowseIndex: -1,
 		// Start at gen=1 so the zero value on chatMessage.gen reads as
@@ -1501,7 +1506,9 @@ func (m *chatModel) setSize(w, h int) {
 	m.updateViewport()
 }
 
-func (m chatModel) View() string {
+// headerView renders the chat header bar. It is a method rather than an
+// inline block so cursorOffset() can measure the same string View() emits.
+func (m chatModel) headerView() string {
 	left := " lucinate"
 	if m.connName != "" {
 		left += " · " + m.connName
@@ -1563,6 +1570,79 @@ func (m chatModel) View() string {
 		Width(m.width).
 		Render(title)
 
+	return header
+}
+
+// renderedLines counts the terminal rows a rendered region occupies.
+func renderedLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+// cursorOffset is the column and row of the textarea's content inside the
+// chat view, so the real terminal cursor can be placed on it.
+//
+// The region order mirrors View(). TestChatModel_CursorOffsetMatchesView
+// pins the two together, so a layout change that forgets this cannot
+// silently park the cursor on the wrong row.
+func (m chatModel) cursorOffset() (x, y int, ok bool) {
+	if m.hideInput || !m.textarea.Focused() {
+		return 0, 0, false
+	}
+	rows := renderedLines(m.headerView())
+	if n := m.renderInfoNotifications(); n != "" {
+		rows += renderedLines(n)
+	}
+	rows += renderedLines(m.viewport.View())
+	if menu, _ := m.renderCompletionMenu(); menu != "" {
+		rows += renderedLines(menu)
+	}
+	if m.routineStatusLine() != "" {
+		rows++
+	}
+	if s := m.renderToolActivity(); s != "" {
+		rows += renderedLines(s)
+	}
+	if s := m.renderPendingMessages(); s != "" {
+		rows += renderedLines(s)
+	}
+	if s := m.renderErrorNotifications(); s != "" {
+		rows += renderedLines(s)
+	}
+	if s := m.renderNavConfirm(); s != "" {
+		rows += renderedLines(s)
+	}
+	// The input box: the rounded border adds one row above the content and
+	// one column on the left; the style's horizontal padding adds the
+	// second column.
+	return 2, rows + 1, true
+}
+
+// Cursor reports where the terminal's real cursor belongs, or nil when the
+// input is hidden or unfocused.
+//
+// Using the real cursor — instead of the textarea's virtual one — is what
+// keeps a single, correctly placed cursor. With the virtual cursor the app
+// draws a block AND the terminal paints its own caret, which the user sees
+// as two blinking cursors side by side.
+func (m chatModel) Cursor() *tea.Cursor {
+	cur := m.textarea.Cursor()
+	if cur == nil {
+		return nil
+	}
+	ox, oy, ok := m.cursorOffset()
+	if !ok {
+		return nil
+	}
+	cur.Position.X += ox
+	cur.Position.Y += oy
+	return cur
+}
+
+func (m chatModel) View() string {
+	header := m.headerView()
 	borderStyle := inputBorderStyle
 	isRemoteExec := strings.HasPrefix(m.textarea.Value(), "!!")
 	isLocalExec := !isRemoteExec && strings.HasPrefix(m.textarea.Value(), "!")

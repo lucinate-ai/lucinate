@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# lbuild — build the lucinate CLI into .bin/ next to the repo.
+#
+#   lbuild              build .bin/lucinate.exe
+#   lbuild /tmp/x       build to a specific path
+#   lbuild run rooms list
+#                        build, then run the binary with the given args
+#
+# The binary is written outside the repo tree so a build artefact never
+# shows up in git status.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lucinate-go-env.sh
+. "$HERE/lucinate-go-env.sh"
+REPO="$(cd "$HERE/.." && pwd)"
+cd "$REPO" || exit 1
+
+OUT="${1:-E:/orca/workspaces/HermesHarness/.bin/lucinate.exe}"
+if [ "${1:-}" = "run" ]; then
+  shift
+  OUT="E:/orca/workspaces/HermesHarness/.bin/lucinate.exe"
+fi
+
+mkdir -p "$(dirname "$OUT")"
+if ! go build -o "$OUT" .; then
+  echo "lbuild: build failed" >&2
+  exit 1
+fi
+echo "built $OUT"
+
+if [ "${1:-}" = "run" ] || [ "${1:-}" = "run-only" ]; then
+  exec "$OUT" "$@"
+fi

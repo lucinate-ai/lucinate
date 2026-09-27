@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Added
+- feat(rooms): route room messages by `@mention`, or with `moderator` / `round-robin` modes (`/mode`, `/moderator`), persisted per room
+- feat(rooms): stream member replies in the rooms transcript — braille spinner (120 ms), cumulative deltas, placeholder removed on an empty answer
+- feat(rooms): reconnect a dropped room socket on exponential backoff (500 ms → 30 s) and resume the transcript from the cursor, without losing the events already loaded
+- feat(rooms): `/export [md|json|both]` writes the room transcript into `<lucinate data dir>/exports`
+- feat(rooms): `/compact [N]` (and `/compact local [N]`) replaces the older transcript with a brief from the room, keeping the last `N` messages verbatim
+- feat(rooms): per-member header colours (`/header @handle #RRGGBB`, persisted), `/cost` token and cost statistics per member, and `/find <phrase>` transcript search
+
 ## [1.25.0] - 2026-08-03
 ### Added
 - feat(tui): open the model picker from bare /model (#191)

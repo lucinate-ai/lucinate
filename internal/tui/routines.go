@@ -205,7 +205,7 @@ func (m *routinesModel) setSize(w, h int) {
 // partially visible.
 func (m *routinesModel) sizeFormBody() {
 	const perStepHeight = 4
-	const titleLines = 2 // header line + trailing blank
+	const titleLines = 2  // header line + trailing blank
 	const footerLines = 2 // help line + trailing margin (error squeezes in via shrink)
 	const minBodyHeight = 5
 
