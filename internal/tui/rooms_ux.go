@@ -59,6 +59,139 @@ func roomsSpinnerCmd() tea.Cmd {
 	return tea.Tick(roomsSpinnerInterval, func(time.Time) tea.Msg { return roomsSpinnerTickMsg{} })
 }
 
+// interruptedTurn is a member reply the connection cut in half.
+//
+// The gateway log never learns the turn died — no `turn.settled` arrives — so
+// the transcript alone would show a reply that is still "being written"
+// forever. The client is the only witness, so it records what it saw and marks
+// the row: a half-written answer the user can see is honest, one frozen behind
+// a spinner is a bug report.
+type interruptedTurn struct {
+	Member string
+	Text   string
+	At     time.Time
+	Reason string
+	// AfterSeq is the newest event the view had seen when the connection
+	// dropped. Only an event past it proves the member is answering again —
+	// without it, the reconnect's own history replay would erase the marker
+	// it is meant to explain.
+	AfterSeq int
+}
+
+// markInterrupted snapshots every in-flight reply and returns the room to a
+// ready state, so the view cannot keep animating a turn nothing is serving.
+func (m *roomsModel) markInterrupted(reason string) {
+	if m.interrupted == nil {
+		m.interrupted = map[string]interruptedTurn{}
+	}
+	watermark := m.since
+	if m.page.LatestSeq > watermark {
+		watermark = m.page.LatestSeq
+	}
+	now := time.Now()
+	for _, s := range rooms.ActiveStreams(m.page.Events) {
+		m.interrupted[s.Member] = interruptedTurn{
+			Member:   s.Member,
+			Text:     strings.TrimSpace(s.Text),
+			At:       now,
+			Reason:   reason,
+			AfterSeq: watermark,
+		}
+	}
+	// The room is ready again: nothing is answering, so holding a queued
+	// message behind a dead driver would strand it.
+	m.working = false
+}
+
+// visibleStreams are the in-flight replies the view still animates: a stream
+// whose member was interrupted is shown as an interrupted row instead.
+func (m roomsModel) visibleStreams() []rooms.Stream {
+	streams := m.activeStreams()
+	out := make([]rooms.Stream, 0, len(streams))
+	for _, s := range streams {
+		if _, ok := m.interrupted[s.Member]; ok {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// clearResumedInterruptions drops the interrupted marker for members that are
+// answering again — a member that comes back should read as recovered, not as
+// permanently broken. Only events newer than the interruption count.
+func (m *roomsModel) clearResumedInterruptions(events []rooms.Event) {
+	if len(m.interrupted) == 0 {
+		return
+	}
+	for _, ev := range events {
+		switch ev.Kind {
+		case "message.member", "message.member.delta", "turn.started", "turn.settled":
+		default:
+			continue
+		}
+		member := streamMemberOf(ev)
+		turn, ok := m.interrupted[member]
+		if !ok || ev.Seq <= turn.AfterSeq {
+			continue
+		}
+		delete(m.interrupted, member)
+	}
+}
+
+// streamMemberOf mirrors the rooms package's stream key, so an interruption is
+// filed under the same handle its stream is.
+func streamMemberOf(ev rooms.Event) string {
+	if h, _ := ev.Payload["handle"].(string); strings.TrimSpace(h) != "" {
+		return strings.ToLower(strings.TrimSpace(h))
+	}
+	if ev.Actor.Profile != "" {
+		return rooms.HandleFor(ev.Actor.Profile)
+	}
+	if ev.Actor.DisplayName != "" {
+		return rooms.HandleFor(ev.Actor.DisplayName)
+	}
+	return rooms.HandleFor(ev.Speaker())
+}
+
+// interruptedRows renders the marked turns, sorted by member so the view is
+// stable between frames.
+func (m roomsModel) interruptedRows() []string {
+	if len(m.interrupted) == 0 {
+		return nil
+	}
+	members := make([]string, 0, len(m.interrupted))
+	for member := range m.interrupted {
+		members = append(members, member)
+	}
+	sort.Strings(members)
+	rows := make([]string, 0, len(members))
+	for _, member := range members {
+		turn := m.interrupted[member]
+		reason := turn.Reason
+		if reason == "" {
+			reason = "connection lost"
+		}
+		rows = append(rows, errorStyle.Render(fmt.Sprintf("⚠  @%s reply interrupted (%s)", member, reason)))
+		if turn.Text != "" {
+			rows = append(rows, statusStyle.Render("   "+strings.ReplaceAll(oneLineShort(turn.Text, 160), "\n", " ")))
+		} else {
+			rows = append(rows, statusStyle.Render("   no output arrived before the connection dropped"))
+		}
+	}
+	return rows
+}
+
+// oneLineShort flattens and truncates a fragment for the interrupted row.
+func oneLineShort(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	runes := []rune(s)
+	if len(runes) > max {
+		return string(runes[:max-1]) + "…"
+	}
+	return s
+}
+
 // ── streaming ────────────────────────────────────────────────────────────────
 
 // activeStreams are the members still answering, folded straight out of the
@@ -69,7 +202,7 @@ func (m roomsModel) activeStreams() []rooms.Stream {
 
 // spinnerActive reports whether any animated row is on screen.
 func (m roomsModel) spinnerActive() bool {
-	return len(m.activeStreams()) > 0 || m.working || len(m.queue) > 0
+	return len(m.visibleStreams()) > 0 || m.working || len(m.queue) > 0
 }
 
 // ensureRoomsSpinner starts the glyph animation if it is not already running,
@@ -110,7 +243,7 @@ func spinnerGlyph(frame int) string {
 // the placeholder disappears the moment the log says the turn ended without
 // text — a spinner left running against a silent member reads as a hung room.
 func (m roomsModel) streamRows() []string {
-	streams := m.activeStreams()
+	streams := m.visibleStreams()
 	rows := make([]string, 0, len(streams))
 	for _, s := range streams {
 		glyph := cursorStyle.Render(spinnerGlyph(m.spinnerFrame))
@@ -199,6 +332,10 @@ func disconnected(c *rooms.Client, err error) bool {
 // scheduleReconnect drops the dead socket and arms the next redial.
 func (m *roomsModel) scheduleReconnect(reason string) tea.Cmd {
 	m.shared.drop(m.shared.get())
+	// Anything mid-answer is now an interrupted reply: record it before the
+	// view stops showing it, so the user sees what arrived rather than a
+	// spinner against a room nobody is serving.
+	m.markInterrupted(reason)
 	delay := m.backoff.Next()
 	m.reconnecting = true
 	m.reconnectAttempt = m.backoff.Attempt()
@@ -242,6 +379,11 @@ func (m *roomsModel) handleReconnect(attempt int) (roomsModel, tea.Cmd) {
 	m.reconnectAttempt = 0
 	m.reconnecting = false
 	m.err = nil
+	// A new socket is a fresh session view: drop the local model overlay so the
+	// roster the gateway sends next is what the user sees. Nothing else has to
+	// be undone — the profile was never touched.
+	m.memberModels = nil
+	m.model = modelPicker{}
 	m.status = fmt.Sprintf("reconnected — history resumed from seq %d", m.since)
 	return *m, tea.Batch(m.loadLog(m.openRoomID, m.since), m.loadState(), m.ensureRoomsSpinner())
 }
@@ -359,8 +501,12 @@ func (m roomsModel) handleRoomUXCommand(text string) (roomsModel, tea.Cmd, bool)
 		return m.setRoutingMode(rooms.RouteRoundRobin, "")
 	case "/export":
 		return m.cmdExport(args)
+	case "/model", "/models":
+		return m.cmdModel(args)
 	case "/compact":
 		return m.cmdCompact(args)
+	case "/restart", "/re":
+		return m.cmdRestart(args)
 	case "/find":
 		return m.cmdFind(args)
 	case "/cost", "/usage":
@@ -463,12 +609,19 @@ func (m roomsModel) cmdCompact(args []string) (roomsModel, tea.Cmd, bool) {
 			local = true
 			continue
 		}
-		if n, err := strconv.Atoi(a); err == nil {
-			keepLast = n
-			continue
+		n, err := strconv.Atoi(a)
+		if err != nil {
+			m.err = fmt.Errorf("unknown /compact argument %q — use /compact [N] or /compact local [N]", a)
+			return m, nil, true
 		}
-		m.err = fmt.Errorf("unknown /compact argument %q — use /compact [N] or /compact local [N]", a)
-		return m, nil, true
+		// A typed window is validated, not clamped: compacting with a
+		// different N than asked would silently drop history the user wanted
+		// kept.
+		if _, err := rooms.ValidateKeepWindow(n); err != nil {
+			m.err = err
+			return m, nil, true
+		}
+		keepLast = n
 	}
 	if keepLast == 0 {
 		keepLast = m.roomPrefs().KeepLast()
@@ -571,6 +724,11 @@ func (m roomsModel) cmdCost(args []string) (roomsModel, tea.Cmd, bool) {
 	if len(rows) == 0 {
 		m.notice = "no usage yet — the gateway reports tokens per member turn once a turn completes"
 		return m, nil, true
+	}
+	// The model belongs in a cost table: the same tokens cost different money
+	// on different models, and this is where the user is already comparing.
+	for i := range rows {
+		rows[i].Model = m.memberModel(rows[i].Handle)
 	}
 	table := rooms.FormatUsage(rows)
 	if !anyCostReported(rows) {
@@ -687,15 +845,17 @@ func (m roomsModel) formatEvent(ev rooms.Event) string {
 // routeOutgoing applies the room's routing mode to a message the user typed,
 // returning the text that should reach the gateway (a mode that picks one
 // member prepends that member's mention, because mention routing is
-// server-side) plus a cmd that persists an advanced round-robin cursor.
-func (m roomsModel) routeOutgoing(text string) (string, tea.Cmd) {
+// server-side), the note to show the user, and a cmd that persists an advanced
+// round-robin cursor.
+//
+// The note is returned rather than assigned to m.status: this is a value
+// receiver, so writing to the copy would throw the explanation away and the
+// user would never learn where their message went.
+func (m roomsModel) routeOutgoing(text string) (routed, note string, cmd tea.Cmd) {
 	prefs := m.roomPrefs()
 	decision, next := rooms.Route(text, m.roster(), prefs.RoutingMode(), prefs.Moderator, prefs.RoundRobinIndex)
-	if decision.Note != "" {
-		m.status = decision.Note
-	}
 	if prefs.RoutingMode() == rooms.RouteRoundRobin && next != prefs.RoundRobinIndex {
-		return decision.Text, m.updateRoomPrefs(func(p *rooms.RoomPrefs) { p.RoundRobinIndex = next })
+		return decision.Text, decision.Note, m.updateRoomPrefs(func(p *rooms.RoomPrefs) { p.RoundRobinIndex = next })
 	}
-	return decision.Text, nil
+	return decision.Text, decision.Note, nil
 }

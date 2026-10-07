@@ -308,8 +308,11 @@ func TestRoomsV2Live_FullPassOverARealGateway(t *testing.T) {
 	m, cmd := m.post("co robimy?")
 	m = feedCmd(t, m, cmd)
 	sent := g.sent()
-	if len(sent) != 1 || sent[0] != "@matt co robimy?" {
+	if len(sent) != 1 || !strings.HasSuffix(sent[0], "@matt co robimy?") {
 		t.Fatalf("gateway received %q, want the round-robin mention @matt co robimy?", sent)
+	}
+	if !strings.Contains(sent[0], "kontrakt handoff pokoju") || !strings.Contains(sent[0], ".rooms") {
+		t.Fatalf("first message carries no room directory / handoff contract: %q", sent[0])
 	}
 	if got := m.roomPrefs().RoundRobinIndex; got != 1 {
 		t.Fatalf("round-robin cursor = %d, want 1", got)

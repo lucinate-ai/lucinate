@@ -40,6 +40,11 @@ type Member struct {
 	Profile     string `json:"profile"`
 	Handle      string `json:"handle"`
 	DisplayName string `json:"display_name,omitempty"`
+	// ModelConfig is the per-member model configuration the gateway stores on
+	// the roster row. It is read-only from a client's point of view: a room's
+	// roster (this JSON included) is frozen once the room exists, which is why
+	// ModelLabel reports "profile default" when it is absent.
+	ModelConfig map[string]any `json:"model_config,omitempty"`
 }
 
 // Room is one hosted room row (gateway/hosted_rooms.py::_room_from_row).

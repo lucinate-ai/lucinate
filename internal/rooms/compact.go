@@ -1,6 +1,7 @@
 package rooms
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -52,6 +53,23 @@ func NormalizeKeepLast(n int) int {
 		return MaxCompactKeep
 	}
 	return n
+}
+
+// ValidateKeepWindow checks an explicitly requested window.
+//
+// It differs from NormalizeKeepLast on purpose: a stored preference is bounded
+// silently (a hand-edited file must not lock /compact out), but a window the
+// user typed is either honoured or refused. Compacting with a different N than
+// asked — or with the default because the argument was ignored — silently
+// discards history the user meant to keep.
+func ValidateKeepWindow(n int) (int, error) {
+	if n < 0 {
+		return 0, fmt.Errorf("keep window must be zero or more messages, got %d — /compact [N] keeps the last N messages in full", n)
+	}
+	if n > MaxCompactKeep {
+		return MaxCompactKeep, nil
+	}
+	return n, nil
 }
 
 // CompactSplit divides a transcript around its last keepLast messages.

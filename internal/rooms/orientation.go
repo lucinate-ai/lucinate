@@ -23,11 +23,16 @@ type Orientation struct {
 	Path string
 	// Project is a human label (usually the worktree display name).
 	Project string
+	// RoomDir is the room's shared directory (see WithRoomDir). It travels
+	// with the orientation because it is the same kind of fact: something
+	// the members cannot discover on their own and must be told.
+	RoomDir string
 }
 
 // Empty reports whether there is nothing to say.
 func (o Orientation) Empty() bool {
-	return strings.TrimSpace(o.Worktree) == "" && strings.TrimSpace(o.Path) == ""
+	return strings.TrimSpace(o.Worktree) == "" && strings.TrimSpace(o.Path) == "" &&
+		strings.TrimSpace(o.RoomDir) == ""
 }
 
 // Marker opens the block. It is deliberately loud: a member that answers
@@ -58,11 +63,43 @@ func (o Orientation) Block() string {
 	if w := strings.TrimSpace(o.Worktree); w != "" {
 		fmt.Fprintf(&b, "worktree Orca: %s\n", w)
 	}
-	b.WriteString("praca z Orca: orca_worktree_current (potwierdź projekt) → orca_tab_list → " +
-		"orca_tab_create url=<adres> → weź browserPageId z wyniku → orca_browser_goto page=<browserPageId> " +
-		"→ orca_browser_snapshot (dowód, nie deklaracja); dokument dla użytkownika: orca_file_open path=<plik>\n")
-	b.WriteString("każde narzędzie orca_* przyjmuje worktree=<selektor powyżej>, gdy pracujesz poza aktywnym worktree")
+	// The browser sequence belongs to a project: an orientation carrying
+	// nothing but the room directory has no browser to drive.
+	if strings.TrimSpace(o.Worktree) != "" || strings.TrimSpace(o.Path) != "" {
+		b.WriteString("praca z Orca: orca_worktree_current (potwierdź projekt) → orca_tab_list → " +
+			"orca_tab_create url=<adres> → weź browserPageId z wyniku → orca_browser_goto page=<browserPageId> " +
+			"→ orca_browser_snapshot (dowód, nie deklaracja); dokument dla użytkownika: orca_file_open path=<plik>\n")
+		b.WriteString("każde narzędzie orca_* przyjmuje worktree=<selektor powyżej>, gdy pracujesz poza aktywnym worktree")
+	}
+	if block := HandoffBlock(o.RoomDir); block != "" {
+		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString(block)
+	}
 	return b.String()
+}
+
+// WithRoomDir returns a copy of the orientation carrying this room's shared
+// directory, creating it on disk: base is the project path when the
+// orientation has one, else RoomsBase(). The error is returned rather than
+// swallowed — a members' contract naming a directory that could not be
+// created is a broken contract, not a cosmetic loss.
+func (o Orientation) WithRoomDir(roomID string) (Orientation, error) {
+	base := strings.TrimSpace(o.Path)
+	if base == "" {
+		b, err := RoomsBase()
+		if err != nil {
+			return o, err
+		}
+		base = b
+	}
+	dir, err := EnsureRoomDir(base, roomID)
+	if err != nil {
+		return o, err
+	}
+	o.RoomDir = dir
+	return o, nil
 }
 
 // OrientationFromEnv derives the project context from the ORCA_* variables

@@ -82,7 +82,7 @@ func TestRoomsV2_RoundRobinRoutesAndAdvancesTheCursor(t *testing.T) {
 	m := v2Model(t)
 	m.prefs.Set("sztab", rooms.RoomPrefs{Mode: string(rooms.RouteRoundRobin)})
 
-	routed, cmd := m.routeOutgoing("dalej")
+	routed, _, cmd := m.routeOutgoing("dalej")
 	if routed != "@matt dalej" {
 		t.Fatalf("first routed text = %q, want @matt dalej", routed)
 	}
@@ -94,7 +94,7 @@ func TestRoomsV2_RoundRobinRoutesAndAdvancesTheCursor(t *testing.T) {
 	}
 	m = feedCmd(t, m, cmd)
 
-	routed, _ = m.routeOutgoing("dalej")
+	routed, _, _ = m.routeOutgoing("dalej")
 	if routed != "@kowal dalej" {
 		t.Fatalf("second routed text = %q, want @kowal dalej", routed)
 	}
@@ -104,13 +104,13 @@ func TestRoomsV2_ModeratorModeAndExplicitMentions(t *testing.T) {
 	m := v2Model(t)
 	m.prefs.Set("sztab", rooms.RoomPrefs{Mode: string(rooms.RouteModerator), Moderator: "kowal"})
 
-	routed, _ := m.routeOutgoing("status?")
+	routed, _, _ := m.routeOutgoing("status?")
 	if routed != "@kowal status?" {
 		t.Fatalf("moderator routing = %q, want @kowal status?", routed)
 	}
 
 	// An explicit mention is the user overriding the mode, and must survive.
-	routed, _ = m.routeOutgoing("@matt tylko ty")
+	routed, _, _ = m.routeOutgoing("@matt tylko ty")
 	if routed != "@matt tylko ty" {
 		t.Fatalf("explicit mention = %q, want it sent as written", routed)
 	}

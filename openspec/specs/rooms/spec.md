@@ -53,6 +53,49 @@ the authority on which profiles a room contains.
 - **THEN** the message is sent as written
 - **AND** the status line names `@ghost` as an unknown handle
 
+#### Scenario: Two handles address both members
+
+- **GIVEN** a room whose roster is `matt`, `kowal`, `olesno`
+- **WHEN** the user posts `@matt @kowal raport?`
+- **THEN** both members are the recipients, in the order written
+- **AND** the message is sent unchanged
+- **AND** the routing mode is not applied
+- **AND** the round-robin cursor does not advance
+
+Two handles in one message are a deliberate "both of you" rather than an
+ambiguity to resolve: the gateway routes to every member mentioned.
+
+#### Scenario: A handle glued to a longer word is not that member
+
+- **GIVEN** a room with a member whose handle is `matt`
+- **WHEN** the user posts `@mattxyz hej`
+- **THEN** the parsed handle is `mattxyz`
+- **AND** the message is reported as carrying an unknown handle
+- **AND** it is not routed to `matt`
+
+#### Scenario: A typo never broadens the message
+
+- **GIVEN** a room whose roster is `matt`, `kowal`
+- **WHEN** the user posts `@mat hej`
+- **THEN** nothing is resolved to a member
+- **AND** the room's routing mode is NOT applied
+- **AND** the message is sent as written with the unknown handle reported
+
+#### Scenario: A unicode handle is truncated by the grammar
+
+- **GIVEN** a room with a member whose profile is `młody`
+- **WHEN** the user posts `@młody hej`
+- **THEN** the parsed handle is `m`
+- **AND** no member is resolved, because `HandleFor` never derives a bare ASCII
+  prefix as a handle
+- **AND** the truncation is reported as an unknown handle rather than silently
+  addressing another member
+
+The gateway's mention grammar is ASCII (`@([A-Za-z0-9][A-Za-z0-9._:-]*)`), so a
+non-ASCII character ends the handle. The client cannot fix that — the same
+grammar decides routing on the gateway — so it mirrors it and makes the
+consequence visible.
+
 ### Requirement: Routing modes
 
 The system SHALL support three routing modes per room: `broadcast` (the default — the whole
@@ -181,6 +224,65 @@ a later attempt has superseded it.
 - **THEN** it is reported as an error
 - **AND** no redial is scheduled
 
+#### Scenario: A gateway that never comes back is not a silent spin
+
+- **GIVEN** a gateway that refuses every redial
+- **WHEN** the redials keep failing
+- **THEN** the delay grows to its ceiling and stays there, never past it
+- **AND** the status line reports the attempt number and the next delay, so a
+  permanently unreachable room is visible rather than indistinguishable from a
+  working one
+
+#### Scenario: A dead client fails fast instead of hanging
+
+- **GIVEN** a client whose socket was dropped
+- **WHEN** a call is made on it
+- **THEN** the call returns an error
+- **AND** `Client.Err()` reports why the socket died
+- **AND** a deliberate `Close()` leaves `Err()` nil, so teardown is not mistaken
+  for a fault
+
+### Requirement: Interrupted replies
+
+When the connection drops while a member is answering, the system SHALL keep
+what already arrived and mark that reply as interrupted, because the gateway log
+never records the failure: no `turn.settled` event is coming, so the transcript
+alone would show a reply that is still being written forever.
+
+The interrupted row SHALL show the partial text that did arrive, or state that
+no output arrived. The room SHALL return to a ready state — the composer usable,
+queued messages drained — and the spinner SHALL stop.
+
+The marker SHALL be cleared once that member answers again, where "answers
+again" means an event newer than the interruption. A reconnect's replay of
+history the client had already seen SHALL NOT clear it.
+
+#### Scenario: A half-written reply stays visible and marked
+
+- **GIVEN** a member mid-answer with partial text on screen
+- **WHEN** the socket drops
+- **THEN** the partial text remains on screen
+- **AND** the row is marked as interrupted and names the connection loss
+- **AND** the spinner stops and the room is ready for input
+
+#### Scenario: An interruption before any output says so
+
+- **GIVEN** a member whose turn started but produced no text
+- **WHEN** the socket drops
+- **THEN** the marker states that no output arrived before the connection dropped
+
+#### Scenario: A member answering again clears the marker
+
+- **GIVEN** an interrupted reply
+- **WHEN** that member posts a new message or starts a new turn
+- **THEN** the interrupted marker is cleared
+
+#### Scenario: The reconnect's own replay does not clear the marker
+
+- **GIVEN** an interrupted reply recorded after the newest event the client held
+- **WHEN** a successful reconnect refetches that same history
+- **THEN** the marker stays, because nothing new was proven about the turn
+
 ### Requirement: Transcript export
 
 The system SHALL export the room transcript on `/export [md|json|both]`, writing into
@@ -253,6 +355,27 @@ SHALL never modify the room's log.
 - **GIVEN** a transcript with fewer messages than the keep window
 - **WHEN** the user runs `/compact`
 - **THEN** the status line says there is nothing to compact
+- **AND** no brief is requested from the room
+
+#### Scenario: A window equal to the transcript compacts nothing
+
+- **GIVEN** a transcript of exactly N messages
+- **WHEN** the user runs `/compact N`
+- **THEN** every message stays verbatim
+- **AND** the status line says there is nothing to compact
+
+#### Scenario: A negative window is refused
+
+- **GIVEN** the transcript composer
+- **WHEN** the user types `/compact -1`
+- **THEN** the command is refused with an error naming the command
+- **AND** the room's stored window is unchanged
+- **AND** nothing is compacted
+
+`N` is validated rather than clamped: a stored preference is bounded silently
+because a hand-edited file must not lock `/compact` out, but a window the user
+typed is either honoured or refused — compacting with a different `N` than
+asked would discard history the user meant to keep.
 
 ### Requirement: Per-member header colours
 
@@ -282,6 +405,90 @@ refused.
 - **THEN** the command is refused
 - **AND** the stored colour is unchanged
 
+### Requirement: Per-member model selection
+
+`/model` SHALL select the model one member answers with, in four shapes:
+`/model` (pick a member, then a model), `/model @handle` (pick that member's
+model, showing its current one), `/model @handle <name>` (switch directly) and
+`/model @handle` reporting the current model. An unknown handle, a model name
+without a handle, or an empty model name SHALL be refused with an explanation
+that names what was wrong, and nothing SHALL be sent to the gateway.
+
+The model list SHALL come from the gateway's own catalogue (the same call the
+chat uses), and the picker SHALL filter as the user types.
+
+**Scope:** the change is room-session state (`model_config.room_member_model` on
+the member's own room session) and SHALL NOT alter the Hermes profile, its
+config, or any file lucinate persists. The gateway is the authority: the client
+SHALL show what the gateway's seat reports, and SHALL drop its local overlay when
+the socket is re-established.
+
+**How the seat works (verified against a real gateway):** a hosted room's member
+runs its turns on a hidden `room_plumbing` session in that member's own profile,
+and such a session deliberately rebuilds from the profile's current config on
+resume — a model stored on it is ignored unless it is marked as a deliberate
+per-room pick. `groups.member_model` writes that marker, and the gateway honours
+it on the next turn. The seat therefore survives a client reconnect and dies with
+the room session, exactly like the dashboard's own model change on a chat.
+
+**Honesty about the protocol:** the method ships with the gateway, but a gateway
+old enough not to have it answers -32601, and the roster's `model_config` is
+frozen once a room exists (a re-create with a changed roster is a different
+room). The client therefore SHALL probe `groups.capabilities` before offering the
+action, SHALL refuse with a message naming the missing method when it is absent,
+and SHALL NOT display a model change that did not reach the gateway. When the
+gateway rejects the requested model, the previous model SHALL stay in place and
+the gateway's own message SHALL be shown.
+
+#### Scenario: A member's model is switched for the session
+
+- **GIVEN** a gateway that advertises the member-model method
+- **WHEN** the user runs `/model @matt gpt-5-mini`
+- **THEN** the gateway is asked to run that member's turns with `gpt-5-mini`
+- **AND** the seat it reports is recorded: which session the pick landed on, and
+  whether that session was minted for the pick
+- **AND** the roster line shows `@matt (gpt-5-mini)`
+- **AND** the status names the session the model was seated on and says the
+  member profile is untouched
+
+#### Scenario: Nothing about the model is persisted
+
+- **GIVEN** a successful model switch
+- **WHEN** lucinate's stored room preferences are read
+- **THEN** they contain no model
+
+#### Scenario: A gateway without the method is told so
+
+- **GIVEN** a gateway whose capabilities do not list the member-model method
+- **WHEN** the user confirms a model in the picker
+- **THEN** no request is sent
+- **AND** the view states that the gateway cannot switch a member's model
+- **AND** it names the missing method and the alternative
+
+#### Scenario: A rejected model rolls back
+
+- **GIVEN** a gateway that refuses the requested model
+- **WHEN** the switch is attempted
+- **THEN** the gateway's message is shown
+- **AND** the member's previous model stays in place
+- **AND** the roster does not display the refused model
+
+#### Scenario: A reconnect drops the local overlay
+
+- **GIVEN** a switch recorded for the session
+- **WHEN** the socket is re-established
+- **THEN** the local overlay is discarded
+- **AND** what the view shows next is the gateway's roster
+- **AND** the seat itself is unaffected, because it lives on the member's room
+  session on the gateway side, not in this client
+
+#### Scenario: The picker stays inside the terminal
+
+- **GIVEN** a catalogue longer than the terminal
+- **WHEN** the picker is open
+- **THEN** the list is windowed with the hidden rows counted
+- **AND** the filter line and the key hints stay on screen
+
 ### Requirement: Cost and token statistics
 
 `/cost` SHALL report, per member, the turns answered, the messages posted and the input,
@@ -296,6 +503,13 @@ gateway that reports tokens but no cost SHALL say so.
 - **WHEN** the user runs `/cost`
 - **THEN** the report names that member
 - **AND** it shows the token totals and the cost
+
+#### Scenario: The report names the model each member is on
+
+- **GIVEN** a member whose model is known to the session
+- **WHEN** the user runs `/cost`
+- **THEN** the table carries a MODEL column
+- **AND** a member with no model set reads `profile default`
 
 #### Scenario: No usage data is reported honestly
 

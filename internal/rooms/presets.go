@@ -126,6 +126,33 @@ func (s *PresetStore) Find(name string) *Preset {
 	return nil
 }
 
+// UpdatePresetRoomID points a stored preset at the room id it now starts.
+//
+// A preset whose id was disbanded — or is taken by a live room with a
+// different roster — starts a NEW room instead of the one it names. The
+// preset follows that new room, otherwise every start mints another one and
+// the list of predefined rooms drifts away from the rooms that exist. A
+// missing store, an unknown preset and an already-current id are all
+// nothing-to-do, reported as (false, nil).
+func UpdatePresetRoomID(path, key, roomID string) (bool, error) {
+	if strings.TrimSpace(roomID) == "" {
+		return false, fmt.Errorf("room id is required")
+	}
+	store, err := LoadPresets(path)
+	if err != nil {
+		return false, err
+	}
+	preset := store.Find(key)
+	if preset == nil || preset.RoomID == roomID {
+		return false, nil
+	}
+	preset.RoomID = roomID
+	if err := SavePresets(path, store); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // Names lists the preset names, sorted, for a menu.
 func (s *PresetStore) Names() []string {
 	out := make([]string, 0, len(s.Presets))

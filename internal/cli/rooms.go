@@ -372,6 +372,12 @@ func roomsCreate(ctx context.Context, args []string, out io.Writer) error {
 	if strings.TrimSpace(worktree) == "" {
 		worktree = rooms.OrientationFromEnv().Worktree
 	}
+	// The room's shared directory exists before the room does: members write
+	// handoffs there from their very first turn, and the first message hands
+	// out exactly this path.
+	if _, err := rooms.OrientationFromWorktree(worktree).WithRoomDir(roomID); err != nil {
+		return err
+	}
 
 	client, conn, err := roomsDial(ctx, connection)
 	if err != nil {
@@ -382,8 +388,15 @@ func roomsCreate(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// groups.create may have minted a new id (the requested one was
+	// tombstoned or taken), so the directory that exists is the one under
+	// the id the room actually got.
+	orient, err := rooms.OrientationFromWorktree(worktree).WithRoomDir(room.RoomID)
+	if err != nil {
+		return err
+	}
 	if save {
-		if err := savePreset(rooms.Preset{Name: name, RoomID: roomID, ThreadID: thread,
+		if err := savePreset(rooms.Preset{Name: name, RoomID: room.RoomID, ThreadID: thread,
 			Members: members, Worktree: worktree}); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: room created but preset not saved: %v\n", err)
 		}
@@ -392,6 +405,7 @@ func roomsCreate(ctx context.Context, args []string, out io.Writer) error {
 		return writeJSON(out, room)
 	}
 	fmt.Fprintf(out, "room %s (%s) on %s\n", room.RoomID, room.Name, conn.Name)
+	fmt.Fprintf(out, "  shared directory: %s\n", orient.RoomDir)
 	for _, m := range room.Members {
 		fmt.Fprintf(out, "  @%-16s %s\n", m.Handle, m.Profile)
 	}
@@ -445,6 +459,11 @@ func roomsFrom(ctx context.Context, args []string, out io.Writer) error {
 	if err := rooms.ValidateRoster(preset.Members); err != nil {
 		return fmt.Errorf("predefined room %q is invalid: %w", preset.Name, err)
 	}
+	// The directory exists before the gateway hears about the room, under the
+	// project the preset names.
+	if _, err := rooms.OrientationFromWorktree(preset.Worktree).WithRoomDir(preset.RoomID); err != nil {
+		return err
+	}
 	client, conn, err := roomsDial(ctx, connection)
 	if err != nil {
 		return err
@@ -454,18 +473,45 @@ func roomsFrom(ctx context.Context, args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if save {
-		store.Remove(preset.Name)
-		if err := store.Add(*preset); err != nil {
+	// Snapshot before touching the store: Remove compacts the slice, and a
+	// preset pointer into it would start naming its neighbour.
+	stored := *preset
+	if room.RoomID != stored.RoomID {
+		// The id this preset named was tombstoned or taken, so groups.create
+		// minted a new one. The preset follows the room it now starts —
+		// otherwise every start mints yet another room.
+		if save {
+			stored.RoomID = room.RoomID
+			store.Remove(stored.Name)
+			if err := store.Add(stored); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: preset not updated: %v\n", err)
+			} else if err := rooms.SavePresets(path, store); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: preset not saved: %v\n", err)
+			}
+		} else if changed, err := rooms.UpdatePresetRoomID(path, stored.Name, room.RoomID); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: preset still points at %s: %v\n", stored.RoomID, err)
+		} else if changed {
+			fmt.Fprintf(out, "  preset updated: room id %s → %s\n", stored.RoomID, room.RoomID)
+		}
+	} else if save {
+		store.Remove(stored.Name)
+		if err := store.Add(stored); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: preset not updated: %v\n", err)
 		} else if err := rooms.SavePresets(path, store); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: preset not saved: %v\n", err)
 		}
 	}
+	// The directory that exists is the one under the id the room actually
+	// got — after a minted id, the requested one was never used.
+	orient, err := rooms.OrientationFromWorktree(stored.Worktree).WithRoomDir(room.RoomID)
+	if err != nil {
+		return err
+	}
 	if asJSON {
 		return writeJSON(out, room)
 	}
-	fmt.Fprintf(out, "room %s (%s) on %s — from preset %q\n", room.RoomID, room.Name, conn.Name, preset.Name)
+	fmt.Fprintf(out, "room %s (%s) on %s — from preset %q\n", room.RoomID, room.Name, conn.Name, stored.Name)
+	fmt.Fprintf(out, "  shared directory: %s\n", orient.RoomDir)
 	for _, m := range room.Members {
 		fmt.Fprintf(out, "  @%-16s %s\n", m.Handle, m.Profile)
 	}
@@ -501,9 +547,14 @@ func roomsSend(ctx context.Context, args []string, out io.Writer) error {
 		return err
 	}
 	defer client.Close()
-	// The room's first message carries the project context, so the members
-	// know where they are and how to reach Orca's browser.
-	event, err := client.SendOpening(ctx, roomID, message, thread, resolveOrientation(roomID, worktree))
+	// The room's first message carries the project context AND the room's
+	// shared directory with its handoff contract, so the members know where
+	// they are, where to write, and what counts as proof of a write.
+	orient, err := resolveOrientation(roomID, worktree).WithRoomDir(roomID)
+	if err != nil {
+		return err
+	}
+	event, err := client.SendOpening(ctx, roomID, message, thread, orient)
 	if err != nil {
 		return err
 	}

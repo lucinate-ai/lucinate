@@ -54,8 +54,15 @@ func DialBaseURL(ctx context.Context, baseURL, token string) (*Client, error) {
 	return Dial(ctx, wsURL)
 }
 
-// WSURL reports the endpoint this client is bound to.
-func (c *Client) WSURL() string { return c.wsURL }
+// WSURL reports the endpoint this client is bound to. Nil-safe, so a caller
+// holding a zero-value client (a cache slot, a not-yet-dialed holder) can ask
+// without a panic.
+func (c *Client) WSURL() string {
+	if c == nil {
+		return ""
+	}
+	return c.wsURL
+}
 
 // SetTimeout replaces the per-call bound. Zero means no bound beyond the
 // caller's own context.
@@ -75,8 +82,15 @@ func (c *Client) Close() error {
 	return c.rpc.Close()
 }
 
-// Done is closed when the connection drops, so a view can stop polling.
-func (c *Client) Done() <-chan struct{} { return c.rpc.Done() }
+// Done is closed when the connection drops, so a view can stop polling. It is
+// nil-safe like Close: a zero-value client (as tests build) must not panic a
+// caller that only wants to watch for a drop.
+func (c *Client) Done() <-chan struct{} {
+	if c == nil || c.rpc == nil {
+		return nil
+	}
+	return c.rpc.Done()
+}
 
 // Err reports why the connection died, or nil while it is healthy and after
 // a deliberate Close. Callers use it to tell a dropped socket (redial) from
@@ -161,8 +175,17 @@ func (c *Client) List(ctx context.Context, includeDisbanded bool) ([]Room, error
 	return out.Rooms, nil
 }
 
-// Create creates (or idempotently re-adopts) a room. The roster is
-// validated locally first so a bad one never reaches the wire.
+// Create creates a room, or idempotently adopts an existing one with the same
+// roster. The roster is validated locally first so a bad one never reaches the
+// wire.
+//
+// When the gateway refuses the id itself — a tombstoned room, or a live room
+// whose roster differs (both 4110, see RoomIDConflictCode) — Create mints a
+// replacement id and asks again, up to maxCreateAttempts times. That is the
+// whole fix for "I disbanded a room and now the same roster will not start"
+// and "my predefined room will not start": the roster and the preset were
+// never the problem, the id was. The minted id comes back in the returned
+// Room, so callers that care compare it with the one they asked for.
 func (c *Client) Create(ctx context.Context, roomID, name string, members []Member) (Room, error) {
 	if err := ValidateRoster(members); err != nil {
 		return Room{}, err
@@ -173,6 +196,33 @@ func (c *Client) Create(ctx context.Context, roomID, name string, members []Memb
 	if name == "" {
 		return Room{}, fmt.Errorf("room name is required")
 	}
+	room, err := c.createOnce(ctx, roomID, name, members)
+	if err == nil || !IsRoomIDConflict(err) {
+		return room, err
+	}
+	base := roomID
+	var conflict error
+	for attempt := 1; attempt <= maxCreateAttempts; attempt++ {
+		fresh := FreshRoomID(base)
+		if attempt > 1 {
+			// Two mints inside the same second would otherwise repeat, and
+			// a repeat is just the same refusal again.
+			fresh = fmt.Sprintf("%s-%d", fresh, attempt)
+		}
+		room, err = c.createOnce(ctx, fresh, name, members)
+		if err == nil {
+			return room, nil
+		}
+		if !IsRoomIDConflict(err) {
+			return Room{}, err
+		}
+		conflict = err
+	}
+	return Room{}, conflict
+}
+
+// createOnce is one groups.create, with no retry policy around it.
+func (c *Client) createOnce(ctx context.Context, roomID, name string, members []Member) (Room, error) {
 	var out struct {
 		Room Room `json:"room"`
 	}

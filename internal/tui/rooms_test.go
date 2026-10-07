@@ -609,8 +609,17 @@ func TestRoomsModel_TranscriptScrollsBackThroughHistory(t *testing.T) {
 func TestRoomsModel_ScrollIsClampedToTheHistory(t *testing.T) {
 	m := transcriptWith(40)
 	m, _ = m.scrollTranscript(100000)
-	if total := len(m.transcriptLines()); m.scroll != total {
-		t.Fatalf("scroll = %d, want it clamped to the %d-line history", m.scroll, total)
+	total := len(m.transcriptLines())
+	// The clamp keeps one full window of history on screen. Clamping to the
+	// total line count let the window collapse to [0,0] instead, so pressing
+	// Home on a long room blanked the transcript — the pane has to still show
+	// the oldest messages at the far end of the scroll.
+	if want := total - m.transcriptRows(); m.scroll != want {
+		t.Fatalf("scroll = %d, want it clamped to %d (total %d minus one window)", m.scroll, want, total)
+	}
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "linia 1\n") {
+		t.Fatalf("scrolled to the oldest end the transcript shows no history:\n%s", view)
 	}
 	if m, _ = m.scrollTranscript(-100000); m.scroll != 0 {
 		t.Fatalf("scroll = %d, want it pinned at 0", m.scroll)

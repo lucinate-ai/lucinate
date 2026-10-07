@@ -36,6 +36,7 @@ type Usage struct {
 type MemberUsage struct {
 	Handle   string `json:"handle"`
 	Profile  string `json:"profile"`
+	Model    string `json:"model,omitempty"`
 	Turns    int    `json:"turns"`
 	Messages int    `json:"messages"`
 	Usage
@@ -195,23 +196,38 @@ func UsageTotals(rows []MemberUsage) MemberUsage {
 
 // FormatUsage renders the /cost table. It is plain text on purpose: the TUI
 // colours it, the CLI prints it as is, and neither has to parse a layout.
+//
+// A MODEL column appears only when a caller filled the model in, so a report
+// about a room whose models are irrelevant keeps its old width.
 func FormatUsage(rows []MemberUsage) string {
 	if len(rows) == 0 {
 		return "no usage to report"
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%-22s %-16s %6s %6s %9s %9s %9s %10s\n",
-		"MEMBER", "PROFILE", "TURNS", "MSGS", "INPUT", "OUTPUT", "TOTAL", "COST")
+	withModel := false
 	for _, r := range rows {
-		writeUsageRow(&b, r)
+		if r.Model != "" {
+			withModel = true
+			break
+		}
+	}
+	var b strings.Builder
+	if withModel {
+		fmt.Fprintf(&b, "%-22s %-16s %-18s %6s %6s %9s %9s %9s %10s\n",
+			"MEMBER", "PROFILE", "MODEL", "TURNS", "MSGS", "INPUT", "OUTPUT", "TOTAL", "COST")
+	} else {
+		fmt.Fprintf(&b, "%-22s %-16s %6s %6s %9s %9s %9s %10s\n",
+			"MEMBER", "PROFILE", "TURNS", "MSGS", "INPUT", "OUTPUT", "TOTAL", "COST")
+	}
+	for _, r := range rows {
+		writeUsageRow(&b, r, withModel)
 	}
 	if len(rows) > 1 {
-		writeUsageRow(&b, UsageTotals(rows))
+		writeUsageRow(&b, UsageTotals(rows), withModel)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func writeUsageRow(b *strings.Builder, r MemberUsage) {
+func writeUsageRow(b *strings.Builder, r MemberUsage, withModel bool) {
 	handle := r.Handle
 	if handle == "" {
 		handle = "TOTAL"
@@ -221,6 +237,15 @@ func writeUsageRow(b *strings.Builder, r MemberUsage) {
 	cost := "—"
 	if r.HasCost {
 		cost = fmt.Sprintf("$%.4f", r.CostUSD)
+	}
+	model := r.Model
+	if model == "" {
+		model = "profile default"
+	}
+	if withModel {
+		fmt.Fprintf(b, "%-22s %-16s %-18s %6d %6d %9d %9d %9d %10s\n",
+			handle, r.Profile, model, r.Turns, r.Messages, r.InputTokens, r.OutputTokens, r.TotalTokens, cost)
+		return
 	}
 	fmt.Fprintf(b, "%-22s %-16s %6d %6d %9d %9d %9d %10s\n",
 		handle, r.Profile, r.Turns, r.Messages, r.InputTokens, r.OutputTokens, r.TotalTokens, cost)
