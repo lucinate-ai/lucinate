@@ -20,11 +20,13 @@ type fakeIdentityStore struct {
 	token string
 }
 
-func (f *fakeIdentityStore) LoadOrGenerate() (*identity.Identity, error) { return &identity.Identity{}, nil }
-func (f *fakeIdentityStore) LoadDeviceToken() string                     { return f.token }
-func (f *fakeIdentityStore) SaveDeviceToken(t string) error              { f.token = t; return nil }
-func (f *fakeIdentityStore) ClearDeviceToken() error                     { f.token = ""; return nil }
-func (f *fakeIdentityStore) Reset() error                                { f.token = ""; return nil }
+func (f *fakeIdentityStore) LoadOrGenerate() (*identity.Identity, error) {
+	return &identity.Identity{}, nil
+}
+func (f *fakeIdentityStore) LoadDeviceToken() string        { return f.token }
+func (f *fakeIdentityStore) SaveDeviceToken(t string) error { f.token = t; return nil }
+func (f *fakeIdentityStore) ClearDeviceToken() error        { f.token = ""; return nil }
+func (f *fakeIdentityStore) Reset() error                   { f.token = ""; return nil }
 
 func TestNewWithIdentityStore(t *testing.T) {
 	c := NewWithIdentityStore(&config.Config{}, &fakeIdentityStore{})
@@ -59,6 +61,10 @@ func TestSanitiseHost(t *testing.T) {
 }
 
 func TestIdentityDirForEndpoint(t *testing.T) {
+	// The expected paths are anchored at <home>/.lucinate, so the home must
+	// be a temp dir — and LUCINATE_DATA_DIR blanked — or an ambient data dir
+	// replaces that prefix and the suffix assertions miss.
+	setTestHome(t)
 	tests := []struct {
 		name       string
 		gatewayURL string
@@ -116,7 +122,7 @@ func TestIdentityDirForEndpoint(t *testing.T) {
 func newTestClient(t *testing.T) (*Client, string) {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 	c, err := New(&config.Config{GatewayURL: "http://example.com", WSURL: "ws://example.com/ws"})
 	if err != nil {
 		t.Fatalf("client.New: %v", err)

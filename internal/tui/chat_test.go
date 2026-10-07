@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
@@ -30,6 +32,22 @@ func newContextUsageTestModel() (*chatModel, *fakeBackend) {
 		height:     40,
 	}
 	return m, fb
+}
+
+// A bracketed paste must land in the composer whole: the newlines are
+// content, not submits, and the text must not be dropped.
+func TestChatModel_PasteInsertsWholeTextWithoutSending(t *testing.T) {
+	m := newChatModel(newFakeBackend(), "session-key", "agent-id", "test", "",
+		config.DefaultPreferences(), false, "", "", false)
+	m.setSize(120, 40)
+
+	m, _ = m.Update(tea.PasteMsg{Content: "linia1\nlinia2\nlinia3"})
+	if got := m.textarea.Value(); got != "linia1\nlinia2\nlinia3" {
+		t.Fatalf("textarea = %q, want the pasted text whole", got)
+	}
+	if m.sending {
+		t.Fatal("a paste must not submit the message")
+	}
 }
 
 func TestLoadContextUsage_ReadsFromMatchingSessionEntry(t *testing.T) {
@@ -221,7 +239,6 @@ func drainBatch(t *testing.T, cmd tea.Cmd) {
 	}
 }
 
-
 // TestChatModel_PreloadedPendingMessage_DrainsOnHistoryLoaded verifies
 // the `lucinate chat <message>` auto-submit path: a chatModel
 // constructed with an initialMessage queues it so the first
@@ -229,6 +246,66 @@ func drainBatch(t *testing.T, cmd tea.Cmd) {
 // turn and a streaming assistant placeholder in the visible message
 // list. The pre-history-load delay matches what a human typing would
 // see (history scrollback first, then their message).
+// The real terminal cursor must land inside the composer, so pin the
+// computed offset to the view View() actually renders: if the layout gains
+// a region and cursorOffset() is not updated, this fails instead of parking
+// the cursor on the wrong row.
+func TestChatModel_CursorOffsetMatchesView(t *testing.T) {
+	m := newChatModel(newFakeBackend(), "session-key", "agent-id", "test", "",
+		config.DefaultPreferences(), false, "conn", "", false)
+	m.setSize(80, 24)
+
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	top := -1
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "╭") {
+			top = i // the input box's top border
+		}
+	}
+	if top < 0 {
+		t.Fatalf("no input box in the view:\n%s", m.View())
+	}
+
+	x, y, ok := m.cursorOffset()
+	if !ok {
+		t.Fatal("cursorOffset reported no cursor for a focused, visible input")
+	}
+	if y != top+1 {
+		t.Fatalf("cursor row = %d, want %d (first row inside the input box, whose top border is row %d)", y, top+1, top)
+	}
+	if x != 2 {
+		t.Fatalf("cursor col = %d, want 2 (left border + horizontal padding)", x)
+	}
+
+	cur := m.Cursor()
+	if cur == nil {
+		t.Fatal("Cursor() = nil for a focused, visible input")
+	}
+	if cur.Position.Y != top+1 || cur.Position.X != 2 {
+		t.Fatalf("Cursor() = (%d,%d), want (2,%d)", cur.Position.X, cur.Position.Y, top+1)
+	}
+}
+
+// The virtual cursor is what produced two blinking cursors: the app drew a
+// block while the terminal painted its own caret. Keep it off.
+func TestChatModel_UsesTheRealCursorNotTheVirtualOne(t *testing.T) {
+	m := newChatModel(newFakeBackend(), "session-key", "agent-id", "test", "",
+		config.DefaultPreferences(), false, "", "", false)
+	if m.textarea.VirtualCursor() {
+		t.Fatal("textarea still uses its virtual cursor — the app would draw a second cursor")
+	}
+	if m.Cursor() == nil {
+		t.Fatal("no real cursor to place; the composer would be cursorless")
+	}
+
+	// A hidden input has no cursor to place.
+	hidden := newChatModel(newFakeBackend(), "session-key", "agent-id", "test", "",
+		config.DefaultPreferences(), true, "", "", false)
+	if hidden.Cursor() != nil {
+		t.Fatal("a hidden input should report no cursor")
+	}
+}
+
 func TestChatModel_PreloadedPendingMessage_DrainsOnHistoryLoaded(t *testing.T) {
 	fb := newFakeBackend()
 	m := newChatModel(fb, "session-key", "agent-id", "test", "", config.DefaultPreferences(), false, "", "hello", false)

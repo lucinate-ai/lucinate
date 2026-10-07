@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	tea "charm.land/bubbletea/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/config"
@@ -53,7 +53,7 @@ type pendingNavConfirm struct {
 // hint surfaces the picker first, "/model" before "/models" likewise.
 // Tab now extends to the longest common prefix and the completion menu
 // shows every candidate, so the curated order no longer rules Tab.
-var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/cron", "/exit", "/export", "/help", "/header", "/model", "/models", "/mouse", "/quit", "/record", "/reset", "/routines", "/routine", "/sessions", "/settings", "/skills", "/stats", "/status", "/think"}
+var slashCommands = []string{"/agents", "/agent", "/cancel", "/clear", "/commands", "/compact", "/config", "/connections", "/crons", "/cron", "/exit", "/export", "/help", "/header", "/model", "/models", "/mouse", "/quit", "/record", "/reset", "/routines", "/routine", "/rooms", "/sessions", "/settings", "/skills", "/stats", "/status", "/think"}
 
 // thinkingLevels is the ordered list of valid thinking levels.
 var thinkingLevels = []string{"off", "minimal", "low", "medium", "high"}
@@ -328,6 +328,10 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		return true, m.gateNavigation("Opening crons", false, func() tea.Msg {
 			return showCronsMsg{filterAgentID: filterAgentID, filterLabel: filterLabel}
 		})
+	case "/rooms":
+		// Rooms are a gateway-level surface, not an agent one, so the
+		// view dials the gateway itself from the active connection.
+		return true, m.gateNavigation("Opening rooms", false, func() tea.Msg { return showRoomsMsg{} })
 	case "/sessions":
 		agentID := m.agentID
 		agentName := m.agentName

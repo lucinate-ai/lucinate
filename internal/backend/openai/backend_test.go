@@ -22,7 +22,7 @@ import (
 // server.
 func newBackend(t *testing.T, srv *httptest.Server) *Backend {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	b, err := New(Options{
 		ConnectionID: "conn-test",
 		BaseURL:      srv.URL + "/v1",

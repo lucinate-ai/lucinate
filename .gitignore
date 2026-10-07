@@ -34,3 +34,6 @@ test/integration/state/
 test/integration/echomodel.bin
 test/integration/echomodel.log
 test/integration/echomodel.pid
+
+# Room shared directories (created when a room starts; see internal/rooms/sharedir.go)
+.rooms/

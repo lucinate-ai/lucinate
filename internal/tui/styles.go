@@ -4,9 +4,9 @@ import "charm.land/lipgloss/v2"
 
 var (
 	// Colours — using dark theme values.
-	subtle  = lipgloss.Color("#5C5C5C")
-	accent  = lipgloss.Color("#AD8CFF")
-	userClr = lipgloss.Color("#48CAE4")
+	subtle      = lipgloss.Color("#5C5C5C")
+	accent      = lipgloss.Color("#AD8CFF")
+	userClr     = lipgloss.Color("#48CAE4")
 	errClr      = lipgloss.Color("#FF6B6B")
 	execClr     = lipgloss.Color("#FFB74D")
 	localExcClr = lipgloss.Color("#66BB6A")
@@ -46,7 +46,7 @@ var (
 
 	// Thinking content body (reasoning blocks from the model).
 	thinkingBodyStyle = lipgloss.NewStyle().
-			Foreground(subtle)
+				Foreground(subtle)
 
 	// Status / info text.
 	statusStyle = lipgloss.NewStyle().

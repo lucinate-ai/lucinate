@@ -411,7 +411,7 @@ func TestRoutineForm_EnsureFocusVisible_ScrollsDownToReachLaterField(t *testing.
 func TestRoutineForm_EnsureFocusVisible_ScrollsUpToReachEarlierField(t *testing.T) {
 	starts := []int{0, 5, 10, 15, 21, 27, 33, 39, 45, 51, 57}
 	form := makeFormWithLayout(t, 10, 63, starts)
-	form.focused = 1 // field at line 5..9
+	form.focused = 1         // field at line 5..9
 	form.body.SetYOffset(40) // start scrolled past it
 
 	form.ensureFocusVisible()

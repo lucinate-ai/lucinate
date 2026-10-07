@@ -124,7 +124,7 @@ const narrowBodyMinWidth = 60
 // narrowLayout reports whether the viewport is too narrow for an inline
 // prefix to leave enough room for the message body.
 func (m *chatModel) narrowLayout() bool {
-	return (m.width - 4) - m.prefixWidth() < narrowBodyMinWidth
+	return (m.width-4)-m.prefixWidth() < narrowBodyMinWidth
 }
 
 // writePrefix renders the message prefix into b and returns the per-continuation
