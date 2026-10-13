@@ -10,7 +10,7 @@ import (
 func newTestStore(t *testing.T) *AgentStore {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	store, err := NewAgentStore("conn-1")
 	if err != nil {
 		t.Fatalf("NewAgentStore: %v", err)
@@ -123,6 +123,7 @@ func TestAgentStore_RewriteHistoryReplacesContents(t *testing.T) {
 }
 
 func TestAgentStore_RewriteHistoryFilePrivacy(t *testing.T) {
+	requirePosixFileModes(t)
 	store := newTestStore(t)
 	meta, _ := store.Create("agent", "", "", "")
 	if err := store.RewriteHistory(meta.ID, []Message{{Role: "user", Content: "hi"}}); err != nil {
@@ -286,6 +287,7 @@ func TestAgentStore_ArchiveMissingAgent(t *testing.T) {
 }
 
 func TestAgentStore_FilesArePrivate(t *testing.T) {
+	requirePosixFileModes(t)
 	store := newTestStore(t)
 	meta, _ := store.Create("alpha", "ident", "soul", "")
 	_ = store.AppendMessage(meta.ID, Message{Role: "user", Content: "hi"})

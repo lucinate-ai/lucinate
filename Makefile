@@ -25,6 +25,21 @@ run:
 test:
 	go test ./...
 
+# Windows host: Go and its caches live on E: (C: is ~99% full), so the
+# scripts source scripts/lucinate-go-env.sh first. Prefer these targets
+# over `test`/`build` here.
+.PHONY: test-win
+test-win:
+	bash scripts/ltest
+
+.PHONY: test-win-all
+test-win-all:
+	bash scripts/ltest all
+
+.PHONY: build-win
+build-win:
+	bash scripts/lbuild
+
 # smoke runs the startup smoke test in isolation. The smoke test
 # constructs the AppModel in every entry-view variant the startup
 # resolver produces and feeds it the initial WindowSizeMsg the

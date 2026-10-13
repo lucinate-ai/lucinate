@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/a3tai/openclaw-go/protocol"
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 	"github.com/joho/godotenv"
 
 	openclawBackend "github.com/lucinate-ai/lucinate/internal/backend/openclaw"
@@ -249,4 +249,3 @@ func logTestEvent(t *testing.T, ev protocol.Event) {
 	}
 	t.Logf("  event: %s", name)
 }
-

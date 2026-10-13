@@ -13,7 +13,7 @@ import (
 func withHomeDir(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	return home
 }
 
@@ -154,6 +154,7 @@ func TestLoadConnections_MalformedFileReturnsEmpty(t *testing.T) {
 }
 
 func TestSaveConnections_FileMode(t *testing.T) {
+	requirePosixFileModes(t)
 	home := withHomeDir(t)
 	if err := SaveConnections(Connections{}); err != nil {
 		t.Fatalf("SaveConnections: %v", err)

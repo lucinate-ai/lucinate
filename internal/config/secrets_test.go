@@ -42,6 +42,7 @@ func TestSecrets_EmptyKeyDeletes(t *testing.T) {
 }
 
 func TestSecrets_FileMode(t *testing.T) {
+	requirePosixFileModes(t)
 	home := withHomeDir(t)
 	if err := SetAPIKey("conn-a", "secret"); err != nil {
 		t.Fatal(err)

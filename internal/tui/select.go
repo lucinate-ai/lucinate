@@ -77,12 +77,12 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // selectModel is the agent selection view.
 type selectModel struct {
-	list      list.Model
-	backend   backend.Backend
-	loading   bool
-	err       error
-	mainKey   string
-	selected  bool
+	list     list.Model
+	backend  backend.Backend
+	loading  bool
+	err      error
+	mainKey  string
+	selected bool
 	// selecting is true after the user has picked an agent and the
 	// app is round-tripping CreateSession to the gateway. While set,
 	// the picker freezes: list navigation is disabled and the view

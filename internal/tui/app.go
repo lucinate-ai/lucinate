@@ -26,6 +26,7 @@ const (
 	viewCrons
 	viewModelPicker
 	viewRoutines
+	viewRooms
 )
 
 // BackendFactory builds an unconnected backend.Backend for a stored
@@ -129,6 +130,7 @@ type AppModel struct {
 	cronsModel       cronsModel
 	modelPicker      modelPickerModel
 	routinesModel    routinesModel
+	roomsModel       roomsModel
 	backend          backend.Backend
 	activeConn       *config.Connection // the connection backend belongs to; rendered in status bars
 	store            *config.Connections
@@ -332,6 +334,8 @@ func (m AppModel) viewActions() []Action {
 		return m.modelPicker.Actions()
 	case viewRoutines:
 		return m.routinesModel.Actions()
+	case viewRooms:
+		return nil
 	}
 	return nil
 }
@@ -396,6 +400,8 @@ func (m AppModel) TriggerAction(id string) (AppModel, tea.Cmd) {
 		var cmd tea.Cmd
 		m.routinesModel, cmd = m.routinesModel.TriggerAction(id)
 		return m, cmd
+	case viewRooms:
+		return m, nil
 	}
 	return m, nil
 }
@@ -450,6 +456,10 @@ func (m AppModel) computeWantsInput() bool {
 		return m.connectingModel.wantsInput()
 	case viewAskConfig:
 		return m.askConfigModel.wantsInput()
+	case viewRooms:
+		// Only the transcript sub-screen has a composer; the browse and
+		// invite screens are pure navigation, so q still quits there.
+		return m.roomsModel.sub == roomsTranscript
 	}
 	return false
 }
@@ -595,6 +605,8 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.modelPicker.setSize(msg.Width, msg.Height)
 		case viewRoutines:
 			m.routinesModel.setSize(msg.Width, msg.Height)
+		case viewRooms:
+			m.roomsModel.setSize(msg.Width, msg.Height)
 		}
 		return m, nil
 
@@ -650,9 +662,14 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		case "toggle":
 			m.mouseCapture = !m.mouseCapture
 		}
-		// "status" reports without changing state. Feedback is a chat
-		// system row, so route it through the chat model (the /mouse
-		// command that raises this msg only fires from the chat view).
+		// Feedback is a chat system row, so route it through the chat model
+		// (the /mouse command that raises this msg only fires from the chat
+		// view) — except in the rooms view, whose transcript is what the
+		// user is actually looking at.
+		if m.state == viewRooms {
+			m.roomsModel.status = mouseStatusText(m.mouseCapture)
+			return m, nil
+		}
 		m.chatModel.reportMouseMode(m.mouseCapture)
 		return m, nil
 
@@ -829,6 +846,18 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 			m.chatModel.updateViewport()
 		}
 		m.state = m.cronsReturn
+		return m, nil
+
+	case showRoomsMsg:
+		m.roomsModel.Close()
+		m.roomsModel = newRoomsModel(m.activeConn, m.hideActionHints)
+		m.roomsModel.setSize(m.width, m.height)
+		m.state = viewRooms
+		return m, m.roomsModel.Init()
+
+	case goBackFromRoomsMsg:
+		m.roomsModel.Close()
+		m.state = viewChat
 		return m, nil
 
 	case showSessionsMsg:
@@ -1082,6 +1111,11 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 		var cmd tea.Cmd
 		m.routinesModel, cmd = m.routinesModel.Update(msg)
 		return m, cmd
+
+	case viewRooms:
+		var cmd tea.Cmd
+		m.roomsModel, cmd = m.roomsModel.Update(msg)
+		return m, cmd
 	}
 
 	return m, nil
@@ -1270,6 +1304,9 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView(m.selectModel.View())
 	case viewChat:
 		v = tea.NewView(m.chatModel.View())
+		// Place the terminal's cursor on the composer. A nil cursor hides
+		// it, which is what every other view wants.
+		v.Cursor = m.chatModel.Cursor()
 	case viewSessions:
 		v = tea.NewView(m.sessionsModel.View())
 	case viewConfig:
@@ -1282,6 +1319,12 @@ func (m AppModel) View() tea.View {
 		v = tea.NewView(m.modelPicker.View())
 	case viewRoutines:
 		v = tea.NewView(m.routinesModel.View())
+	case viewRooms:
+		v = tea.NewView(m.roomsModel.View())
+		// Same reason as the chat composer: without a positioned cursor
+		// the terminal draws its own wherever the last write ended, which
+		// lands outside the input box.
+		v.Cursor = m.roomsModel.Cursor()
 	default:
 		v = tea.NewView("")
 	}

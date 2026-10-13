@@ -161,7 +161,7 @@ func fixedFactory(b backend.Backend) BackendFactory {
 }
 
 func TestSend_WaitsForFinalAndWritesReply(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -209,7 +209,7 @@ func TestSend_WaitsForFinalAndWritesReply(t *testing.T) {
 }
 
 func TestSend_DefaultsToMainKeyForDefaultAgent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -242,7 +242,7 @@ func TestSend_DefaultsToMainKeyForDefaultAgent(t *testing.T) {
 }
 
 func TestSend_DefaultsToLiteralMainForOtherAgents(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -272,7 +272,7 @@ func TestSend_DefaultsToLiteralMainForOtherAgents(t *testing.T) {
 }
 
 func TestSend_HonoursExplicitSession(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -299,7 +299,7 @@ func TestSend_HonoursExplicitSession(t *testing.T) {
 }
 
 func TestSend_DetachReturnsAfterAck(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -329,7 +329,7 @@ func TestSend_DetachReturnsAfterAck(t *testing.T) {
 }
 
 func TestSend_ReturnsErrorOnChatErrorEvent(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -350,7 +350,7 @@ func TestSend_ReturnsErrorOnChatErrorEvent(t *testing.T) {
 }
 
 func TestSend_ReturnsErrorOnChatAborted(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -371,7 +371,7 @@ func TestSend_ReturnsErrorOnChatAborted(t *testing.T) {
 }
 
 func TestSend_MatchesConnectionByNameCaseInsensitive(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -393,7 +393,7 @@ func TestSend_MatchesConnectionByNameCaseInsensitive(t *testing.T) {
 }
 
 func TestSend_MatchesAgentByNameCaseInsensitive(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -418,7 +418,7 @@ func TestSend_MatchesAgentByNameCaseInsensitive(t *testing.T) {
 }
 
 func TestSend_ConnectionNotFound(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	store, _ := makeSendStore("real")
 	err := Send(context.Background(), SendOptions{
@@ -431,7 +431,7 @@ func TestSend_ConnectionNotFound(t *testing.T) {
 }
 
 func TestSend_AgentNotFound(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -470,7 +470,7 @@ func TestSend_MissingArgumentsRejected(t *testing.T) {
 }
 
 func TestSend_BackendErrorsBubbleUp(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	t.Run("connect", func(t *testing.T) {
 		fb := newSendFakeBackend()
@@ -519,7 +519,7 @@ func TestSend_BackendErrorsBubbleUp(t *testing.T) {
 }
 
 func TestSend_FallsBackToDeltaTextWhenFinalEmpty(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -550,7 +550,7 @@ func TestSend_FallsBackToDeltaTextWhenFinalEmpty(t *testing.T) {
 }
 
 func TestSend_IgnoresEventsForOtherSessions(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{
@@ -584,7 +584,7 @@ func TestSend_IgnoresEventsForOtherSessions(t *testing.T) {
 }
 
 func TestSend_ContextCancellationReturns(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	fb := newSendFakeBackend()
 	fb.listResult = &protocol.AgentsListResult{

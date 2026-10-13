@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Added
+- feat(rooms): `/restart [fresh|with-summary]` starts the current roster in a new room — same members, same per-member models, old room left untouched; with-summary posts a ≤30-line hand-over of the old room (its id, its directory and state, an extractive transcript digest) as the new room's first message
+### Fixed
+- fix(rooms): a room id the gateway refuses with 4110 (a disbanded room, or a live one with another roster) is replaced by a fresh `id-<time>` and the create retried — recreating a roster you just disbanded, and starting a predefined room whose id is gone, both start again instead of failing
+- fix(rooms): `rooms from <preset>` and the TUI's preset start re-point the preset at the room they actually started (otherwise every start mints another room), and `rooms create` / `rooms from` print the shared directory of the id the room actually got
+- feat(rooms): every room owns a shared directory `<worktree>/.rooms/<room-id>/`, created when the room starts, with a path no room id can escape (`internal/rooms/sharedir.go`); `rooms create` / `rooms from` print it
+- feat(rooms): handoff contract rides the room's first message — write with an absolute path into the room directory, read the file back and quote `HANDOFF <path> bytes=<n>`, a declaration without a read-back is an error, and a reader missing the file answers fail-closed; `VerifyHandoffReport` checks the claim against the file on disk
+- test(rooms): live member-to-member proof `TestLive_RoomHandoff` (`ROOMS_LIVE=1`) — one member writes the file, another reads it back from the room directory, with the log fragment and directory listing captured as evidence
+- test(rooms): shared in-process fake gateway (`internal/testgateway`) — the full `groups.*` surface plus `model.options` over a real WebSocket, with scripted mid-stream drops, silenced methods, send rejections, 4110 id conflicts and upgrade refusals, so the client, restart, model and TUI suites dial a real socket instead of stubbing theirs
+- feat(rooms): route room messages by `@mention`, or with `moderator` / `round-robin` modes (`/mode`, `/moderator`), persisted per room
+- feat(rooms): stream member replies in the rooms transcript — braille spinner (120 ms), cumulative deltas, placeholder removed on an empty answer
+- feat(rooms): reconnect a dropped room socket on exponential backoff (500 ms → 30 s) and resume the transcript from the cursor, without losing the events already loaded
+- feat(rooms): `/export [md|json|both]` writes the room transcript into `<lucinate data dir>/exports`
+- feat(rooms): `/compact [N]` (and `/compact local [N]`) replaces the older transcript with a brief from the room, keeping the last `N` messages verbatim
+- feat(rooms): per-member header colours (`/header @handle #RRGGBB`, persisted), `/cost` token and cost statistics per member, and `/find <phrase>` transcript search
+- feat(rooms): `/model` seats a member's model on that member's room session via the gateway's `groups.member_model` — session-scoped, profile and config untouched, nothing persisted by the client; the picker probes `groups.capabilities` first and refuses with the missing method named when a gateway is too old; `/cost` now carries a MODEL column and the roster line shows each member's model
+
 ## [1.25.0] - 2026-08-03
 ### Added
 - feat(tui): open the model picker from bare /model (#191)

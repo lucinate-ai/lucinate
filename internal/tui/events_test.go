@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/a3tai/openclaw-go/protocol"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/routines"
@@ -375,7 +375,7 @@ func TestMergeHistoryRefresh_PreservesLiveTail(t *testing.T) {
 		{role: "assistant", streaming: true, awaitingDelta: true, gen: 5},
 	}
 	server := []chatMessage{
-		{role: "user", content: "step 1"},          // server-canonical (gen=0)
+		{role: "user", content: "step 1"}, // server-canonical (gen=0)
 		{role: "assistant", content: "answer 1 (canonical)"},
 	}
 	m.mergeHistoryRefresh(server, 4)
