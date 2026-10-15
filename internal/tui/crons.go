@@ -362,7 +362,7 @@ func (m cronsModel) loadJobs() tea.Cmd {
 	return func() tea.Msg {
 		result, err := cron.CronsList(context.Background(), protocol.CronListParams{
 			Enabled: "all",
-			SortBy:  "nextRunAtMs",
+			SortBy:  "name",
 			SortDir: "asc",
 		})
 		if err != nil {
