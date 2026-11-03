@@ -91,6 +91,15 @@ func (d modelDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 	if i.model.Provider != "" {
 		subtitle = i.model.Provider + " · " + i.model.ID
 	}
+	// A backend whose model id *is* its display name (the Hermes gateway
+	// reports bare ids) would otherwise print every model twice, title and
+	// subtitle identical — noisy and easy to misread as duplicate entries.
+	detail := ""
+	if subtitle != title {
+		detail = "\n" + lipgloss.NewStyle().
+			Foreground(subtle).
+			Render(fmt.Sprintf("  %s", subtitle))
+	}
 
 	// The marker rides on the title line, in both style branches, so it
 	// survives the two things pre-selection does not: a typed filter (the
@@ -106,16 +115,12 @@ func (d modelDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 			Bold(true).
 			Render(fmt.Sprintf("> %s", title))
 		str += marker
-		str += "\n" + lipgloss.NewStyle().
-			Foreground(subtle).
-			Render(fmt.Sprintf("  %s", subtitle))
+		str += detail
 		fmt.Fprint(w, str)
 	} else {
 		str := fmt.Sprintf("  %s", title)
 		str += marker
-		str += "\n" + lipgloss.NewStyle().
-			Foreground(subtle).
-			Render(fmt.Sprintf("  %s", subtitle))
+		str += detail
 		fmt.Fprint(w, str)
 	}
 }
