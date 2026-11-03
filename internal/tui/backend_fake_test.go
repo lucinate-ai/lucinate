@@ -89,6 +89,11 @@ type fakeBackend struct {
 	patchedModelID    string
 	patchedSessionKey string
 	patchModelErr     error
+
+	// Usage seams. usageRaw is the session.usage payload ({} by default);
+	// usageErr forces the /stats load to fail.
+	usageRaw json.RawMessage
+	usageErr error
 }
 
 func newFakeBackend() *fakeBackend {
@@ -201,6 +206,12 @@ func (f *fakeBackend) SessionPatchThinking(ctx context.Context, sessionKey, leve
 // --- UsageBackend ---
 
 func (f *fakeBackend) SessionUsage(ctx context.Context, sessionKey string) (json.RawMessage, error) {
+	if f.usageErr != nil {
+		return nil, f.usageErr
+	}
+	if f.usageRaw != nil {
+		return f.usageRaw, nil
+	}
 	return json.RawMessage(`{}`), nil
 }
 

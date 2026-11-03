@@ -123,6 +123,21 @@ dispatches the same thing through `slash.exec` and returns the gateway's own ans
 refusal is an error, never a reported switch. The switch is session-scoped; the profile's
 config is untouched.
 
+## Shapes the wire actually carries
+
+`model.options` is provider-centric and **not** stable in the way a struct tag assumes: on
+`v0.22.5` a provider's `models` is a list of plain `"provider/model"` strings, while older
+payloads carried `{"id","name"}` objects. Decoding only the object shape made `/model` fail with
+`cannot unmarshal string into Go struct` — the picker was dead on the live gateway while the
+unit test (whose fake sent objects) stayed green. Decode each entry through `json.RawMessage` and
+accept both; the active model also comes from the top-level `"model"`.
+
+`session.list` rows are the TUI's contract, not ours: the browser reads `key`, `derivedTitle`,
+`lastMessagePreview`, `updatedAt`. Emitting `title`/`lastMessage` instead renders every row as a
+bare session key, twice (title fallback plus the description), which is what shipped until a live
+pass caught it. The field names live in `internal/tui/sessions.go`; treat them as the wire shape
+for this backend.
+
 The `hermes-smoke` CI matrix pins `v2026.6.5` (oldest supported, pre-multiplexing) and the
 current stable. Both legs matter: the profile roster must degrade to the synthetic agent on a
 gateway that answers `-32601` to `profiles.list`.

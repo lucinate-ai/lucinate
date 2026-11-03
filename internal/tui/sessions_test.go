@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -12,6 +14,43 @@ func newTestSessionsModel() sessionsModel {
 	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, nil, false)
 	m.setSize(120, 40)
 	return m
+}
+
+// A Hermes session row must carry a real title and preview into sessionItem.
+// When the backend emitted "title"/"lastMessage" instead of the TUI's
+// derivedTitle/lastMessagePreview, every row rendered its key twice.
+func TestSessionsList_HermesPayloadCarriesTitleAndPreview(t *testing.T) {
+	f := newFakeBackend()
+	f.sessionsListHook = func(context.Context, string) (json.RawMessage, error) {
+		return json.RawMessage(`{"sessions":[{
+			"key":"default::20261103_235014_cf2e19",
+			"derivedTitle":"Fix the word wrapper",
+			"lastMessagePreview":"wrapped and tested",
+			"updatedAt":1784425825300
+		}]}`), nil
+	}
+	m := newSessionsModel(f, "default", "Hermes", "deepseek/deepseek-v4.1-flash", "", false, nil, false)
+
+	msg, ok := m.loadSessions()().(sessionsLoadedMsg)
+	if !ok {
+		t.Fatal("loadSessions returned an unexpected message")
+	}
+	if msg.err != nil {
+		t.Fatalf("loadSessions: %v", msg.err)
+	}
+	if len(msg.sessions) != 1 {
+		t.Fatalf("sessions = %+v", msg.sessions)
+	}
+	it := msg.sessions[0]
+	if it.title != "Fix the word wrapper" {
+		t.Errorf("title = %q, want the gateway's derivedTitle", it.title)
+	}
+	if it.lastMessage != "wrapped and tested" {
+		t.Errorf("lastMessage = %q, want the gateway's preview", it.lastMessage)
+	}
+	if it.title == it.key {
+		t.Errorf("title fell back to the session key (%q); the row would render the key twice", it.key)
+	}
 }
 
 func TestSessionsLoadedMsg_PopulatesList(t *testing.T) {

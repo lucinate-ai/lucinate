@@ -218,7 +218,7 @@ func TestMatchLine(t *testing.T) {
 			Snippet:   "Hello world",
 			CreatedAt: float64(now),
 		}
-		want := "03:04:05 @Alice: Hello world"
+		want := time.Unix(now, 0).Format("15:04:05") + " @Alice: Hello world"
 		if got := MatchLine(m); got != want {
 			t.Errorf("MatchLine() = %q, want %q", got, want)
 		}
@@ -246,13 +246,28 @@ func TestMatchLine(t *testing.T) {
 			CreatedAt: float64(now),
 		}
 		line := MatchLine(m)
-		if !strings.HasPrefix(line, "03:04:05 @Zoe: …") {
+		if !strings.HasPrefix(line, time.Unix(now, 0).Format("15:04:05")+" @Zoe: …") {
 			t.Errorf("expected leading ellipsis, got %q", line)
 		}
 		if !strings.HasSuffix(line, "…") {
 			t.Errorf("expected trailing ellipsis, got %q", line)
 		}
 	})
+}
+
+// /find must show the same wall clock as the transcript, which formats in
+// local time. Formatting UTC made a 23:55 message read as 22:55.
+func TestMatchLine_UsesLocalTime(t *testing.T) {
+	old := time.Local
+	time.Local = time.FixedZone("CET", 60*60)
+	defer func() { time.Local = old }()
+
+	created := time.Date(2025, 1, 2, 22, 55, 0, 0, time.UTC).Unix()
+	m := Match{Speaker: "matt", Snippet: "lucinate", CreatedAt: float64(created)}
+	want := "23:55:00 @matt: lucinate"
+	if got := MatchLine(m); got != want {
+		t.Errorf("MatchLine() = %q, want local time %q", got, want)
+	}
 }
 
 // isSorted reports whether ints are in non-decreasing order.

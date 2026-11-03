@@ -86,6 +86,21 @@ function is table-tested; `EnsureRoomDir` refuses a backslash base on non-Window
 second line of defence. The `worktree Orca:` selector itself is passed through unchanged — it
 is an Orca argument, not a path.
 
+## Polling replays events, so the transcript dedupes by event id
+
+`groups.log` polls overlap (a page can be delivered twice, and a reconnect replays from the
+cursor), and the live client appended everything it received. The transcript then held each
+message twice, and `/find` printed every match twice — a bug only a live session shows.
+`newRoomEvents` keeps the first occurrence of each event id (falling back to
+`seq|kind|text` for older payloads) before anything enters the transcript.
+
+Times are displayed in **local** time, like the transcript and the room log view. `MatchLine`
+used UTC, so `/find` stamped a message at 22:55 while the transcript above it said 23:55.
+
+The room's shared directory is created only after `groups.create` accepts the id. Creating it
+for the requested slug first left an empty `.rooms/<requested-id>` behind whenever the gateway
+answered 4110 (tombstoned id) and the client retried under a minted one.
+
 ## Cost and usage
 
 Member usage arrives inline on `message.complete.payload.usage` in the chat; in rooms the

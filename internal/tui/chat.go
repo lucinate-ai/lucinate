@@ -171,6 +171,7 @@ type chatModel struct {
 	height             int
 	renderer           *glamour.TermRenderer
 	stats              *sessionStats
+	statsRequested     bool // /stats is waiting for a loadStats result to report (success or a real failure)
 	modelID            string
 	promptTokens       int // input + cache read + cache write for the latest turn (a per-session snapshot, not cumulative); 0 until first sessions.list refresh
 	contextWindow      int // model context capacity for the active session; 0 when unknown
@@ -870,6 +871,27 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	case statsLoadedMsg:
 		if msg.err == nil && msg.stats != nil {
 			m.stats = msg.stats
+		}
+		// A /stats typed by the user must always end in an answer, never in
+		// a placeholder: report the table, the error, or (for a backend that
+		// answered with nothing) that stats are unavailable here.
+		if m.statsRequested {
+			m.statsRequested = false
+			switch {
+			case msg.err != nil:
+				m.appendMessage(chatMessage{
+					role:   "system",
+					errMsg: fmt.Sprintf("Stats unavailable: %v", msg.err),
+				})
+			case msg.stats == nil:
+				m.appendMessage(chatMessage{
+					role:   "system",
+					errMsg: "/stats is not available on this connection",
+				})
+			default:
+				m.appendMessage(chatMessage{role: "system", content: m.formatStatsTable()})
+			}
+			m.updateViewport()
 		}
 		return m, nil
 

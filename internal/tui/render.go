@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/olekukonko/tablewriter"
 )
 
@@ -235,38 +236,92 @@ func formatTokensShort(n int) string {
 	}
 }
 
-// wordWrap wraps text to the given width, preserving existing newlines.
-// Lines that contain box-drawing characters (table output) are passed through
-// unchanged to preserve column alignment.
+// wordWrap wraps text to the given display width, preserving existing
+// newlines. Lines that contain box-drawing characters (table output) are
+// passed through unchanged to preserve column alignment. A single token
+// wider than the width is hard-broken at the boundary — a long absolute
+// path must not be cut off by the terminal. All measurement is in display
+// columns, so em dashes, Polish diacritics, and wide runes wrap where they
+// actually end on screen. The input is ANSI-free at this point.
 func wordWrap(s string, width int) string {
-	if width <= 0 || len(s) <= width {
+	if width <= 0 {
 		return s
 	}
-	var b strings.Builder
+	var out []string
 	for _, line := range strings.Split(s, "\n") {
-		if len(line) <= width || isTableLine(line) {
-			if b.Len() > 0 {
-				b.WriteString("\n")
-			}
-			b.WriteString(line)
+		if displayWidth(line) <= width || isTableLine(line) {
+			out = append(out, line)
 			continue
 		}
 		words := strings.Fields(line)
-		lineLen := 0
-		for i, w := range words {
-			if i > 0 && lineLen+1+len(w) > width {
-				b.WriteString("\n")
-				lineLen = 0
-			} else if i > 0 {
-				b.WriteString(" ")
-				lineLen++
-			}
-			b.WriteString(w)
-			lineLen += len(w)
+		if len(words) == 0 {
+			out = append(out, line)
+			continue
 		}
-		b.WriteString("\n")
+		var cur strings.Builder
+		curWidth := 0
+		flush := func() {
+			if curWidth > 0 || cur.Len() > 0 {
+				out = append(out, cur.String())
+				cur.Reset()
+				curWidth = 0
+			}
+		}
+		for _, w := range words {
+			ww := displayWidth(w)
+			if curWidth > 0 && curWidth+1+ww <= width {
+				cur.WriteByte(' ')
+				cur.WriteString(w)
+				curWidth += 1 + ww
+				continue
+			}
+			if curWidth > 0 {
+				flush()
+			}
+			if ww <= width {
+				cur.WriteString(w)
+				curWidth = ww
+				continue
+			}
+			parts := hardWrapToken(w, width)
+			out = append(out, parts[:len(parts)-1]...)
+			cur.WriteString(parts[len(parts)-1])
+			curWidth = displayWidth(parts[len(parts)-1])
+		}
+		flush()
 	}
-	return b.String()
+	return strings.Join(out, "\n")
+}
+
+// hardWrapToken splits a single rune run that is wider than width into
+// chunks of at most width display columns. Concatenating the chunks yields
+// the token unchanged — no characters are inserted or dropped.
+func hardWrapToken(token string, width int) []string {
+	var parts []string
+	var cur strings.Builder
+	curWidth := 0
+	for _, r := range token {
+		rw := displayWidth(string(r))
+		if curWidth > 0 && curWidth+rw > width {
+			parts = append(parts, cur.String())
+			cur.Reset()
+			curWidth = 0
+		}
+		cur.WriteRune(r)
+		curWidth += rw
+	}
+	if cur.Len() > 0 {
+		parts = append(parts, cur.String())
+	}
+	if len(parts) == 0 {
+		parts = []string{token}
+	}
+	return parts
+}
+
+// displayWidth reports the terminal columns s occupies.
+func displayWidth(s string) int {
+	return ansi.StringWidth(s)
 }
 
 // renderErrorLine formats an error message as a single styled paragraph

@@ -217,6 +217,49 @@ func TestConnect_HandshakeAndAgentSnapshot(t *testing.T) {
 	}
 }
 
+// model.options on the live gateway sends provider models as plain
+// "provider/model" strings, not {id,name} objects. Decoding only the object
+// shape made /model fail with "cannot unmarshal string into Go struct";
+// both shapes must be accepted.
+func TestModelsList_AcceptsStringAndObjectModels(t *testing.T) {
+	g := newFakeGateway(t, "tok")
+	g.on("model.options", func(id uint64, _ json.RawMessage) {
+		g.respond(id, json.RawMessage(`{
+			"providers":[{
+				"slug":"nous","name":"Nous Portal","is_current":false,"is_user_defined":false,
+				"models":["anthropic/claude-fable-5.1","openai/gpt-6-astra"],
+				"total_models":461
+			},{
+				"slug":"legacy","name":"Legacy","models":[{"id":"legacy/model","name":"Legacy Model"}]
+			}],
+			"model":"deepseek/deepseek-v4.1-flash",
+			"provider":"commandcode"
+		}`))
+	})
+	b := newTestBackend(t, g, "tok")
+	connectBackend(t, b)
+
+	res, err := b.ModelsList(context.Background())
+	if err != nil {
+		t.Fatalf("ModelsList: %v", err)
+	}
+	got := map[string]string{}
+	for _, m := range res.Models {
+		got[m.ID] = m.Name
+	}
+	for _, id := range []string{"deepseek/deepseek-v4.1-flash", "anthropic/claude-fable-5.1", "openai/gpt-6-astra", "legacy/model"} {
+		if _, ok := got[id]; !ok {
+			t.Errorf("model %q missing from %v", id, res.Models)
+		}
+	}
+	if got["legacy/model"] != "Legacy Model" {
+		t.Errorf("object-shaped entry name = %q, want Legacy Model", got["legacy/model"])
+	}
+	if got["anthropic/claude-fable-5.1"] != "anthropic/claude-fable-5.1" {
+		t.Errorf("string-shaped entry name = %q, want the id", got["anthropic/claude-fable-5.1"])
+	}
+}
+
 // A rejected upgrade (bad token → HTTP 403) maps to the canonical
 // api-key-required error so the connecting view opens the token modal.
 func TestConnect_BadTokenRoutesToAuthModal(t *testing.T) {
@@ -284,10 +327,10 @@ func TestSessions_CreateAndList(t *testing.T) {
 	}
 	var list struct {
 		Sessions []struct {
-			Key         string `json:"key"`
-			Title       string `json:"title"`
-			LastMessage string `json:"lastMessage"`
-			UpdatedAt   int64  `json:"updatedAt"`
+			Key                string `json:"key"`
+			DerivedTitle       string `json:"derivedTitle"`
+			LastMessagePreview string `json:"lastMessagePreview"`
+			UpdatedAt          int64  `json:"updatedAt"`
 		} `json:"sessions"`
 	}
 	if err := json.Unmarshal(raw, &list); err != nil {
@@ -297,7 +340,7 @@ func TestSessions_CreateAndList(t *testing.T) {
 		t.Fatalf("sessions = %+v", list.Sessions)
 	}
 	s := list.Sessions[0]
-	if s.Key != "20260719_000000_stored" || s.Title != "Greetings" || s.LastMessage != "hello" || s.UpdatedAt == 0 {
+	if s.Key != "20260719_000000_stored" || s.DerivedTitle != "Greetings" || s.LastMessagePreview != "hello" || s.UpdatedAt == 0 {
 		t.Fatalf("mapped entry = %+v", s)
 	}
 }

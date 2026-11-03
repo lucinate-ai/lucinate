@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -47,6 +48,42 @@ func TestRoomsCreate_SameRosterAfterADisbandStartsANewRoom(t *testing.T) {
 			t.Errorf("roster member %q did not make it into the new room", handle)
 		}
 	}
+}
+
+// A retried create must not leave the requested id's directory behind. The
+// live repro was an empty .rooms/budy-default next to the real room
+// budy-default-235443: the directory was created before groups.create
+// answered 4110 and the client retried under a minted id.
+func TestRoomsCreate_RetriedIDLeavesNoOrphanDirectory(t *testing.T) {
+	s := tg.New(t, tg.DefaultOptions())
+	requested := rooms.Slug(rooms.DisplayNameFor([]string{"kowal", "matt"}))
+	s.SetRoomIDConflict("room_id belongs to a disbanded room", requested)
+
+	base, err := rooms.RoomsBase()
+	if err != nil {
+		t.Fatalf("RoomsBase: %v", err)
+	}
+	requestedDir := rooms.RoomDir(base, requested)
+	// A directory from an earlier run would mask the regression.
+	if err := os.RemoveAll(requestedDir); err != nil {
+		t.Fatalf("clean %s: %v", requestedDir, err)
+	}
+
+	m := w1GatewayModel(t, s)
+	m.sub = roomsInvite
+	m.selected = map[string]bool{"matt": true, "kowal": true}
+
+	m = feedCmd(t, m, m.createRoom())
+	if m.err != nil {
+		t.Fatalf("create with a tombstoned slug: %v", m.err)
+	}
+	if m.openRoomID == requested {
+		t.Fatalf("open room = %q, want a minted id", m.openRoomID)
+	}
+	if _, err := os.Stat(requestedDir); !os.IsNotExist(err) {
+		t.Errorf("retried create left an orphan directory behind: %s", requestedDir)
+	}
+	requireRoomDir(t, m.openRoomID)
 }
 
 func TestRoomsCreateFromPreset_MintedIDRepointsThePreset(t *testing.T) {

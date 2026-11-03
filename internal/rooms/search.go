@@ -121,14 +121,15 @@ func snippet(text string, pos int) string {
 }
 
 // MatchLine renders a Match as a single UI line: "HH:MM:SS @handle: snippet".
-// The time comes from CreatedAt (unix seconds); a zero timestamp yields
-// ???:??:?? so events without a meaningful wall clock still format cleanly.
+// The time comes from CreatedAt (unix seconds) and is formatted in local time,
+// exactly like the transcript; a zero timestamp yields ???:??:?? so events
+// without a meaningful wall clock still format cleanly.
 func MatchLine(m Match) string {
 	var ts string
 	if m.CreatedAt == 0 {
 		ts = "???:??:??"
 	} else {
-		ts = time.Unix(int64(m.CreatedAt), 0).UTC().Format("15:04:05")
+		ts = time.Unix(int64(m.CreatedAt), 0).Format("15:04:05")
 	}
 	return fmt.Sprintf("%s @%s: %s", ts, m.Speaker, m.Snippet)
 }

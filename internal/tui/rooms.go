@@ -104,6 +104,37 @@ type roomsLogMsg struct {
 	client *rooms.Client
 }
 
+// newRoomEvents returns the events in incoming that the transcript does not
+// already hold. Log polls and reconnect replays overlap, so the same event
+// (same event id; same seq/kind/text for older payloads without one) must
+// never be appended twice.
+func newRoomEvents(existing, incoming []rooms.Event) []rooms.Event {
+	if len(incoming) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(existing))
+	for _, ev := range existing {
+		seen[roomEventKey(ev)] = true
+	}
+	var fresh []rooms.Event
+	for _, ev := range incoming {
+		key := roomEventKey(ev)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		fresh = append(fresh, ev)
+	}
+	return fresh
+}
+
+func roomEventKey(ev rooms.Event) string {
+	if ev.EventID != "" {
+		return "id:" + ev.EventID
+	}
+	return fmt.Sprintf("seq:%d|%s|%s", ev.Seq, ev.Kind, ev.Text())
+}
+
 type roomsSentMsg struct {
 	err error
 	// seq and text describe what actually reached the gateway: seq lets a
@@ -256,6 +287,16 @@ func (m *roomsModel) setSize(w, h int) {
 	m.width, m.height = w, h
 }
 
+// viewWrapWidth is the column budget for hint and explanatory lines: one
+// column short of the terminal so a full row never runs into the edge.
+func (m roomsModel) viewWrapWidth() int {
+	w := m.width - 1
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
 func (m roomsModel) Init() tea.Cmd {
 	return tea.Batch(m.loadAll(), m.loadProfiles(), m.loadPrefs())
 }
@@ -367,11 +408,12 @@ func (m roomsModel) createRoom() tea.Cmd {
 		}
 		// A room starts with its shared directory on disk: every member's
 		// handoffs land there, so it has to exist before the first turn
-		// (and its path is what the first message hands out).
+		// (and its path is what the first message hands out). It is
+		// created only for the id the gateway actually accepted — creating
+		// it for the requested slug before the call leaves an empty
+		// .rooms/<requested-id> behind whenever the id is rejected and
+		// retried under a minted one.
 		roomID := rooms.Slug(name)
-		if _, err := rooms.EnsureDefaultRoomDir(roomID); err != nil {
-			return roomsCreatedMsg{err: err}
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		c, err := rooms.DialBaseURL(ctx, conn.URL, token)
@@ -383,13 +425,8 @@ func (m roomsModel) createRoom() tea.Cmd {
 		if err != nil {
 			return roomsCreatedMsg{err: err}
 		}
-		// When groups.create mints a new id — the slug was tombstoned or
-		// taken — the directory that matters is the one under the id the
-		// room actually got, and it has to exist before any message names it.
-		if room.RoomID != roomID {
-			if _, err := rooms.EnsureDefaultRoomDir(room.RoomID); err != nil {
-				return roomsCreatedMsg{err: err}
-			}
+		if _, err := rooms.EnsureDefaultRoomDir(room.RoomID); err != nil {
+			return roomsCreatedMsg{err: err}
 		}
 		return roomsCreatedMsg{roomID: room.RoomID, room: room}
 	}
@@ -398,11 +435,9 @@ func (m roomsModel) createRoom() tea.Cmd {
 func (m roomsModel) createFromPreset(p rooms.Preset) tea.Cmd {
 	conn, token := m.conn, m.token
 	return func() tea.Msg {
-		// Same rule as seating a room: the directory exists before the
-		// gateway hears about the room, under the project the preset names.
-		if _, err := rooms.OrientationFromWorktree(p.Worktree).WithRoomDir(p.RoomID); err != nil {
-			return roomsCreatedMsg{err: err}
-		}
+		// The room directory is created once the gateway has accepted the
+		// id: creating it for the preset's id first leaves an orphan when
+		// that id is tombstoned and Create mints a replacement.
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		c, err := rooms.DialBaseURL(ctx, conn.URL, token)
@@ -414,15 +449,15 @@ func (m roomsModel) createFromPreset(p rooms.Preset) tea.Cmd {
 		if err != nil {
 			return roomsCreatedMsg{err: err}
 		}
+		if _, err := rooms.OrientationFromWorktree(p.Worktree).WithRoomDir(room.RoomID); err != nil {
+			return roomsCreatedMsg{err: err}
+		}
 		notice := ""
 		if room.RoomID != p.RoomID {
 			// The id this preset named was refused (tombstoned, or held by
 			// another room), so the room it started lives under a minted id.
-			// Its directory is created now, and the preset follows it —
-			// otherwise the next start would mint yet another room.
-			if _, err := rooms.OrientationFromWorktree(p.Worktree).WithRoomDir(room.RoomID); err != nil {
-				return roomsCreatedMsg{err: err}
-			}
+			// The preset follows it — otherwise the next start would mint
+			// yet another room.
 			path, pathErr := rooms.DefaultPresetsPath()
 			if pathErr == nil {
 				if changed, err := rooms.UpdatePresetRoomID(path, p.Name, room.RoomID); err != nil {
@@ -699,15 +734,19 @@ func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
 		// the reconnect's own history replay does not (see AfterSeq).
 		m.clearResumedInterruptions(msg.page.Events)
 		if len(msg.page.Events) > 0 {
+			// A poll/reconnect can replay events already on screen. Only
+			// genuinely new events may advance the scroll offset or enter
+			// the transcript — otherwise /find reports every match twice.
+			fresh := newRoomEvents(m.page.Events, msg.page.Events)
 			if m.scroll > 0 {
 				// The user is reading history. New arrivals must not push
 				// the text they are looking at down the screen, so advance
 				// the offset by exactly what was appended.
-				for _, ev := range msg.page.Events {
+				for _, ev := range fresh {
 					m.scroll += len(strings.Split(formatRoomsEvent(ev), "\n"))
 				}
 			}
-			m.page.Events = append(m.page.Events, msg.page.Events...)
+			m.page.Events = append(m.page.Events, fresh...)
 			m.since = msg.page.Cursor
 		}
 		// Progress = the room's newest seq moved. Polling returns the same
@@ -1396,7 +1435,7 @@ func (m roomsModel) View() string {
 		b.WriteString("\n" + navConfirmStyle.Render(
 			fmt.Sprintf("disband %s permanently? its history is tombstoned. y/n", m.confirmDisband)))
 	}
-	b.WriteString("\n\n" + helpStyle.Render(m.hint()))
+	b.WriteString("\n\n" + helpStyle.Render(wordWrap(m.hint(), m.viewWrapWidth())))
 	return b.String()
 }
 
@@ -1448,9 +1487,9 @@ func (m roomsModel) viewBrowse() string {
 func (m roomsModel) viewInvite() string {
 	var b strings.Builder
 	b.WriteString(assistantPrefixStyle.Render("Invite profiles to a new room") + "\n")
-	b.WriteString(statusStyle.Render(fmt.Sprintf(
+	b.WriteString(statusStyle.Render(wordWrap(fmt.Sprintf(
 		"seat %d-%d local Hermes profiles. The roster is frozen once the room exists — to change members, seat a new room.",
-		rooms.MinMembers, rooms.MaxMembers)) + "\n\n")
+		rooms.MinMembers, rooms.MaxMembers), m.viewWrapWidth())) + "\n\n")
 	if len(m.profiles) == 0 {
 		return b.String() + statusStyle.Render("discovering local profiles…")
 	}
@@ -1584,6 +1623,11 @@ func (m roomsModel) transcriptRows() int {
 		h = 24
 	}
 	chrome := 10
+	// The hint is wrapped to the view width, so a narrow terminal needs
+	// more rows for it than the single-line budget assumed.
+	if n := len(strings.Split(wordWrap(m.hint(), m.viewWrapWidth()), "\n")); n > 1 {
+		chrome += n - 1
+	}
 	if m.err != nil {
 		chrome += 2
 	}

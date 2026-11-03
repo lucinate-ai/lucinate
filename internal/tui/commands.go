@@ -82,6 +82,9 @@ const helpBody = `/quit, /exit — quit lucinate
 /mouse on|off — mouse capture (on, the default: wheel scrolls history, drag selects & copies; off: native terminal selection)
 /record on|off — toggle live transcript capture for this session (bare /record shows state)
 /reset — delete session and start fresh
+/routines — manage saved routines
+/routine <name> — start a named routine
+/rooms — browse and open Hermes rooms
 /sessions — browse and restore previous sessions
 /stats — show session statistics
 /status — show backend, endpoint, auth, versions, and local session stats
@@ -367,8 +370,20 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 		m.updateViewport()
 		return true, nil
 	case "/stats":
+		// /stats is served from UsageBackend. A backend without it (the
+		// Hermes gateway reports usage per room turn, not per session)
+		// says so once instead of printing "loading" forever.
+		if _, ok := m.backend.(backend.UsageBackend); !ok {
+			m.appendMessage(chatMessage{
+				role:   "system",
+				errMsg: "/stats is not available on this connection",
+			})
+			m.updateViewport()
+			return true, nil
+		}
 		if m.stats == nil {
-			m.appendMessage(chatMessage{role: "system", content: "Stats not yet loaded..."})
+			m.statsRequested = true
+			m.appendMessage(chatMessage{role: "system", content: "Loading session stats…"})
 			m.updateViewport()
 			return true, m.loadStats()
 		}

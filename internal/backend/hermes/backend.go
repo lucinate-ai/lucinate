@@ -558,10 +558,10 @@ func (b *Backend) SessionsList(ctx context.Context, agentID string) (json.RawMes
 			title = s.ID
 		}
 		out.Sessions = append(out.Sessions, map[string]any{
-			"key":         sessionKeyFor(profile, s.ID),
-			"title":       title,
-			"lastMessage": s.Preview,
-			"updatedAt":   int64(s.StartedAt * 1000),
+			"key":                sessionKeyFor(profile, s.ID),
+			"derivedTitle":       title,
+			"lastMessagePreview": s.Preview,
+			"updatedAt":          int64(s.StartedAt * 1000),
 		})
 	}
 	return json.Marshal(out)
@@ -881,8 +881,11 @@ func splitSessionKey(key string) (profile, stored string) {
 }
 
 // ModelsList reports what the gateway exposes via model.options. The
-// payload is provider-centric; the reliably present datum is the
-// active model, so that is what the picker gets.
+// payload is provider-centric: a provider's models arrive either as plain
+// "provider/model" strings (the live Hermes gateway) or as {id,name}
+// objects (older gateways). Both shapes are accepted so the picker works
+// against either. The active model is also taken from the top-level
+// "model" field.
 func (b *Backend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, error) {
 	cli, err := b.client()
 	if err != nil {
@@ -891,10 +894,7 @@ func (b *Backend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, e
 	var res struct {
 		Model     string `json:"model"`
 		Providers []struct {
-			Models []struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"models"`
+			Models []json.RawMessage `json:"models"`
 		} `json:"providers"`
 	}
 	if err := cli.Call(ctx, "model.options", nil, &res); err != nil {
@@ -907,19 +907,37 @@ func (b *Backend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, e
 		seen[res.Model] = true
 	}
 	for _, p := range res.Providers {
-		for _, m := range p.Models {
-			if m.ID == "" || seen[m.ID] {
+		for _, raw := range p.Models {
+			id, name := decodeModelOption(raw)
+			if id == "" || seen[id] {
 				continue
 			}
-			seen[m.ID] = true
-			name := m.Name
+			seen[id] = true
 			if name == "" {
-				name = m.ID
+				name = id
 			}
-			out.Models = append(out.Models, protocol.ModelChoice{ID: m.ID, Name: name})
+			out.Models = append(out.Models, protocol.ModelChoice{ID: id, Name: name})
 		}
 	}
 	return out, nil
+}
+
+// decodeModelOption reads one provider model entry. The gateway sends a
+// bare string; older payloads send {"id","name"}. An unrecognised entry
+// yields empty strings and is skipped by the caller.
+func decodeModelOption(raw json.RawMessage) (id, name string) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, s
+	}
+	var obj struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return "", ""
+	}
+	return obj.ID, obj.Name
 }
 
 // SessionPatchModel switches the session model through the gateway's own
