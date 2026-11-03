@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -244,9 +245,31 @@ func pickerWithModels(t *testing.T, f *fakeBackend, models []protocol.ModelChoic
 	t.Helper()
 	p := newModelPickerModel(f, "sess-1", "", false, nil, false)
 	p.setSize(80, 24)
+	// No manual SetFilterText here: production must populate the visible
+	// set itself, otherwise /model opens to an empty body.
 	p, _ = p.Update(modelsLoadedMsg{models: models})
-	p.list.SetFilterText("")
 	return p
+}
+
+// Opening /model must show models immediately: bubbles builds the visible
+// set from the filter, and an empty filter that is never applied left the
+// body blank (only pagination dots) until the user typed a character.
+func TestModelPickerRendersRowsOnOpen(t *testing.T) {
+	models := make([]protocol.ModelChoice, 0, 40)
+	for i := 0; i < 40; i++ {
+		models = append(models, protocol.ModelChoice{
+			ID:   fmt.Sprintf("provider/model-%d", i),
+			Name: fmt.Sprintf("model-%d", i),
+		})
+	}
+	p := pickerWithModels(t, newFakeBackend(), models)
+	got := p.View()
+	if !strings.Contains(got, "model-0") || !strings.Contains(got, "provider/model-0") {
+		t.Fatalf("model picker opened without rows:\n%s", got)
+	}
+	if !strings.Contains(got, "model-1") {
+		t.Errorf("expected more than one row on open:\n%s", got)
+	}
 }
 
 // collect runs a command the way bubbletea would, flattening batches so a

@@ -17,11 +17,12 @@ import (
 func newSlashTestModel() *chatModel {
 	vp := viewport.New()
 	return &chatModel{
-		viewport:  vp,
-		backend:   newFakeBackend(),
-		agentName: "test",
-		width:     80,
-		height:    30,
+		viewport:   vp,
+		backend:    newFakeBackend(),
+		agentName:  "test",
+		sessionKey: "default::20260101_000000_test",
+		width:      80,
+		height:     30,
 		messages: []chatMessage{
 			{role: "user", content: "hello"},
 			{role: "assistant", content: "hi there"},
@@ -360,6 +361,25 @@ func TestSlashCommand_Stats_LoadsAndReports(t *testing.T) {
 	last := next.messages[len(next.messages)-1]
 	if last.role != "system" || !strings.Contains(last.content, "Input") || !strings.Contains(last.content, "Total") {
 		t.Fatalf("expected the stats table, got: %+v", last)
+	}
+}
+
+// /stats must send the chat's own session key: the backend resolves the
+// live handle from it, and an empty key made the gateway answer
+// "session_id required" on every call.
+func TestSlashCommand_Stats_SendsTheSessionKey(t *testing.T) {
+	m := newSlashTestModel()
+	m.sessionKey = "default::20261104_000647_948b23"
+	m.backend.(*fakeBackend).usageRaw = json.RawMessage(`{"totals":{"input":1,"output":2},"aggregates":{"messages":{"total":1}}}`)
+
+	handled, cmd := m.handleSlashCommand("/stats")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /stats to arm a load (handled=%v cmd=%v)", handled, cmd)
+	}
+	next, _ := m.Update(cmd())
+	keys := next.backend.(*fakeBackend).usageKeys
+	if len(keys) != 1 || keys[0] != m.sessionKey {
+		t.Fatalf("SessionUsage keys = %v, want [%q]", keys, m.sessionKey)
 	}
 }
 

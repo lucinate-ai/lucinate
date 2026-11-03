@@ -212,6 +212,13 @@ func (m modelPickerModel) Update(msg tea.Msg) (modelPickerModel, tea.Cmd) {
 			items[i] = modelItem{model: mc}
 		}
 		m.list.SetItems(items)
+		// bubbles builds the visible set from the *filter*, not from the
+		// item list: SetFilterState alone only flips the mode, so the
+		// picker rendered an empty body (just the pagination dots) until
+		// the user typed a character. Apply the empty query first — that
+		// populates filteredItems and resets the cursor — and pre-select
+		// the active model afterwards so the reset doesn't undo it.
+		m.list.SetFilterText("")
 		// Pre-select the active model so Enter on an empty filter
 		// picks "the one you already have" rather than a surprising
 		// jump to the top of the list. The row is also marked

@@ -661,8 +661,15 @@ func (m chatModel) loadStats() tea.Cmd {
 		// load; the chat view falls back to the placeholder.
 		return func() tea.Msg { return statsLoadedMsg{} }
 	}
+	// The session key must travel with the request: it is the only way
+	// the backend can resolve a live handle, and sending "" had the
+	// gateway answer "session_id required" on every /stats.
+	key := m.sessionKey
+	if strings.TrimSpace(key) == "" {
+		return func() tea.Msg { return statsLoadedMsg{err: fmt.Errorf("no active session yet")} }
+	}
 	return func() tea.Msg {
-		raw, err := usage.SessionUsage(context.Background(), "")
+		raw, err := usage.SessionUsage(context.Background(), key)
 		if err != nil {
 			return statsLoadedMsg{err: err}
 		}
