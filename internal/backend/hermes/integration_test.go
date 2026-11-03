@@ -105,15 +105,25 @@ func waitLiveChatEvent(t *testing.T, b *Backend, timeout time.Duration, states .
 	}
 }
 
-// Connect performs the WS handshake and exposes the synthetic agent.
+// Connect performs the WS handshake and exposes the gateway's profiles. A
+// multiplexed gateway reports its profile roster; an older one reports the
+// single synthetic agent, so the assertion is "at least one, with an id".
 func TestIntegration_ConnectAndAgents(t *testing.T) {
 	b := liveBackend(t)
 	agents, err := b.ListAgents(context.Background())
 	if err != nil {
 		t.Fatalf("ListAgents: %v", err)
 	}
-	if len(agents.Agents) != 1 || agents.Agents[0].ID != syntheticAgentID {
-		t.Fatalf("agents = %+v", agents.Agents)
+	if len(agents.Agents) == 0 {
+		t.Fatal("ListAgents returned no agents")
+	}
+	for _, a := range agents.Agents {
+		if a.ID == "" {
+			t.Errorf("agent without an id: %+v", a)
+		}
+	}
+	if agents.DefaultID == "" || agents.MainKey == "" {
+		t.Errorf("DefaultID/MainKey = %q/%q, want a default agent", agents.DefaultID, agents.MainKey)
 	}
 }
 

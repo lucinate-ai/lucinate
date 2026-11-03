@@ -102,6 +102,12 @@ type Server struct {
 	sessions map[string]string
 
 	memberModelCalls []string
+
+	// v2 live state: who is answering, and what the room is waiting on.
+	active       map[string]bool
+	pending      map[string]map[string]any
+	approveCalls []string
+	retryCalls   []string
 }
 
 // New starts a fake gateway with the default two-member room ("sztab":
@@ -115,6 +121,8 @@ func New(t *testing.T, _ Options) *Server {
 		rooms:            make(map[string]*roomState),
 		sessions:         make(map[string]string),
 		conflicts:        make(map[string]string),
+		active:           make(map[string]bool),
+		pending:          make(map[string]map[string]any),
 		catalogueModel:   "gpt-5",
 		catalogueOptions: []string{"gpt-5", "gpt-5-mini", "claude-sonnet-4"},
 	}
@@ -304,6 +312,67 @@ func (s *Server) MemberModelCalls() []string {
 	return append([]string(nil), s.memberModelCalls...)
 }
 
+// SetMemberActivity marks the named handles as answering right now. The
+// durable room log never carries text deltas on the real gateway, so this is
+// the only live signal a client renders.
+func (s *Server) SetMemberActivity(handles ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active = make(map[string]bool, len(handles))
+	for _, h := range handles {
+		s.active[h] = true
+	}
+	s.working = len(handles) > 0
+}
+
+// SetPendingApproval stages one approval request for a handle, with the exact
+// coordinates groups.approve fences on.
+func (s *Server) SetPendingApproval(handle, requestID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending[handle] = map[string]any{
+		"kind": "approval", "member_id": s.memberIDLocked(handle),
+		"task_id": "task-" + handle, "execution_generation": 1,
+		"request_id": requestID, "approval": map[string]any{"choices": []string{"once", "deny"}},
+	}
+}
+
+// SetPendingRetry stages one indeterminate task the user may retry.
+func (s *Server) SetPendingRetry(handle string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending[handle] = map[string]any{
+		"kind": "retry", "member_id": s.memberIDLocked(handle),
+		"task_id": "task-" + handle, "execution_generation": 1,
+	}
+}
+
+// ApproveCalls returns every applied approval as "handle=choice".
+func (s *Server) ApproveCalls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.approveCalls...)
+}
+
+// RetryCalls returns every retried task as "handle".
+func (s *Server) RetryCalls() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.retryCalls...)
+}
+
+// memberIDLocked resolves a handle to the roster member id.
+func (s *Server) memberIDLocked(handle string) string {
+	for _, id := range s.order {
+		for _, m := range s.rooms[id].members {
+			if m.Handle == handle {
+				return m.MemberID
+			}
+		}
+	}
+	return ""
+}
+
 // CloseConns drops every live socket, which is what a gateway restart looks
 // like from the client side. It returns how many sockets were dropped.
 func (s *Server) CloseConns() int {
@@ -361,18 +430,24 @@ func (s *Server) handle(method string, params json.RawMessage) (any, *rpcErrJSON
 	switch method {
 	case "groups.capabilities":
 		methods := []string{"groups.log", "groups.send", "groups.state", "groups.create",
-			"groups.list", "groups.rename", "groups.stop", "groups.disband",
+			"groups.list", "groups.rename", "groups.stop", "groups.disband", "groups.approve",
+			"groups.retry", "groups.replicate", "groups.replica_state", "groups.promote",
+			"groups.demote", "groups.peer.invite", "groups.peer.revoke", "groups.peer.register",
 			"groups.capabilities", "model.options"}
 		if s.memberModelSupported {
 			methods = append(methods, "groups.member_model")
 		}
 		return map[string]any{
-			"protocol_version": 1, "driver": true, "persistent_process": true,
+			"protocol_version": 2, "driver": true, "persistent_process": true,
 			"authority_gateway_id": "fake",
-			"room_link":            map[string]any{"enabled": false},
-			"features":             []string{"log", "streaming"},
-			"methods":              methods,
-			"max_log_limit":        500,
+			"room_link":            map[string]any{"enabled": true, "profile": "default"},
+			"features": []string{
+				"authority_epoch", "coordinator_fencing", "room_identity", "monotonic_log",
+				"idempotent_send", "replayable_disband", "typed_events", "actor_identity",
+				"log_replication", "authority_takeover",
+			},
+			"methods":       methods,
+			"max_log_limit": 500,
 		}, nil, true
 	case "groups.list":
 		rooms := []any{}
@@ -414,8 +489,22 @@ func (s *Server) handle(method string, params json.RawMessage) (any, *rpcErrJSON
 		if r == nil {
 			r = s.rooms["sztab"]
 		}
+		activity := []any{}
+		for _, id := range s.order {
+			for _, m := range s.rooms[id].members {
+				if s.active[m.Handle] {
+					activity = append(activity, map[string]any{"member_id": m.MemberID, "status": "running"})
+				}
+			}
+		}
+		actions := []any{}
+		for _, a := range s.pending {
+			actions = append(actions, a)
+		}
 		return map[string]any{"room": s.roomJSON(r), "driver_status": map[string]any{
-			"running": true, "working": s.working, "blocked": false, "counts": map[string]any{},
+			"running": true, "working": s.working || len(activity) > 0, "blocked": len(actions) > 0,
+			"counts": map[string]any{}, "member_activity": activity,
+			"pending_actions": actions, "peer_routes": []any{},
 		}}, nil, true
 	case "groups.send":
 		var p struct {
@@ -499,6 +588,61 @@ func (s *Server) handle(method string, params json.RawMessage) (any, *rpcErrJSON
 			r.disbanded = true
 		}
 		return map[string]any{"tombstone": map[string]any{"room_id": p.RoomID}}, nil, true
+	case "groups.approve":
+		var p struct {
+			RoomID              string `json:"room_id"`
+			MemberID            string `json:"member_id"`
+			TaskID              string `json:"task_id"`
+			ExecutionGeneration int    `json:"execution_generation"`
+			RequestID           string `json:"request_id"`
+			Choice              string `json:"choice"`
+		}
+		_ = json.Unmarshal(params, &p)
+		var handle string
+		var action map[string]any
+		for h, a := range s.pending {
+			if a["member_id"] == p.MemberID {
+				handle, action = h, a
+				break
+			}
+		}
+		if action == nil || action["kind"] != "approval" {
+			return nil, &rpcErrJSON{Code: 5119, Message: "room approval is no longer pending"}, true
+		}
+		if action["task_id"] != p.TaskID || action["request_id"] != p.RequestID ||
+			int(action["execution_generation"].(int)) != p.ExecutionGeneration {
+			return nil, &rpcErrJSON{Code: 5119, Message: "room approval is no longer pending"}, true
+		}
+		if p.Choice != "once" && p.Choice != "deny" {
+			return nil, &rpcErrJSON{Code: 5119, Message: "room approval choice must be once or deny"}, true
+		}
+		delete(s.pending, handle)
+		s.approveCalls = append(s.approveCalls, handle+"="+p.Choice)
+		return map[string]any{"approved": true, "result": map[string]any{"choice": p.Choice}}, nil, true
+	case "groups.retry":
+		var p struct {
+			RoomID              string `json:"room_id"`
+			MemberID            string `json:"member_id"`
+			TaskID              string `json:"task_id"`
+			ExecutionGeneration int    `json:"execution_generation"`
+		}
+		_ = json.Unmarshal(params, &p)
+		var handle string
+		for h, a := range s.pending {
+			if a["task_id"] == p.TaskID {
+				handle, _ = h, a
+				break
+			}
+		}
+		if handle == "" {
+			return nil, &rpcErrJSON{Code: 5118, Message: "room task is not retryable"}, true
+		}
+		delete(s.pending, handle)
+		s.retryCalls = append(s.retryCalls, handle)
+		return map[string]any{"retried": true, "task": map[string]any{
+			"room_id": p.RoomID, "task_id": p.TaskID, "status": "retried",
+			"execution_generation": p.ExecutionGeneration + 1,
+		}}, nil, true
 	case "model.options":
 		opts := s.catalogueOptions
 		if opts == nil {

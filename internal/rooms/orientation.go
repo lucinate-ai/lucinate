@@ -3,6 +3,7 @@ package rooms
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -81,18 +82,16 @@ func (o Orientation) Block() string {
 }
 
 // WithRoomDir returns a copy of the orientation carrying this room's shared
-// directory, creating it on disk: base is the project path when the
-// orientation has one, else RoomsBase(). The error is returned rather than
-// swallowed — a members' contract naming a directory that could not be
-// created is a broken contract, not a cosmetic loss.
+// directory, creating it on disk: base is the orientation's project path when
+// it names a directory on this host, else RoomsBase(). A project path that is
+// present but unusable (a file, an unreadable directory) is an error rather
+// than a silent fallback — the caller meant that base. The error is returned
+// rather than swallowed: a members' contract naming a directory that could not
+// be created is a broken contract, not a cosmetic loss.
 func (o Orientation) WithRoomDir(roomID string) (Orientation, error) {
-	base := strings.TrimSpace(o.Path)
-	if base == "" {
-		b, err := RoomsBase()
-		if err != nil {
-			return o, err
-		}
-		base = b
+	base, err := o.roomBase()
+	if err != nil {
+		return o, err
 	}
 	dir, err := EnsureRoomDir(base, roomID)
 	if err != nil {
@@ -100,6 +99,26 @@ func (o Orientation) WithRoomDir(roomID string) (Orientation, error) {
 	}
 	o.RoomDir = dir
 	return o, nil
+}
+
+// roomBase resolves the directory a room's shared folder lives under. A path
+// the Orca host produced for another platform is normalised first; one that
+// cannot be resolved here falls back to RoomsBase() rather than being used
+// verbatim (which is how a backslash path once became a directory name).
+func (o Orientation) roomBase() (string, error) {
+	if p := strings.TrimSpace(o.Path); p != "" {
+		if normalised := NormaliseProjectPath(p); normalised != "" {
+			abs, err := filepath.Abs(normalised)
+			if err != nil {
+				return "", fmt.Errorf("room base %s: %w", p, err)
+			}
+			if !isDir(abs) {
+				return "", fmt.Errorf("room base %s is not a directory", p)
+			}
+			return abs, nil
+		}
+	}
+	return RoomsBase()
 }
 
 // OrientationFromEnv derives the project context from the ORCA_* variables
@@ -114,7 +133,7 @@ func OrientationFromEnv() Orientation {
 	}
 	o := Orientation{Worktree: "id:" + raw}
 	if i := strings.LastIndex(raw, "::"); i >= 0 {
-		o.Path = raw[i+2:]
+		o.Path = NormaliseProjectPath(raw[i+2:])
 		o.Project = baseName(o.Path)
 	}
 	return o
@@ -132,10 +151,10 @@ func OrientationFromWorktree(selector string) Orientation {
 	switch {
 	case strings.HasPrefix(sel, "id:"):
 		if i := strings.LastIndex(sel, "::"); i >= 0 {
-			o.Path = sel[i+2:]
+			o.Path = NormaliseProjectPath(sel[i+2:])
 		}
 	case strings.HasPrefix(sel, "path:"):
-		o.Path = strings.TrimPrefix(sel, "path:")
+		o.Path = NormaliseProjectPath(strings.TrimPrefix(sel, "path:"))
 	}
 	if o.Path != "" {
 		o.Project = baseName(o.Path)

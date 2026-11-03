@@ -329,8 +329,18 @@ func (m *chatModel) handleSlashCommand(text string) (handled bool, cmd tea.Cmd) 
 			return showCronsMsg{filterAgentID: filterAgentID, filterLabel: filterLabel}
 		})
 	case "/rooms":
-		// Rooms are a gateway-level surface, not an agent one, so the
-		// view dials the gateway itself from the active connection.
+		// Rooms are a gateway-level surface hosted by Hermes, not an
+		// agent one: another backend has no groups.* endpoint, so say
+		// so rather than dialling <url>/api/ws and reporting a
+		// transport error.
+		if !m.backend.Capabilities().Rooms {
+			m.appendMessage(chatMessage{
+				role:   "system",
+				errMsg: "/rooms is not available on this connection — rooms need a Hermes gateway",
+			})
+			m.updateViewport()
+			return true, nil
+		}
 		return true, m.gateNavigation("Opening rooms", false, func() tea.Msg { return showRoomsMsg{} })
 	case "/sessions":
 		agentID := m.agentID

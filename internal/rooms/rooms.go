@@ -22,8 +22,10 @@ import (
 	"strings"
 )
 
-// Roster bounds, mirroring the gateway's own validation
-// (gateway/hosted_room_discussion.py: MIN/MAX_DISCUSSION_MEMBERS).
+// Roster bounds, mirroring the gateway's hosted-room discussion validation
+// (gateway/hosted_room_discussion.py: MIN/MAX_DISCUSSION_MEMBERS). The
+// persistence layer's MAX_MEMBERS = 128 is not the product rule: groups.create
+// refuses anything outside 2..6 with code 5111.
 const (
 	MinMembers = 2
 	MaxMembers = 6
@@ -157,8 +159,36 @@ type DriverStatus struct {
 	Working        bool             `json:"working"`
 	Blocked        bool             `json:"blocked"`
 	Counts         map[string]int   `json:"counts"`
-	PendingActions []map[string]any `json:"pending_actions"`
+	PendingActions []PendingAction  `json:"pending_actions"`
+	MemberActivity []MemberActivity `json:"member_activity"`
+	PeerRoutes     []map[string]any `json:"peer_routes,omitempty"`
 }
+
+// MemberActivity is one member's live task status, as groups.state reports it.
+// The hosted-room gateway never writes text deltas into the durable log (they
+// would exhaust its byte budget), so this is the only live signal a client can
+// render while a member is answering.
+type MemberActivity struct {
+	MemberID string `json:"member_id"`
+	Status   string `json:"status"`
+}
+
+// PendingAction is one thing the room is waiting on. An approval carries the
+// request/task coordinates groups.approve fences on; a retry carries the
+// coordinates groups.retry fences on.
+type PendingAction struct {
+	Kind                string         `json:"kind"`
+	MemberID            string         `json:"member_id"`
+	TaskID              string         `json:"task_id"`
+	ExecutionGeneration int            `json:"execution_generation"`
+	RequestID           string         `json:"request_id"`
+	SessionID           string         `json:"session_id"`
+	RunID               string         `json:"run_id"`
+	Approval            map[string]any `json:"approval,omitempty"`
+}
+
+// IsApproval reports whether this action needs a once/deny decision.
+func (a PendingAction) IsApproval() bool { return a.Kind == "approval" }
 
 // StateResult is one room plus its live driver status.
 type StateResult struct {

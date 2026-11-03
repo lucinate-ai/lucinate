@@ -20,6 +20,7 @@ behaviour, the spec is the source of truth to keep in sync; a doc here is update
 | [backend_hermes.md](backend_hermes.md) | [`specs/backend-hermes`](../openspec/specs/backend-hermes/spec.md) |
 | [agents.md](agents.md) | [`specs/agents`](../openspec/specs/agents/spec.md) |
 | [sessions.md](sessions.md) | [`specs/sessions`](../openspec/specs/sessions/spec.md) |
+| [rooms.md](rooms.md) | [`specs/rooms`](../openspec/specs/rooms/spec.md) |
 | [crons.md](crons.md) | [`specs/crons`](../openspec/specs/crons/spec.md) |
 | [routines.md](routines.md) | [`specs/routines`](../openspec/specs/routines/spec.md) |
 | [commands.md](commands.md) | [`specs/commands`](../openspec/specs/commands/spec.md) |

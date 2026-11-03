@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode"
 )
@@ -27,12 +28,12 @@ import (
 const RoomsDirName = ".rooms"
 
 // RoomsBase returns the root room directories are created under: the Orca
-// worktree named by ORCA_WORKTREE_ID when it carries a path, else the
-// process working directory. Both are absolute, so the path a member is
-// handed can be used verbatim.
+// worktree named by ORCA_WORKTREE_ID when it resolves to a directory on this
+// host, else the process working directory. Both are absolute, so the path a
+// member is handed can be used verbatim.
 func RoomsBase() (string, error) {
-	if p := strings.TrimSpace(OrientationFromEnv().Path); p != "" {
-		return filepath.Abs(p)
+	if p := LocalProjectPath(OrientationFromEnv().Path); p != "" {
+		return p, nil
 	}
 	wd, err := os.Getwd()
 	if err != nil {
@@ -86,6 +87,9 @@ func EnsureRoomDir(base, roomID string) (string, error) {
 	}
 	if strings.TrimSpace(roomID) == "" {
 		return "", fmt.Errorf("room directory: room id is required")
+	}
+	if runtime.GOOS != "windows" && strings.Contains(base, `\`) {
+		return "", fmt.Errorf("room directory: %q is not a local path", base)
 	}
 	dir := RoomDir(base, roomID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

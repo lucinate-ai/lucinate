@@ -50,6 +50,12 @@ func runRooms(ctx context.Context, args []string, stdout io.Writer) error {
 		return roomsLog(ctx, rest, out)
 	case "state":
 		return roomsState(ctx, rest, out)
+	case "approve":
+		return roomsApprove(ctx, rest, out)
+	case "retry":
+		return roomsRetry(ctx, rest, out)
+	case "rename":
+		return roomsRename(ctx, rest, out)
 	case "stop":
 		return roomsStop(ctx, rest, out)
 	case "disband":
@@ -677,11 +683,40 @@ func roomsState(ctx context.Context, args []string, out io.Writer) error {
 		state.Room.Revision, len(state.Room.Members))
 	if ds := state.DriverStatus; ds != nil {
 		fmt.Fprintf(out, "driver running=%t working=%t blocked=%t counts=%v\n", ds.Running, ds.Working, ds.Blocked, ds.Counts)
+		if active := activeHandles(state); len(active) > 0 {
+			fmt.Fprintf(out, "  active: %s\n", strings.Join(active, ", "))
+		}
 		for _, a := range ds.PendingActions {
-			fmt.Fprintf(out, "  pending: %v\n", a)
+			fmt.Fprintf(out, "  pending: %s @%s (task %s, generation %d)\n",
+				a.Kind, memberHandle(state, a.MemberID), a.TaskID, a.ExecutionGeneration)
 		}
 	}
 	return nil
+}
+
+// activeHandles names the members answering right now, resolved from the
+// gateway's member ids to the roster handles a user types. The durable log
+// carries no member deltas, so this is the only live "who is working" a
+// script can ask for.
+func activeHandles(state rooms.StateResult) []string {
+	if state.DriverStatus == nil {
+		return nil
+	}
+	out := make([]string, 0, len(state.DriverStatus.MemberActivity))
+	for _, a := range state.DriverStatus.MemberActivity {
+		out = append(out, "@"+memberHandle(state, a.MemberID))
+	}
+	return out
+}
+
+// memberHandle maps a gateway member id onto the roster handle.
+func memberHandle(state rooms.StateResult, memberID string) string {
+	for _, m := range state.Room.Members {
+		if m.MemberID == memberID {
+			return m.Handle
+		}
+	}
+	return memberID
 }
 
 // roomsStop cancels queued and running member turns for a room. It is
@@ -721,6 +756,193 @@ func roomsStop(ctx context.Context, args []string, out io.Writer) error {
 		return writeJSON(out, map[string]any{"room_id": rest[0], "cancelled": cancelled})
 	}
 	fmt.Fprintf(out, "cancelled %d turn(s) in %s\n", cancelled, rest[0])
+	return nil
+}
+
+// pendingApprovalFor picks one member's pending approval out of a room's live
+// state. The coordinates are read, never guessed: an unknown handle, no
+// pending action, more than one, or an action that is a retry rather than an
+// approval all fail here, before anything reaches the gateway.
+func pendingApprovalFor(state rooms.StateResult, handle string) (rooms.PendingAction, error) {
+	handle = strings.TrimPrefix(strings.TrimSpace(handle), "@")
+	if handle == "" {
+		return rooms.PendingAction{}, errors.New("which member? pass @handle")
+	}
+	if state.DriverStatus == nil {
+		return rooms.PendingAction{}, fmt.Errorf("room %s reported no driver status", state.Room.RoomID)
+	}
+	memberID := ""
+	for _, m := range state.Room.Members {
+		if strings.EqualFold(m.Handle, handle) {
+			memberID = m.MemberID
+			break
+		}
+	}
+	if memberID == "" {
+		return rooms.PendingAction{}, fmt.Errorf("room %s has no member @%s", state.Room.RoomID, handle)
+	}
+	var found []rooms.PendingAction
+	for _, a := range state.DriverStatus.PendingActions {
+		if a.MemberID == memberID {
+			found = append(found, a)
+		}
+	}
+	switch {
+	case len(found) == 0:
+		return rooms.PendingAction{}, fmt.Errorf("@%s has no pending action — nothing to approve", handle)
+	case len(found) > 1:
+		return rooms.PendingAction{}, fmt.Errorf("@%s has %d pending actions — resolve them in the Hermes dashboard", handle, len(found))
+	case !found[0].IsApproval():
+		return rooms.PendingAction{}, fmt.Errorf("@%s is waiting on a %s, not an approval — use `rooms retry`", handle, found[0].Kind)
+	}
+	return found[0], nil
+}
+
+// pendingRetry picks the room's retryable task, when the state offers one.
+func pendingRetry(state rooms.StateResult) (rooms.PendingAction, error) {
+	if state.DriverStatus == nil {
+		return rooms.PendingAction{}, fmt.Errorf("room %s reported no driver status", state.Room.RoomID)
+	}
+	for _, a := range state.DriverStatus.PendingActions {
+		if a.Kind == "retry" {
+			return a, nil
+		}
+	}
+	return rooms.PendingAction{}, fmt.Errorf("room %s reports no retryable task", state.Room.RoomID)
+}
+
+// roomsApprove resolves one member's blocking approval.
+func roomsApprove(ctx context.Context, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("rooms approve", flag.ContinueOnError)
+	fs.SetOutput(out)
+	var connection string
+	var asJSON bool
+	fs.StringVar(&connection, "connection", "", "saved Hermes connection name or ID")
+	fs.StringVar(&connection, "c", "", "short for --connection")
+	fs.BoolVar(&asJSON, "json", false, "print JSON")
+	fs.Usage = func() { printRoomsUsage(fs.Output()) }
+	if err := fs.Parse(reorderFlagsFirst(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return errUsage
+		}
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) < 3 {
+		fs.Usage()
+		return errors.New("rooms approve: usage: rooms approve <room-id> <@handle> once|deny")
+	}
+	roomID, handle, choice := rest[0], rest[1], strings.ToLower(rest[2])
+	if choice != "once" && choice != "deny" {
+		return fmt.Errorf("rooms approve: choice must be once or deny, got %q", choice)
+	}
+	client, _, err := roomsDial(ctx, connection)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	state, err := client.State(ctx, roomID)
+	if err != nil {
+		return err
+	}
+	action, err := pendingApprovalFor(state, handle)
+	if err != nil {
+		return err
+	}
+	if err := client.Approve(ctx, roomID, action, choice); err != nil {
+		return err
+	}
+	member := strings.TrimPrefix(handle, "@")
+	if asJSON {
+		return writeJSON(out, map[string]any{
+			"room_id": roomID, "member": member, "choice": choice,
+			"task_id": action.TaskID, "execution_generation": action.ExecutionGeneration,
+		})
+	}
+	fmt.Fprintf(out, "approved @%s (%s) in %s\n", member, choice, roomID)
+	return nil
+}
+
+// roomsRetry re-runs the room's indeterminate task.
+func roomsRetry(ctx context.Context, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("rooms retry", flag.ContinueOnError)
+	fs.SetOutput(out)
+	var connection string
+	var asJSON bool
+	fs.StringVar(&connection, "connection", "", "saved Hermes connection name or ID")
+	fs.StringVar(&connection, "c", "", "short for --connection")
+	fs.BoolVar(&asJSON, "json", false, "print JSON")
+	fs.Usage = func() { printRoomsUsage(fs.Output()) }
+	if err := fs.Parse(reorderFlagsFirst(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return errUsage
+		}
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		fs.Usage()
+		return errors.New("rooms retry: missing room id")
+	}
+	roomID := rest[0]
+	client, _, err := roomsDial(ctx, connection)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	state, err := client.State(ctx, roomID)
+	if err != nil {
+		return err
+	}
+	action, err := pendingRetry(state)
+	if err != nil {
+		return err
+	}
+	if err := client.Retry(ctx, roomID, action); err != nil {
+		return err
+	}
+	if asJSON {
+		return writeJSON(out, map[string]any{"room_id": roomID, "task_id": action.TaskID, "retried": true})
+	}
+	fmt.Fprintf(out, "retried %s in %s\n", action.TaskID, roomID)
+	return nil
+}
+
+// roomsRename renames a room.
+func roomsRename(ctx context.Context, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("rooms rename", flag.ContinueOnError)
+	fs.SetOutput(out)
+	var connection string
+	var asJSON bool
+	fs.StringVar(&connection, "connection", "", "saved Hermes connection name or ID")
+	fs.StringVar(&connection, "c", "", "short for --connection")
+	fs.BoolVar(&asJSON, "json", false, "print JSON")
+	fs.Usage = func() { printRoomsUsage(fs.Output()) }
+	if err := fs.Parse(reorderFlagsFirst(fs, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return errUsage
+		}
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) < 2 {
+		fs.Usage()
+		return errors.New("rooms rename: usage: rooms rename <room-id> <new name>")
+	}
+	roomID, name := rest[0], strings.Join(rest[1:], " ")
+	client, _, err := roomsDial(ctx, connection)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	room, err := client.Rename(ctx, roomID, name)
+	if err != nil {
+		return err
+	}
+	if asJSON {
+		return writeJSON(out, room)
+	}
+	fmt.Fprintf(out, "renamed %s to %q\n", room.RoomID, room.Name)
 	return nil
 }
 
@@ -892,6 +1114,10 @@ Commands:
   log <room-id> [--since N] [--follow] [--timeout D]
                                print the transcript
   state <room-id>              room + live driver status
+  approve <room-id> <@handle> once|deny
+                               resolve a member blocked on an approval
+  retry <room-id>              retry the room's indeterminate task
+  rename <room-id> <name...>   rename a room
   stop <room-id>               cancel queued and running member turns
   disband <room-id> --yes      tombstone a room permanently
 

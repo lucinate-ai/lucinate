@@ -118,9 +118,12 @@ type roomsSentMsg struct {
 // is the authority on the roster (and on the models its members run), so every
 // state poll is also a refresh of what the view shows.
 type roomsStateMsg struct {
-	working bool
-	room    *rooms.Room
-	err     error
+	working  bool
+	room     *rooms.Room
+	activity []rooms.MemberActivity
+	pending  []rooms.PendingAction
+	blocked  bool
+	err      error
 }
 
 type roomsTickMsg struct{}
@@ -220,6 +223,15 @@ type roomsModel struct {
 	// config.yaml or to lucinate's prefs — and rebuilt from the gateway's
 	// roster whenever the room is (re)loaded.
 	memberModels map[string]string
+
+	// activity is who the gateway says is answering right now. The durable
+	// log never carries member text deltas (upstream keeps them out of it),
+	// so this poll result is the only live signal the view can render.
+	activity []rooms.MemberActivity
+	// pending is what the room is waiting on: an approval, or a retry of an
+	// indeterminate task. Both are actionable from the transcript.
+	pending []rooms.PendingAction
+	blocked bool
 
 	confirmDisband string
 	err            error
@@ -504,9 +516,17 @@ func (m roomsModel) loadState() tea.Cmd {
 		}
 		working := st.DriverStatus != nil && st.DriverStatus.Working
 		room := st.Room
+		var activity []rooms.MemberActivity
+		var pending []rooms.PendingAction
+		blocked := false
+		if st.DriverStatus != nil {
+			activity = st.DriverStatus.MemberActivity
+			pending = st.DriverStatus.PendingActions
+			blocked = st.DriverStatus.Blocked
+		}
 		// The room row travels with the status: the roster (and the model each
 		// member runs) is the gateway's to define, so every poll refreshes it.
-		return roomsStateMsg{working: working, room: &room}
+		return roomsStateMsg{working: working, room: &room, activity: activity, pending: pending, blocked: blocked}
 	}
 }
 
@@ -772,6 +792,9 @@ func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
 			return m, nil
 		}
 		m.working = msg.working
+		m.activity = msg.activity
+		m.pending = msg.pending
+		m.blocked = msg.blocked
 		// Keep the queue's status honest: the user is staring at "queued"
 		// and cannot tell a thinking roster from a pinned one. Show the
 		// elapsed silence and the deadline, so it reads as a countdown
@@ -796,6 +819,36 @@ func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
 			return m, tea.Batch(m.sendText(text), m.loadState())
 		}
 		return m, nil
+
+	case roomsApprovedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.status = fmt.Sprintf("approved @%s (%s)", msg.member, msg.choice)
+		return m, m.loadState()
+
+	case roomsRetriedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.status = fmt.Sprintf("retried @%s's task", msg.member)
+		return m, m.loadState()
+
+	case roomsStoppedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.working = false
+		m.activity = nil
+		m.status = fmt.Sprintf("cancelled %d turn(s)", msg.cancelled)
+		cmds := []tea.Cmd{m.loadState()}
+		if m.openRoomID != "" {
+			cmds = append(cmds, m.loadLog(m.openRoomID, m.since))
+		}
+		return m, tea.Batch(cmds...)
 
 	case tea.PasteMsg:
 		// Bracketed paste. Only the transcript has a composer; anywhere
@@ -1271,6 +1324,9 @@ func (m roomsModel) handleTranscriptCommand(text string) (roomsModel, tea.Cmd) {
 			"  /cost — tokens and cost per member\n" +
 			"  /model [@handle [name]] — each member's model for this room session\n" +
 			"  /header [@handle #RRGGBB|default] — per-member header colours\n" +
+			"  /approve @handle once|deny — resolve a member blocked on an approval\n" +
+			"  /retry — retry the room's indeterminate task\n" +
+			"  /stop — cancel queued and running member turns\n" +
 			"  /mouse off — hand click-drag back to the terminal\n" +
 			"typed text goes to the room; prefix \\\\ to send a line that starts with /\n" +
 			"an @handle in the message addresses that member and outranks the mode\n" +
@@ -1434,7 +1490,11 @@ func (m roomsModel) viewTranscript() string {
 	// The routing mode shares the title line: it is context for the
 	// transcript below, not another block of chrome, and a transcript pane
 	// has no rows to spare.
-	b.WriteString(headerStyle.Render(title) + " " + statusStyle.Render("· "+m.routingNote()) + "\n\n")
+	b.WriteString(headerStyle.Render(title) + " " + statusStyle.Render("· "+m.routingNote()) + "\n")
+	if banner := m.blockedRow(); banner != "" {
+		b.WriteString(banner + "\n")
+	}
+	b.WriteString("\n")
 
 	// The /model overlay replaces the transcript: it owns the keys while it is
 	// open, so there is nothing below it to act on.

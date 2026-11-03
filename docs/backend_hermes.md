@@ -101,3 +101,28 @@ with a targeted hint to run `hermes dashboard` and repoint the URL. The old clie
 (`~/.lucinate/hermes/<conn-id>/` with `last_response_id` + `prompts.jsonl`) is gone — those
 files existed only because the HTTP API had no session surface. There is no auto-migration:
 the user must switch the server process they run, so a human step was unavoidable anyway.
+
+## One gateway, many profiles
+
+Since the multiplexing gateway (2026-09, first shipped stable `v0.22.5` / `v2026.9.24`), one
+machine-level `hermes dashboard` serves **every** profile: `profiles.list` reports the roster
+over the same WebSocket, and `session.create`/`session.list`/`session.resume` take a
+`profile`. The backend therefore reports the gateway's profiles as agents and sends the
+selected one on every session call.
+
+Two consequences worth remembering:
+
+- A session's identity is `profile` + stored id. The TUI key is profile-qualified
+  (`<profile>::<id>`) because a stored id is only unique inside one profile's `state.db`;
+  resuming with the wrong profile reports "session not found".
+- Empty sessions are still not listed until they hold a message, and `session.usage` still
+  reports zeros — `message.complete.payload.usage` remains the authoritative per-turn usage.
+
+Model switching has no dedicated RPC. The dashboard's chat uses `/model <ref>`, so the backend
+dispatches the same thing through `slash.exec` and returns the gateway's own answer: a
+refusal is an error, never a reported switch. The switch is session-scoped; the profile's
+config is untouched.
+
+The `hermes-smoke` CI matrix pins `v2026.6.5` (oldest supported, pre-multiplexing) and the
+current stable. Both legs matter: the profile roster must degrade to the synthetic agent on a
+gateway that answers `-32601` to `profiles.list`.

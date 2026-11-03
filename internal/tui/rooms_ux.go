@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -202,7 +203,7 @@ func (m roomsModel) activeStreams() []rooms.Stream {
 
 // spinnerActive reports whether any animated row is on screen.
 func (m roomsModel) spinnerActive() bool {
-	return len(m.visibleStreams()) > 0 || m.working || len(m.queue) > 0
+	return len(m.visibleStreams()) > 0 || len(m.activity) > 0 || m.working || len(m.queue) > 0
 }
 
 // ensureRoomsSpinner starts the glyph animation if it is not already running,
@@ -244,8 +245,10 @@ func spinnerGlyph(frame int) string {
 // text — a spinner left running against a silent member reads as a hung room.
 func (m roomsModel) streamRows() []string {
 	streams := m.visibleStreams()
-	rows := make([]string, 0, len(streams))
+	rows := make([]string, 0, len(streams)+len(m.activity))
+	shown := make(map[string]bool, len(streams))
 	for _, s := range streams {
+		shown[s.Member] = true
 		glyph := cursorStyle.Render(spinnerGlyph(m.spinnerFrame))
 		text := s.Text
 		if strings.TrimSpace(text) == "" {
@@ -253,7 +256,80 @@ func (m roomsModel) streamRows() []string {
 		}
 		rows = append(rows, fmt.Sprintf("%s %s %s", glyph, m.memberStyle(s.Member).Render(s.Label()), text))
 	}
+	// The gateway keeps member text deltas out of the durable log, so a member
+	// mid-answer appears only in the state poll's member_activity. Render it as
+	// a working row instead of pretending the room is silent.
+	for _, a := range m.activity {
+		handle := m.handleForMember(a.MemberID)
+		if handle == "" || shown[handle] {
+			continue
+		}
+		// An interrupted reply already has its own marker row; a spinner on
+		// top of it would read as a turn that never died.
+		if _, interrupted := m.interrupted[handle]; interrupted {
+			continue
+		}
+		rows = append(rows, fmt.Sprintf("%s %s %s",
+			cursorStyle.Render(spinnerGlyph(m.spinnerFrame)),
+			m.memberStyle(handle).Render("@"+handle),
+			statusStyle.Render("…")))
+	}
 	return rows
+}
+
+// handleForMember maps the gateway's member id onto the roster handle the
+// transcript labels members by.
+func (m roomsModel) handleForMember(memberID string) string {
+	if m.openRoom == nil || memberID == "" {
+		return ""
+	}
+	for _, mem := range m.openRoom.Members {
+		if mem.MemberID == memberID {
+			return mem.Handle
+		}
+	}
+	return ""
+}
+
+// hasMember reports whether the open room's roster carries this handle.
+func (m roomsModel) hasMember(handle string) bool {
+	if m.openRoom == nil {
+		return false
+	}
+	for _, mem := range m.openRoom.Members {
+		if strings.EqualFold(mem.Handle, strings.TrimPrefix(handle, "@")) {
+			return true
+		}
+	}
+	return false
+}
+
+// pendingFor resolves one member's pending action by handle. More than one is
+// ambiguous on purpose: the caller refuses rather than guessing which turn the
+// user meant.
+func (m roomsModel) pendingFor(handle string) (rooms.PendingAction, bool, bool) {
+	if m.openRoom == nil {
+		return rooms.PendingAction{}, false, false
+	}
+	var memberID string
+	for _, mem := range m.openRoom.Members {
+		if strings.EqualFold(mem.Handle, strings.TrimPrefix(handle, "@")) {
+			memberID = mem.MemberID
+			break
+		}
+	}
+	if memberID == "" {
+		return rooms.PendingAction{}, false, false
+	}
+	var found rooms.PendingAction
+	n := 0
+	for _, a := range m.pending {
+		if a.MemberID == memberID {
+			found = a
+			n++
+		}
+	}
+	return found, n == 1, n > 1
 }
 
 // ── colours ──────────────────────────────────────────────────────────────────
@@ -513,8 +589,165 @@ func (m roomsModel) handleRoomUXCommand(text string) (roomsModel, tea.Cmd, bool)
 		return m.cmdCost(args)
 	case "/header", "/colour", "/color":
 		return m.cmdHeader(args)
+	case "/approve":
+		return m.cmdApprove(args)
+	case "/retry":
+		return m.cmdRetry(args)
+	case "/stop":
+		return m.cmdStop(args)
 	}
 	return m, nil, false
+}
+
+// roomsApprovedMsg, roomsRetriedMsg and roomsStoppedMsg report the outcome of
+// an action the room was blocked on. They are separate messages because each
+// one refreshes the state poll afterwards — the banner must clear only when
+// the gateway says the action is gone, never optimistically.
+type roomsApprovedMsg struct {
+	member string
+	choice string
+	err    error
+}
+
+type roomsRetriedMsg struct {
+	member string
+	err    error
+}
+
+type roomsStoppedMsg struct {
+	cancelled int
+	err       error
+}
+
+// cmdApprove resolves one pending approval with the exact coordinates the
+// state poll reported. An unknown handle, nothing pending, or more than one
+// pending action for that member is refused locally: guessing which turn the
+// user meant would approve a different one.
+func (m roomsModel) cmdApprove(args []string) (roomsModel, tea.Cmd, bool) {
+	m.composer = ""
+	m.err, m.notice = nil, ""
+	if len(args) != 2 {
+		m.err = fmt.Errorf("usage: /approve @handle once|deny")
+		return m, nil, true
+	}
+	handle := strings.TrimPrefix(args[0], "@")
+	choice := strings.ToLower(args[1])
+	if choice != "once" && choice != "deny" {
+		m.err = fmt.Errorf("approval choice must be once or deny, got %q", choice)
+		return m, nil, true
+	}
+	if !m.hasMember(handle) {
+		m.err = fmt.Errorf("room has no member @%s", handle)
+		return m, nil, true
+	}
+	action, ok, ambiguous := m.pendingFor(handle)
+	switch {
+	case ambiguous:
+		m.err = fmt.Errorf("@%s has more than one pending action — resolve it in the Hermes dashboard", handle)
+		return m, nil, true
+	case !ok:
+		m.err = fmt.Errorf("no pending action for @%s — nothing to approve", handle)
+		return m, nil, true
+	case !action.IsApproval():
+		m.err = fmt.Errorf("@%s is waiting on a retry, not an approval — use /retry", handle)
+		return m, nil, true
+	}
+	roomID := m.openRoomID
+	return m, func() tea.Msg {
+		c, err := m.dial()
+		if err != nil {
+			return roomsApprovedMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), rooms.DefaultTimeout)
+		defer cancel()
+		if err := c.Approve(ctx, roomID, action, choice); err != nil {
+			m.shared.drop(c)
+			return roomsApprovedMsg{err: err}
+		}
+		return roomsApprovedMsg{member: handle, choice: choice}
+	}, true
+}
+
+// cmdRetry re-runs the room's indeterminate task, when the state poll offers
+// one. There is no handle argument: the gateway reports at most one retryable
+// task per member, and the room surfaces the first it finds.
+func (m roomsModel) cmdRetry(args []string) (roomsModel, tea.Cmd, bool) {
+	m.composer = ""
+	m.err, m.notice = nil, ""
+	var action rooms.PendingAction
+	handle := ""
+	for _, a := range m.pending {
+		if a.Kind == "retry" {
+			action, handle = a, m.handleForMember(a.MemberID)
+			break
+		}
+	}
+	if action.TaskID == "" {
+		m.err = fmt.Errorf("nothing to retry — the room reports no indeterminate task")
+		return m, nil, true
+	}
+	roomID := m.openRoomID
+	return m, func() tea.Msg {
+		c, err := m.dial()
+		if err != nil {
+			return roomsRetriedMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), rooms.DefaultTimeout)
+		defer cancel()
+		if err := c.Retry(ctx, roomID, action); err != nil {
+			m.shared.drop(c)
+			return roomsRetriedMsg{err: err}
+		}
+		return roomsRetriedMsg{member: handle}
+	}, true
+}
+
+// cmdStop cancels queued and running member turns. It is the escape hatch for
+// a room pinned on one member, which otherwise blocks every later message.
+func (m roomsModel) cmdStop(args []string) (roomsModel, tea.Cmd, bool) {
+	m.composer = ""
+	m.err, m.notice = nil, ""
+	roomID := m.openRoomID
+	if roomID == "" {
+		m.err = fmt.Errorf("/stop needs an open room")
+		return m, nil, true
+	}
+	return m, func() tea.Msg {
+		c, err := m.dial()
+		if err != nil {
+			return roomsStoppedMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), rooms.DefaultTimeout)
+		defer cancel()
+		n, err := c.Stop(ctx, roomID)
+		if err != nil {
+			m.shared.drop(c)
+			return roomsStoppedMsg{err: err}
+		}
+		return roomsStoppedMsg{cancelled: n}
+	}, true
+}
+
+// blockedRow renders what the room is waiting on, above the transcript. A
+// member blocked on an approval can sit there indefinitely: without this row
+// the room just looks silent.
+func (m roomsModel) blockedRow() string {
+	if len(m.pending) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(m.pending))
+	for _, a := range m.pending {
+		handle := m.handleForMember(a.MemberID)
+		if handle == "" {
+			handle = a.MemberID
+		}
+		if a.IsApproval() {
+			parts = append(parts, fmt.Sprintf("@%s needs approval — /approve @%s once|deny", handle, handle))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("@%s has a retryable task — /retry", handle))
+	}
+	return errorStyle.Render("blocked: " + strings.Join(parts, " · "))
 }
 
 func (m roomsModel) cmdRouting(args []string) (roomsModel, tea.Cmd, bool) {

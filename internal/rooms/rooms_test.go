@@ -795,12 +795,14 @@ func TestOrientation_BlockNamesTheProjectAndTheBrowserFlow(t *testing.T) {
 }
 
 func TestOrientationFromEnv(t *testing.T) {
-	t.Setenv("ORCA_WORKTREE_ID", "1c0a9030-ef8a-473f-9531-b2803dd92bdf::E:/orca/workspaces/HermesHarness")
+	worktree := t.TempDir()
+	raw := "1c0a9030-ef8a-473f-9531-b2803dd92bdf::" + worktree
+	t.Setenv("ORCA_WORKTREE_ID", raw)
 	o := OrientationFromEnv()
-	if o.Worktree != "id:1c0a9030-ef8a-473f-9531-b2803dd92bdf::E:/orca/workspaces/HermesHarness" {
+	if o.Worktree != "id:"+raw {
 		t.Errorf("Worktree = %q", o.Worktree)
 	}
-	if o.Path != "E:/orca/workspaces/HermesHarness" || o.Project != "HermesHarness" {
+	if o.Path != worktree || o.Project != filepath.Base(worktree) {
 		t.Errorf("Path/Project = %q / %q", o.Path, o.Project)
 	}
 	t.Setenv("ORCA_WORKTREE_ID", "")
@@ -810,13 +812,14 @@ func TestOrientationFromEnv(t *testing.T) {
 }
 
 func TestOrientationFromWorktree(t *testing.T) {
+	worktree := t.TempDir()
 	cases := []struct {
 		sel         string
 		wantPath    string
 		wantProject string
 	}{
-		{"id:1c0a9030::E:/orca/workspaces/HermesHarness", "E:/orca/workspaces/HermesHarness", "HermesHarness"},
-		{"path:E:/orca/ws/proj", "E:/orca/ws/proj", "proj"},
+		{"id:1c0a9030::" + worktree, worktree, filepath.Base(worktree)},
+		{"path:" + worktree, worktree, filepath.Base(worktree)},
 		{"name:flue-agents", "", "flue-agents"},
 		{"active", "", ""},
 		{"", "", ""},

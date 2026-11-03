@@ -10,13 +10,16 @@ import (
 // ── wspólny katalog pokoju ───────────────────────────────────────────────────
 
 func TestRoomsBase_FollowsTheWorktreeThenFallsBackToCwd(t *testing.T) {
-	t.Setenv("ORCA_WORKTREE_ID", "id:1c0a9030::E:/orca/workspaces/HermesHarness")
+	// A path on this host: an Orca-host path from another platform is
+	// normalised (or rejected) by paths_test.go, not treated as relative.
+	worktree := t.TempDir()
+	t.Setenv("ORCA_WORKTREE_ID", "id:1c0a9030::"+worktree)
 	base, err := RoomsBase()
 	if err != nil {
 		t.Fatalf("RoomsBase: %v", err)
 	}
-	if !strings.HasSuffix(filepath.ToSlash(base), "/HermesHarness") {
-		t.Errorf("base = %q, want the worktree path from ORCA_WORKTREE_ID", base)
+	if filepath.Clean(base) != filepath.Clean(worktree) {
+		t.Errorf("base = %q, want the worktree path %q", base, worktree)
 	}
 
 	t.Setenv("ORCA_WORKTREE_ID", "")

@@ -123,3 +123,7 @@ test-integration-hermes-teardown:
 .PHONY: demo
 demo: build
 	PATH="$(CURDIR):$(PATH)" vhs docs/demo.tape
+
+.PHONY: test-live-hermes
+test-live-hermes:
+	./scripts/live-hermes.sh

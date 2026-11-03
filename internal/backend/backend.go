@@ -225,6 +225,12 @@ type Capabilities struct {
 	// side scheduling print a clear "not available" message rather
 	// than crashing on a failed type assertion.
 	Cron bool
+
+	// Rooms indicates the backend's gateway hosts Hermes rooms (durable
+	// multi-profile group chats). Only the Hermes backend sets it; the
+	// TUI gates /rooms on it so other connections say why the view is
+	// unavailable instead of dialling an endpoint they do not serve.
+	Rooms bool
 }
 
 // AuthRecovery selects the auth-modal flow the connecting view runs

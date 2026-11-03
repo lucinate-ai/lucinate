@@ -137,7 +137,7 @@ func TestRoomsModel_InviteRendersDerivedNameAndSelection(t *testing.T) {
 	m.selected["matt"] = true
 
 	out := m.View()
-	for _, want := range []string{"deepsh", "[x]", "[ ]", "selected 1/6", "Matt", "frozen"} {
+	for _, want := range []string{"deepsh", "[x]", "[ ]", fmt.Sprintf("selected 1/%d", rooms.MaxMembers), "Matt", "frozen"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("invite view missing %q:\n%s", want, out)
 		}
@@ -229,7 +229,7 @@ func TestRoomsModel_InviteWindowsLongProfileLists(t *testing.T) {
 	m.selected["profile-00"] = true
 
 	out := m.View()
-	if !strings.Contains(out, "selected 1/6") {
+	if !strings.Contains(out, fmt.Sprintf("selected 1/%d", rooms.MaxMembers)) {
 		t.Fatalf("selection summary pushed off-screen:\n%s", out)
 	}
 	if !strings.Contains(out, "new room name:") {
@@ -246,7 +246,7 @@ func TestRoomsModel_InviteWindowsLongProfileLists(t *testing.T) {
 	// Walking the cursor to the end must keep the summary visible.
 	m.inviteCursor = len(m.profiles) - 1
 	out = m.View()
-	if !strings.Contains(out, "profile-55") || !strings.Contains(out, "selected 1/6") {
+	if !strings.Contains(out, "profile-55") || !strings.Contains(out, fmt.Sprintf("selected 1/%d", rooms.MaxMembers)) {
 		t.Fatalf("cursor at the end lost the selection summary:\n%s", out)
 	}
 	if !strings.Contains(out, "↑ ") {

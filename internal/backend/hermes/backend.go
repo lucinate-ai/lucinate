@@ -8,8 +8,11 @@
 // sessions, and memories, so this backend stays thin and lets the
 // gateway be the source of truth:
 //
-//   - Connection ↔ Hermes profile, 1:1. The profile is the agent.
-//     ListAgents returns one synthetic entry; CreateAgent is rejected.
+//   - Connection ↔ gateway. The gateway serves every profile on the
+//     machine (Hermes multiplexing), so a profile is selected per
+//     session rather than per connection: ListAgents reports the
+//     gateway's profiles and CreateSession sends the chosen one.
+//     CreateAgent stays rejected — profiles are configured server-side.
 //   - Sessions, history, usage, compaction, and abort are all real
 //     gateway RPCs (session.*, prompt.submit) — no client-side state
 //     files or history reconstruction.
@@ -43,8 +46,9 @@ import (
 // does not serve /api/ws.
 const DefaultBaseURL = "http://localhost:9119"
 
-// syntheticAgentID is the fixed agent identifier used because Hermes
-// connections expose a single agent (the connected profile).
+// syntheticAgentID is the fixed agent identifier used when the gateway does
+// not serve a profile roster (an older gateway, or one that answers -32601 to
+// profiles.list). The connection then behaves as the single launch profile.
 const syntheticAgentID = "hermes"
 
 // defaultConnectTimeout bounds the dial + gateway.ready handshake when
@@ -79,7 +83,8 @@ type Options struct {
 type session struct {
 	live      string
 	stored    string
-	preambled bool // skills catalogue already prepended on turn 1
+	profile   string // the Hermes profile this session runs as; "" for the launch profile
+	preambled bool   // skills catalogue already prepended on turn 1
 }
 
 // Backend implements backend.Backend over the tui_gateway protocol.
@@ -422,10 +427,50 @@ func (b *Backend) client() (*rpc.Client, error) {
 	return b.cli, nil
 }
 
-// ListAgents returns a single synthetic entry — the connected Hermes
-// profile is the agent. agents.list reports gateway-managed processes
-// (usually none); the profile identity comes from session metadata.
+// ListAgents returns the gateway's profile roster. Hermes is multiplexed: one
+// gateway process serves every profile on the machine, and a session selects
+// one. When the gateway does not answer profiles.list (an older gateway, or a
+// failure), the single synthetic agent is reported — the connection then acts
+// as its launch profile, exactly as before multiplexing.
 func (b *Backend) ListAgents(ctx context.Context) (*protocol.AgentsListResult, error) {
+	if cli, err := b.client(); err == nil {
+		var res struct {
+			Profiles []profileListEntry `json:"profiles"`
+		}
+		if err := cli.Call(ctx, "profiles.list", map[string]any{"include_sessions": false}, &res); err == nil && len(res.Profiles) > 0 {
+			return agentsFromProfiles(res.Profiles), nil
+		}
+	}
+	return b.syntheticAgent(), nil
+}
+
+// agentsFromProfiles maps the gateway's roster onto the TUI's agent shape.
+// The profile name is the agent identifier because it is what session.create
+// and session.list expect on the wire.
+func agentsFromProfiles(profiles []profileListEntry) *protocol.AgentsListResult {
+	out := &protocol.AgentsListResult{Agents: make([]protocol.AgentSummary, 0, len(profiles))}
+	defaultID := ""
+	for _, p := range profiles {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			continue
+		}
+		summary := protocol.AgentSummary{ID: name, Name: name}
+		if p.Model != "" {
+			summary.Model = &protocol.AgentSummaryModel{Primary: p.Model}
+		}
+		out.Agents = append(out.Agents, summary)
+		if p.IsDefault || defaultID == "" {
+			defaultID = name
+		}
+	}
+	out.DefaultID = defaultID
+	out.MainKey = defaultID
+	return out
+}
+
+// syntheticAgent is the pre-multiplexing shape: one agent, the launch profile.
+func (b *Backend) syntheticAgent() *protocol.AgentsListResult {
 	b.mu.Lock()
 	model := b.model
 	profile := b.profile
@@ -444,7 +489,7 @@ func (b *Backend) ListAgents(ctx context.Context) (*protocol.AgentsListResult, e
 		Agents:    []protocol.AgentSummary{summary},
 		DefaultID: syntheticAgentID,
 		MainKey:   syntheticAgentID,
-	}, nil
+	}
 }
 
 // CreateAgent rejects: Hermes profiles are configured server-side and
@@ -482,19 +527,26 @@ type sessionListEntry struct {
 }
 
 // SessionsList maps session.list into the TUI's session-browser shape.
-// Entries are keyed by stored session id — the resume key.
+// Entries are keyed by profile-qualified stored session id — the resume key.
 func (b *Backend) SessionsList(ctx context.Context, agentID string) (json.RawMessage, error) {
-	if agentID != syntheticAgentID {
-		return json.RawMessage(`{"sessions":[]}`), nil
-	}
 	cli, err := b.client()
 	if err != nil {
 		return nil, err
 	}
+	profile := profileFor(agentID)
+	if profile == "" && strings.TrimSpace(agentID) == "" {
+		b.mu.Lock()
+		profile = b.profile
+		b.mu.Unlock()
+	}
+	params := map[string]any{}
+	if profile != "" {
+		params["profile"] = profile
+	}
 	var res struct {
 		Sessions []sessionListEntry `json:"sessions"`
 	}
-	if err := cli.Call(ctx, "session.list", nil, &res); err != nil {
+	if err := cli.Call(ctx, "session.list", params, &res); err != nil {
 		return nil, err
 	}
 	out := struct {
@@ -506,7 +558,7 @@ func (b *Backend) SessionsList(ctx context.Context, agentID string) (json.RawMes
 			title = s.ID
 		}
 		out.Sessions = append(out.Sessions, map[string]any{
-			"key":         s.ID,
+			"key":         sessionKeyFor(profile, s.ID),
 			"title":       title,
 			"lastMessage": s.Preview,
 			"updatedAt":   int64(s.StartedAt * 1000),
@@ -515,37 +567,48 @@ func (b *Backend) SessionsList(ctx context.Context, agentID string) (json.RawMes
 	return json.Marshal(out)
 }
 
-// CreateSession opens a fresh gateway session and returns its live
-// handle as the TUI session key. The stored id is tracked alongside so
-// the session survives a reconnect (and so /status can show it).
+// CreateSession opens a fresh gateway session for the selected profile and
+// returns its live handle as the TUI session key. The stored id is tracked
+// alongside so the session survives a reconnect (and so /status can show it).
 func (b *Backend) CreateSession(ctx context.Context, agentID, key string) (string, error) {
-	if agentID != syntheticAgentID {
-		return "", fmt.Errorf("agent not found: %s", agentID)
-	}
 	cli, err := b.client()
 	if err != nil {
 		return "", err
 	}
+	profile := profileFor(agentID)
+	params := map[string]any{}
+	if profile != "" {
+		params["profile"] = profile
+	}
 	var res sessionCreateResult
-	if err := cli.Call(ctx, "session.create", nil, &res); err != nil {
+	if err := cli.Call(ctx, "session.create", params, &res); err != nil {
 		return "", err
 	}
+	// The gateway reports the profile the session actually runs as, which is
+	// authoritative (a routed profile may be renamed upstream).
+	if res.Info.ProfileName != "" {
+		profile = res.Info.ProfileName
+	}
 	b.mu.Lock()
-	b.sessions[res.SessionID] = &session{live: res.SessionID, stored: res.StoredSessionID}
+	b.sessions[res.SessionID] = &session{
+		live:    res.SessionID,
+		stored:  res.StoredSessionID,
+		profile: profile,
+	}
 	b.active = res.SessionID
 	if res.Info.Model != "" {
 		b.model = res.Info.Model
 	}
-	if res.Info.ProfileName != "" {
-		b.profile = res.Info.ProfileName
+	if profile != "" {
+		b.profile = profile
 	}
 	b.mu.Unlock()
 	return res.SessionID, nil
 }
 
-// resolve maps a TUI session key to its live gateway handle, resuming
-// the session when the key is a stored id from the session browser
-// (or a live handle orphaned by a reconnect).
+// resolve maps a TUI session key to its live gateway handle, resuming the
+// session when the key is a profile-qualified stored id from the session
+// browser (or a live handle orphaned by a reconnect).
 func (b *Backend) resolve(ctx context.Context, key string) (*session, error) {
 	b.mu.Lock()
 	sess, ok := b.sessions[key]
@@ -560,17 +623,28 @@ func (b *Backend) resolve(ctx context.Context, key string) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
+	profile, stored := splitSessionKey(key)
+	params := map[string]any{"session_id": stored}
+	if profile != "" {
+		params["profile"] = profile
+	}
 	var res sessionCreateResult
-	if err := cli.Call(ctx, "session.resume", map[string]string{"session_id": key}, &res); err != nil {
+	if err := cli.Call(ctx, "session.resume", params, &res); err != nil {
 		return nil, fmt.Errorf("session not found: %s: %w", key, err)
 	}
+	if res.Info.ProfileName != "" {
+		profile = res.Info.ProfileName
+	}
 	b.mu.Lock()
-	sess = &session{live: res.SessionID, stored: res.StoredSessionID}
+	sess = &session{live: res.SessionID, stored: res.StoredSessionID, profile: profile}
 	if sess.stored == "" {
-		sess.stored = key
+		sess.stored = stored
 	}
 	b.sessions[key] = sess
 	b.active = key
+	if profile != "" {
+		b.profile = profile
+	}
 	b.mu.Unlock()
 	return sess, nil
 }
@@ -586,10 +660,11 @@ func (b *Backend) SessionDelete(ctx context.Context, sessionKey string) error {
 		return err
 	}
 	id := sessionKey
-	var live string
+	var live, profile string
 	b.mu.Lock()
 	if sess, ok := b.sessions[sessionKey]; ok {
 		live = sess.live
+		profile = sess.profile
 		if sess.stored != "" {
 			id = sess.stored
 		}
@@ -599,12 +674,19 @@ func (b *Backend) SessionDelete(ctx context.Context, sessionKey string) error {
 		b.active = ""
 	}
 	b.mu.Unlock()
+	if profile == "" {
+		profile, id = splitSessionKey(id)
+	}
 	if live != "" {
 		// Best-effort detach; a session opened by another client or
 		// already closed just falls through to the delete.
 		_ = cli.Call(ctx, "session.close", map[string]string{"session_id": live}, nil)
 	}
-	return cli.Call(ctx, "session.delete", map[string]string{"session_id": id}, nil)
+	params := map[string]any{"session_id": id}
+	if profile != "" {
+		params["profile"] = profile
+	}
+	return cli.Call(ctx, "session.delete", params, nil)
 }
 
 // ChatSend submits a turn via prompt.submit. The gateway answers
@@ -757,6 +839,47 @@ func (b *Backend) ChatHistory(ctx context.Context, sessionKey string, limit int)
 	return json.Marshal(out)
 }
 
+// profileListEntry is one row of profiles.list. Only the fields this
+// backend needs are decoded; the gateway sends far more.
+type profileListEntry struct {
+	Name      string `json:"name"`
+	Model     string `json:"model"`
+	IsDefault bool   `json:"is_default"`
+}
+
+// profileFor maps an agent identifier onto the profile a session should run
+// as. The synthetic agent (and an empty identifier) means "whatever the
+// gateway's launch profile is", which is what older gateways serve.
+func profileFor(agentID string) string {
+	id := strings.TrimSpace(agentID)
+	if id == "" || id == syntheticAgentID {
+		return ""
+	}
+	return id
+}
+
+// sessionKeyFor qualifies a stored session id with its profile. A stored id is
+// only unique inside one profile's state.db, and resuming needs both halves;
+// the key is opaque to the TUI (it renders the title, not the key).
+func sessionKeyFor(profile, stored string) string {
+	if profile == "" {
+		return stored
+	}
+	return profile + "::" + stored
+}
+
+// splitSessionKey reverses sessionKeyFor. Keys that are not qualified — a live
+// handle, or a stored id from before this change — pass through unchanged.
+func splitSessionKey(key string) (profile, stored string) {
+	if i := strings.LastIndex(key, "::"); i > 0 && i+2 < len(key) {
+		candidate := key[:i]
+		if !strings.ContainsAny(candidate, `/\`) && !strings.Contains(candidate, "::") {
+			return candidate, key[i+2:]
+		}
+	}
+	return "", key
+}
+
 // ModelsList reports what the gateway exposes via model.options. The
 // payload is provider-centric; the reliably present datum is the
 // active model, so that is what the picker gets.
@@ -799,10 +922,55 @@ func (b *Backend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, e
 	return out, nil
 }
 
-// SessionPatchModel stays unsupported in this phase; Phase 2 routes it
-// via command.dispatch ("/model …").
+// SessionPatchModel switches the session model through the gateway's own
+// slash-command dispatcher: the tui_gateway has no model-patch RPC, and
+// `/model <ref>` is what the dashboard's chat uses. The reference is the bare
+// model id (`provider/model`) — model.options carries no per-model provider
+// for Hermes, so the TUI sends it unqualified. The switch is session-scoped
+// unless the command says otherwise, and the gateway's own answer decides
+// success: a refusal is returned as an error rather than reported as a switch
+// that never happened.
 func (b *Backend) SessionPatchModel(ctx context.Context, sessionKey, modelID string) error {
-	return fmt.Errorf("model switching is not supported on Hermes connections yet; configure the profile on the host")
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return fmt.Errorf("model reference is required")
+	}
+	sess, err := b.resolve(ctx, sessionKey)
+	if err != nil {
+		return err
+	}
+	cli, err := b.client()
+	if err != nil {
+		return err
+	}
+	var res struct {
+		Output string `json:"output"`
+	}
+	if err := cli.Call(ctx, "slash.exec", map[string]string{
+		"session_id": sess.live,
+		"command":    "/model " + modelID,
+	}, &res); err != nil {
+		return err
+	}
+	out := strings.TrimSpace(res.Output)
+	if out != "" && !strings.Contains(out, "Model switched") {
+		return fmt.Errorf("%s", firstLine(out))
+	}
+	b.mu.Lock()
+	b.model = modelID
+	b.mu.Unlock()
+	return nil
+}
+
+// firstLine returns the first non-empty line of a gateway answer, so a refusal
+// reads as a sentence instead of a wall of provider details.
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return s
 }
 
 // Capabilities reports the phase-1 Hermes surface: status, usage, and
@@ -814,6 +982,7 @@ func (b *Backend) Capabilities() backend.Capabilities {
 		SessionCompact:  true,
 		AuthRecovery:    backend.AuthRecoveryAPIKey,
 		AgentManagement: false,
+		Rooms:           true,
 	}
 }
 

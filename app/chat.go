@@ -137,4 +137,3 @@ func resolveChatRunOptions(opts ChatOptions) (RunOptions, error) {
 		},
 	}, nil
 }
-

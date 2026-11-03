@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -339,6 +340,67 @@ func (c *Client) Stop(ctx context.Context, roomID string) (int, error) {
 		return 0, err
 	}
 	return out.Cancelled, nil
+}
+
+// Approve resolves one exact pending approval the room reported. The
+// coordinates are never guessed: the gateway refuses an action that is no
+// longer pending, and early-returning here keeps a stale click from approving
+// someone else's turn.
+func (c *Client) Approve(ctx context.Context, roomID string, action PendingAction, choice string) error {
+	if strings.TrimSpace(roomID) == "" {
+		return fmt.Errorf("room id is required")
+	}
+	if !action.IsApproval() {
+		return fmt.Errorf("pending action %q is not an approval", action.Kind)
+	}
+	if choice != "once" && choice != "deny" {
+		return fmt.Errorf("approval choice must be once or deny, got %q", choice)
+	}
+	if action.MemberID == "" || action.TaskID == "" || action.RequestID == "" {
+		return fmt.Errorf("approval is missing its member, task or request id")
+	}
+	params := map[string]any{
+		"room_id":              roomID,
+		"member_id":            action.MemberID,
+		"task_id":              action.TaskID,
+		"execution_generation": action.ExecutionGeneration,
+		"request_id":           action.RequestID,
+		"choice":               choice,
+	}
+	var out struct {
+		Approved bool `json:"approved"`
+	}
+	if err := c.call(ctx, "groups.approve", params, &out); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Retry re-runs one indeterminate task. The gateway fences the retry on the
+// same task/generation coordinates the state poll reported.
+func (c *Client) Retry(ctx context.Context, roomID string, action PendingAction) error {
+	if strings.TrimSpace(roomID) == "" {
+		return fmt.Errorf("room id is required")
+	}
+	if action.Kind != "retry" {
+		return fmt.Errorf("pending action %q is not a retry", action.Kind)
+	}
+	if action.TaskID == "" {
+		return fmt.Errorf("retry is missing its task id")
+	}
+	params := map[string]any{
+		"room_id":              roomID,
+		"task_id":              action.TaskID,
+		"member_id":            action.MemberID,
+		"execution_generation": action.ExecutionGeneration,
+	}
+	var out struct {
+		Retried bool `json:"retried"`
+	}
+	if err := c.call(ctx, "groups.retry", params, &out); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Disband permanently tombstones a room after stopping its work.
