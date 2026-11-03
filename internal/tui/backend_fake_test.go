@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"sort"
 
 	"github.com/a3tai/openclaw-go/protocol"
 
@@ -224,7 +225,14 @@ func (f *fakeBackend) CronsList(ctx context.Context, params protocol.CronListPar
 	if f.cronListErr != nil {
 		return nil, f.cronListErr
 	}
-	return &protocol.CronListResult{Jobs: f.cronJobs, Total: len(f.cronJobs)}, nil
+	jobs := make([]protocol.CronJob, len(f.cronJobs))
+	copy(jobs, f.cronJobs)
+	if params.SortBy == "name" {
+		sort.SliceStable(jobs, func(i, j int) bool {
+			return jobs[i].Name < jobs[j].Name
+		})
+	}
+	return &protocol.CronListResult{Jobs: jobs, Total: len(jobs)}, nil
 }
 
 func (f *fakeBackend) CronRuns(ctx context.Context, params protocol.CronRunsParams) (*protocol.CronRunsResult, error) {

@@ -100,6 +100,41 @@ func TestCronsKey_A_TogglesAllAgentsFilter(t *testing.T) {
 		t.Errorf("expected back to 1 item after toggling off, got %d", got)
 	}
 }
+func TestCronsList_SortedAlphabeticallyByName(t *testing.T) {
+	// The list should be sorted by name (ascending) when loadJobs calls CronsList.
+	m, fake := newTestCronsModel(t)
+	fake.cronJobs = []protocol.CronJob{
+		{ID: "z", Name: "Z backup", AgentID: "agent-1", Enabled: true,
+			Schedule: protocol.CronSchedule{Kind: "cron", Expr: "0 6 * * *"},
+			Payload:  protocol.CronPayload{Kind: "agentTurn", Text: "Backup."}},
+		{ID: "a", Name: "A health check", AgentID: "agent-1", Enabled: true,
+			Schedule: protocol.CronSchedule{Kind: "cron", Expr: "*/5 * * * *"},
+			Payload:  protocol.CronPayload{Kind: "agentTurn", Text: "Check."}},
+		{ID: "m", Name: "M midday report", AgentID: "agent-1", Enabled: true,
+			Schedule: protocol.CronSchedule{Kind: "cron", Expr: "0 12 * * *"},
+			Payload:  protocol.CronPayload{Kind: "agentTurn", Text: "Report."}},
+	}
+	// Init fires loadJobs, which calls CronsList(SortBy: "name", ...).
+	cmd := m.Init()
+	msg := cmd()
+	loaded, ok := msg.(cronsLoadedMsg)
+	if !ok {
+		t.Fatalf("expected cronsLoadedMsg, got %T", msg)
+	}
+	m, _ = m.Update(loaded)
+	items := m.list.Items()
+	if got := len(items); got != 3 {
+		t.Fatalf("expected 3 items, got %d", got)
+	}
+	names := make([]string, len(items))
+	for i, item := range items {
+		names[i] = item.(cronItem).job.Name
+	}
+	if names[0] != "A health check" || names[1] != "M midday report" || names[2] != "Z backup" {
+		t.Errorf("expected alphabetical order, got %v", names)
+	}
+}
+
 
 func TestCronsKey_Enter_FreezesUntilRunsLoad(t *testing.T) {
 	m, _ := newTestCronsModel(t)
