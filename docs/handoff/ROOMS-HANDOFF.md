@@ -57,7 +57,7 @@ that room surface.
    `round 2/3 · 4/10 messages` with the gateway's end reason, `@a pulled @b into the next round`
    annotation, mode wording that matches the engine.
 
-## Room shared state (uncommitted, 2026-11-04)
+## Room shared state (2026-11-04)
 
 A room member gets only a bounded delta of the transcript plus a fixed rule
 frame, so every member rediscovered the repo and a room spent its first round
