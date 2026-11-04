@@ -766,10 +766,13 @@ func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		m.status = "sent — the roster is answering"
+		m.status = ""
 		// Optimistic: the driver is now busy, and the state poll is up to
 		// 1.5s away. Without this a message typed immediately after would
-		// still be sent, cancelling the turn set that just started.
+		// still be sent, cancelling the turn set that just started. The
+		// "roster is answering" row is derived from working/streams at
+		// render time — storing it here left a settled room claiming to be
+		// answering for the rest of the session.
 		m.working = true
 		// A pending /compact learns where its request landed, so the brief
 		// is the first member reply posted after it.
@@ -961,15 +964,67 @@ func (m roomsModel) transcriptLines() []string {
 		lines = append(lines, "")
 	}
 	for _, ev := range m.compactedEvents() {
-		for _, l := range strings.Split(m.formatEvent(ev), "\n") {
-			// Word-wrap for prose, then hard-wrap whatever is still too
-			// wide (a long path or URL has no breakpoint to use).
-			for _, wrapped := range strings.Split(ansi.Wordwrap(l, width, " "), "\n") {
-				lines = append(lines, strings.Split(ansi.Hardwrap(wrapped, width, false), "\n")...)
-			}
-		}
+		lines = append(lines, m.transcriptEventLines(ev, width)...)
 	}
 	return lines
+}
+
+// transcriptEventLines renders one event as one or more pane rows. The body
+// is wrapped with a hanging indent so a paragraph stays visually attached to
+// its timestamp and @handle: left to wrap on its own, the continuation began
+// at column 0 and read as a new event (and the pager counted one row where
+// the terminal drew three).
+func (m roomsModel) transcriptEventLines(ev rooms.Event, width int) []string {
+	row := m.formatEvent(ev)
+	// The body as formatEvent rendered it (highlighting included), so the
+	// prefix/body split works while /find is active too.
+	body := ev.Text()
+	if m.findQuery != "" && body != "" {
+		body = highlightQuery(body, m.findQuery, roomsMatchStyle)
+	}
+	// Lifecycle events (turn.started, turn.settled, …) have no body of
+	// their own; the whole row is already short and styled.
+	if body == "" || !strings.HasSuffix(row, body) {
+		return wrapTranscriptRow(row, width)
+	}
+	prefix := strings.TrimSuffix(row, body)
+	indent := displayWidth(prefix)
+	bodyWidth := width - indent
+	if bodyWidth < 12 {
+		// Too narrow for a hanging indent to leave a readable column; fall
+		// back to wrapping the whole row so short bodies stay together.
+		return wrapTranscriptRow(row, width)
+	}
+	parts := strings.Split(wordWrap(body, bodyWidth), "\n")
+	out := make([]string, 0, len(parts))
+	out = append(out, prefix+parts[0])
+	for _, p := range parts[1:] {
+		out = append(out, continuationGutter(indent)+p)
+	}
+	return out
+}
+
+// wrapTranscriptRow hard-wraps a pre-formatted row (no event body) to the
+// pane width, so a long speaker label still cannot overflow the pane.
+func wrapTranscriptRow(row string, width int) []string {
+	var out []string
+	for _, l := range strings.Split(ansi.Wordwrap(row, width, " "), "\n") {
+		out = append(out, strings.Split(ansi.Hardwrap(l, width, false), "\n")...)
+	}
+	return out
+}
+
+// continuationGutter is the hanging indent under a wrapped event body: it
+// aligns the continuation with the first body column and marks it with a
+// dimmed bar so the paragraph reads as one event.
+func continuationGutter(indent int) string {
+	if indent < 2 {
+		if indent < 0 {
+			indent = 0
+		}
+		return strings.Repeat(" ", indent)
+	}
+	return strings.Repeat(" ", indent-2) + statusStyle.Render("│ ")
 }
 
 // scrollTranscript moves the window: positive goes back into history,
@@ -1198,10 +1253,16 @@ func (m roomsModel) handleTranscriptKey(msg tea.KeyPressMsg, key string) (roomsM
 	}
 	switch key {
 	case "esc":
+		// A notice (most often /help) is the topmost thing on screen, so
+		// esc closes it before it means "back": the help used to be
+		// dismissed only by leaving the room, which also lost the draft.
+		if m.notice != "" {
+			m.notice = ""
+			return m, nil
+		}
 		m.sub = roomsBrowse
 		m.composer = ""
 		m.status = ""
-		m.notice = ""
 		m.findQuery = ""
 		return m, m.loadAll()
 	case "enter":
@@ -1487,35 +1548,104 @@ func (m roomsModel) viewBrowse() string {
 func (m roomsModel) viewInvite() string {
 	var b strings.Builder
 	b.WriteString(assistantPrefixStyle.Render("Invite profiles to a new room") + "\n")
-	b.WriteString(statusStyle.Render(wordWrap(fmt.Sprintf(
-		"seat %d-%d local Hermes profiles. The roster is frozen once the room exists — to change members, seat a new room.",
-		rooms.MinMembers, rooms.MaxMembers), m.viewWrapWidth())) + "\n\n")
-	if len(m.profiles) == 0 {
-		return b.String() + statusStyle.Render("discovering local profiles…")
-	}
-	start, end, above, below := windowRows(len(m.profiles), m.inviteCursor, roomsVisibleRows)
-	if above > 0 {
-		b.WriteString(statusStyle.Render(fmt.Sprintf("  ↑ %d more", above)) + "\n")
-	}
-	for i := start; i < end; i++ {
-		cursor := "  "
-		if i == m.inviteCursor {
-			cursor = completionMenuHighlightStyle.Render("› ")
-		}
-		mark := "[ ]"
-		if m.selected[m.profiles[i]] {
-			mark = "[x]"
-		}
-		b.WriteString(fmt.Sprintf("%s%s %s\n", cursor, mark, m.profiles[i]))
-	}
-	if below > 0 {
-		b.WriteString(statusStyle.Render(fmt.Sprintf("  ↓ %d more", below)) + "\n")
-	}
+	b.WriteString(statusStyle.Render(wordWrap(inviteDescription(), m.viewWrapWidth())) + "\n")
+
+	// The list takes only the rows the fixed chrome leaves. The counter and
+	// the name are answers to "what am I about to create", so they are
+	// rendered after the list but budgeted for before it: a fixed 14-row
+	// window pushed them, and the hint, off a 24-row terminal.
 	chosen := m.selectedProfiles()
-	b.WriteString("\n" + statusStyle.Render(fmt.Sprintf("selected %d/%d: %s",
-		len(chosen), rooms.MaxMembers, strings.Join(chosen, ", "))) + "\n")
+	if len(m.profiles) == 0 {
+		b.WriteString("\n" + statusStyle.Render("discovering local profiles…") + "\n")
+	} else {
+		b.WriteString("\n")
+		start, end, above, below := windowRows(len(m.profiles), m.inviteCursor, m.inviteVisibleRows())
+		if above > 0 {
+			b.WriteString(statusStyle.Render(fmt.Sprintf("  ↑ %d more", above)) + "\n")
+		}
+		for i := start; i < end; i++ {
+			cursor := "  "
+			if i == m.inviteCursor {
+				cursor = completionMenuHighlightStyle.Render("› ")
+			}
+			mark := "[ ]"
+			if m.selected[m.profiles[i]] {
+				mark = "[x]"
+			}
+			b.WriteString(fmt.Sprintf("%s%s %s\n", cursor, mark, m.profiles[i]))
+		}
+		if below > 0 {
+			b.WriteString(statusStyle.Render(fmt.Sprintf("  ↓ %d more", below)) + "\n")
+		}
+	}
+	if len(chosen) > 0 {
+		b.WriteString(statusStyle.Render(fmt.Sprintf("selected %d/%d — need at least %d: %s",
+			len(chosen), rooms.MaxMembers, rooms.MinMembers, strings.Join(chosen, ", "))) + "\n")
+	} else {
+		b.WriteString(statusStyle.Render(fmt.Sprintf("selected 0/%d — need at least %d",
+			rooms.MaxMembers, rooms.MinMembers)) + "\n")
+	}
 	b.WriteString(statusStyle.Render("new room name: "+rooms.DisplayNameFor(chosen)) + "\n")
 	return b.String()
+}
+
+// inviteDescription is the invite screen's one explanatory paragraph.
+func inviteDescription() string {
+	return fmt.Sprintf(
+		"seat %d-%d local Hermes profiles. The roster is frozen once the room exists — to change members, seat a new room.",
+		rooms.MinMembers, rooms.MaxMembers)
+}
+
+// inviteChromeRows is every row the invite screen spends outside the
+// profile list: the app header, the connection banner, the screen title,
+// the wrapped description, the counter and name lines, and the wrapped
+// hint block the outer View appends. Anything the list does not budget for
+// lands below the terminal's last row.
+func (m roomsModel) inviteChromeRows() int {
+	rows := 1 // "Rooms — Hermes Bot Mode"
+	if m.conn != nil {
+		rows++ // connection banner
+	}
+	rows++ // blank under the header
+	rows++ // "Invite profiles to a new room"
+	rows += lipgloss.Height(wordWrap(inviteDescription(), m.viewWrapWidth()))
+	rows++ // blank before the list
+	rows++ // selected counter
+	rows++ // new room name
+	rows++ // blank before the hint
+	rows += lipgloss.Height(wordWrap(m.hint(), m.viewWrapWidth()))
+	if m.err != nil {
+		rows++
+	}
+	if m.status != "" {
+		rows++
+	}
+	if m.confirmDisband != "" {
+		rows++
+	}
+	return rows
+}
+
+// inviteVisibleRows windows the profile list from the real terminal height
+// so the counter, the name and the hint always render.
+func (m roomsModel) inviteVisibleRows() int {
+	h := m.height
+	if h <= 0 {
+		h = 24
+	}
+	rows := h - m.inviteChromeRows()
+	if rows < 1 {
+		rows = 1
+	}
+	// Reserve the ↑/↓ "more" markers when the list overflows.
+	if len(m.profiles) > rows {
+		if rows > 2 {
+			rows -= 2
+		} else if rows > 1 {
+			rows--
+		}
+	}
+	return rows
 }
 
 func (m roomsModel) viewTranscript() string {
@@ -1604,6 +1734,8 @@ func (m roomsModel) viewTranscript() string {
 				spinnerGlyph(m.spinnerFrame), n)
 		}
 		b.WriteString(statusStyle.Render(line) + "\n")
+	} else if settled := m.settleLine(); settled != "" {
+		b.WriteString(statusStyle.Render(settled) + "\n")
 	}
 	if block := m.noticeBlock(); block != "" {
 		b.WriteString("\n" + block + "\n")
@@ -1653,13 +1785,62 @@ func (m roomsModel) transcriptRows() int {
 	if n := len(m.interruptedRows()); n > 0 {
 		rows -= n
 	}
-	if m.working || len(m.queue) > 0 {
+	if m.working || len(m.queue) > 0 || m.settleLine() != "" {
 		rows-- // the roster-status line above the composer
 	}
 	if rows < 3 {
 		rows = 3
 	}
 	return rows
+}
+
+// settleLine is the idle counterpart of the "roster is answering" row: a
+// room that has finished says when its last movement was, rather than
+// keeping a stale status string for the rest of the session.
+func (m roomsModel) settleLine() string {
+	if m.openRoomID == "" || m.reconnecting || m.working || len(m.queue) > 0 || len(m.activeStreams()) > 0 {
+		return ""
+	}
+	if len(m.page.Events) == 0 {
+		return ""
+	}
+	at := time.Now()
+	if last := m.page.Events[len(m.page.Events)-1].CreatedAt; last > 0 {
+		at = time.Unix(int64(last), 0)
+	}
+	return "all members settled · " + at.Format("15:04")
+}
+
+// noticeBudget is how many rows a notice may use without pushing the
+// composer or the hint bar off the terminal: everything above the composer,
+// less the three-row transcript floor and the blank noticeLineCount adds.
+func (m roomsModel) noticeBudget() int {
+	probe := m
+	probe.notice = ""
+	rows := probe.transcriptRows() - 3 - 1
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// fitNotice wraps a notice to the view and caps it to the rows that fit,
+// replacing the tail with "… N more". /help used to fill the pane with
+// eighteen lines and push the composer and the hint bar off-screen.
+func (m roomsModel) fitNotice(text string) string {
+	lines := strings.Split(strings.TrimRight(wordWrap(text, m.viewWrapWidth()), "\n"), "\n")
+	maxRows := m.noticeBudget()
+	if len(lines) <= maxRows {
+		return strings.Join(lines, "\n")
+	}
+	keep := maxRows - 1
+	if keep < 0 {
+		keep = 0
+	}
+	hidden := len(lines) - keep
+	out := append([]string(nil), lines[:keep]...)
+	out = append(out, fmt.Sprintf("… %d more — esc closes this", hidden))
+	return strings.Join(out, "\n")
 }
 
 func (m roomsModel) hint() string {

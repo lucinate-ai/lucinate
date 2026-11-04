@@ -542,7 +542,14 @@ func (m roomsModel) noticeBlock() string {
 	if strings.TrimSpace(m.notice) == "" {
 		return ""
 	}
-	return roomsNoticeStyle.Render(m.notice)
+	return roomsNoticeStyle.Render(m.cappedNotice())
+}
+
+// cappedNotice is the notice as rendered: wrapped to the view and capped
+// to the rows that fit, with a "… N more" tail. The stored notice keeps the
+// full text, so a taller terminal (or a test) still sees every line.
+func (m roomsModel) cappedNotice() string {
+	return m.fitNotice(m.notice)
 }
 
 // noticeLineCount is what the transcript layout reserves for the notice.
@@ -550,7 +557,7 @@ func (m roomsModel) noticeLineCount() int {
 	if strings.TrimSpace(m.notice) == "" {
 		return 0
 	}
-	return len(strings.Split(m.notice, "\n")) + 1
+	return len(strings.Split(m.cappedNotice(), "\n")) + 1
 }
 
 // ── transcript commands ──────────────────────────────────────────────────────

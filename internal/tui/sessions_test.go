@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 func newTestSessionsModel() sessionsModel {
@@ -346,5 +350,124 @@ func TestSessionsSelecting_ViewRendersLoading(t *testing.T) {
 	}
 	if strings.Contains(view, "Second") {
 		t.Errorf("expected list to be hidden while selecting, got:\n%s", view)
+	}
+}
+
+// TestSessionsModel_QuitKeysUnbound pins the fix for `v` quitting the app
+// from the session browser (bubbles binds Quit to "v", labelled "select").
+func TestSessionsModel_QuitKeysUnbound(t *testing.T) {
+	m := newTestSessionsModel()
+	if keys := m.list.KeyMap.Quit.Keys(); len(keys) != 0 {
+		t.Errorf("Quit still bound to %v", keys)
+	}
+	if keys := m.list.KeyMap.ForceQuit.Keys(); len(keys) != 0 {
+		t.Errorf("ForceQuit still bound to %v", keys)
+	}
+	m, _ = m.Update(sessionsLoadedMsg{sessions: []sessionItem{{key: "s1", title: "First", group: "Conversations"}}})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'v'})
+	if cmd != nil {
+		if _, quit := cmd().(tea.QuitMsg); quit {
+			t.Fatal("pressing v emitted tea.Quit from the session browser")
+		}
+	}
+}
+
+// TestSessionsModel_HintVisibleAt80x24 covers the clipped hint row: the
+// list was sized h-2 while the view also renders the banner and the hint.
+func TestSessionsModel_HintVisibleAt80x24(t *testing.T) {
+	conn := &config.Connection{ID: "c1", Name: "local", URL: "http://localhost:9119", Type: config.ConnTypeOpenClaw}
+	m := newSessionsModel(nil, "agent-1", "Scout", "model-1", "main-key", false, conn, false)
+	m.setSize(80, 24)
+	m, _ = m.Update(sessionsLoadedMsg{sessions: []sessionItem{
+		{key: "s1", title: "First chat", group: "Conversations"},
+		{key: "s2", title: "Second chat", group: "Conversations"},
+	}})
+
+	view := m.View()
+	if strings.Contains(view, "v select") || strings.Contains(view, "? more") {
+		t.Errorf("widget footer keys must not be advertised, got:\n%s", view)
+	}
+	if !strings.Contains(view, "esc: back") {
+		t.Errorf("expected the app-owned action hint, got:\n%s", view)
+	}
+	if lines := strings.Split(strings.TrimRight(view, "\n"), "\n"); len(lines) > 24 {
+		t.Errorf("view is %d rows at 80x24; hint row is clipped", len(lines))
+	}
+}
+
+// TestSessionItem_FilterValueIncludesPreview keeps `/` able to find a
+// session by something it said, not only by its title.
+func TestSessionItem_FilterValueIncludesPreview(t *testing.T) {
+	it := sessionItem{key: "s1", title: "Release notes", lastMessage: "wrapped the transcript"}
+	for _, want := range []string{"Release notes", "wrapped the transcript"} {
+		if !strings.Contains(it.FilterValue(), want) {
+			t.Errorf("FilterValue = %q, missing %q", it.FilterValue(), want)
+		}
+	}
+}
+
+// TestRelativeAge pins the primary-row age rendering.
+func TestRelativeAge(t *testing.T) {
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		ago  time.Duration
+		want string
+	}{
+		{30 * time.Second, "just now"},
+		{5 * time.Minute, "5m ago"},
+		{2 * time.Hour, "2h ago"},
+		{3 * 24 * time.Hour, "3d ago"},
+	}
+	for _, tc := range cases {
+		got := relativeAge(now.Add(-tc.ago).UnixMilli(), now)
+		if got != tc.want {
+			t.Errorf("relativeAge(%s) = %q, want %q", tc.ago, got, tc.want)
+		}
+	}
+	if relativeAge(0, now) != "" {
+		t.Error("missing updatedAt should render no age")
+	}
+}
+
+// TestSessionDelegate_RendersAgeAndKeyOnSelectedOnly covers the density
+// fix: the age sits on the primary row, and the machine key appears on
+// the selected row only (it used to prefix every row's subtitle).
+func TestSessionDelegate_RendersAgeAndKeyOnSelectedOnly(t *testing.T) {
+	updated := time.Now().Add(-2 * time.Hour).UnixMilli()
+	m := newSessionsModel(nil, "a", "A", "m", "k", false, nil, false)
+	m.setSize(80, 24)
+	m, _ = m.Update(sessionsLoadedMsg{sessions: []sessionItem{
+		{key: "key-one", title: "First chat", lastMessage: "hello from the first", updatedAt: updated, group: "Conversations"},
+		{key: "key-two", title: "Second chat", lastMessage: "hello from the second", updatedAt: updated, group: "Conversations"},
+	}})
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "2h ago") {
+		t.Errorf("expected the relative age on the primary row, got:\n%s", view)
+	}
+	if strings.Count(view, "key-one") != 1 {
+		t.Errorf("expected the selected row's key exactly once, got:\n%s", view)
+	}
+	if strings.Contains(view, "key-two") {
+		t.Errorf("unselected rows must not show the machine key, got:\n%s", view)
+	}
+	if !strings.Contains(view, "hello from the second") {
+		t.Errorf("expected the unselected row's preview, got:\n%s", view)
+	}
+}
+
+// TestSessionsModel_FilterNarrowsList proves `/` filtering is live.
+func TestSessionsModel_FilterNarrowsList(t *testing.T) {
+	m := newTestSessionsModel()
+	m, _ = m.Update(sessionsLoadedMsg{sessions: []sessionItem{
+		{key: "s1", title: "Release notes", lastMessage: "wrapped the transcript", group: "Conversations"},
+		{key: "s2", title: "Bug triage", group: "Conversations"},
+	}})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if m.list.FilterState() != list.Filtering {
+		t.Fatalf("expected filtering state after '/', got %v", m.list.FilterState())
+	}
+	m.list.SetFilterText("wrapped the tr")
+	if n := len(m.list.VisibleItems()); n != 1 {
+		t.Fatalf("expected the filter to narrow to 1 session, got %d", n)
 	}
 }

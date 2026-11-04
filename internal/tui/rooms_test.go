@@ -1057,3 +1057,135 @@ func TestRosterLabel_ListsMentionHandles(t *testing.T) {
 		t.Fatalf("rosterLabel(empty) = %q", got)
 	}
 }
+
+// The invite screen must keep the counter, the derived name and the hint
+// on a short terminal: a fixed 14-row window pushed all three below the
+// fold at 24 and 25 rows.
+func TestRoomsModel_InviteFitsAt24And25Rows(t *testing.T) {
+	for _, h := range []int{24, 25} {
+		m := newRoomsModel(nil, true)
+		m.sub = roomsInvite
+		m.setSize(80, h)
+		for i := 0; i < 30; i++ {
+			m.profiles = append(m.profiles, fmt.Sprintf("profile-%02d", i))
+		}
+		m.selected["profile-00"] = true
+		m.selected["profile-01"] = true
+
+		out := ansi.Strip(m.View())
+		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		if len(lines) > h {
+			t.Errorf("h=%d: invite view is %d rows:\n%s", h, len(lines), out)
+		}
+		counter := strings.Index(out, "selected 2/6 — need at least 2")
+		if counter < 0 {
+			t.Fatalf("h=%d: counter missing:\n%s", h, out)
+		}
+		name := strings.Index(out, "new room name:")
+		hint := strings.Index(out, "enter create")
+		if name < 0 || hint < 0 {
+			t.Fatalf("h=%d: name=%d hint=%d (want both visible):\n%s", h, name, hint, out)
+		}
+		if !(counter < name && name < hint) {
+			t.Errorf("h=%d: expected counter before name before hint, got %d/%d/%d", h, counter, name, hint)
+		}
+	}
+}
+
+// A paragraph-length room message wraps under a dim hanging gutter, so the
+// continuation cannot be mistaken for a new event, and every row stays
+// inside the pane.
+func TestRoomsModel_TranscriptWrapsBodyUnderADimGutter(t *testing.T) {
+	m := browseModel()
+	m.sub = roomsTranscript
+	m.openRoomID = "sztab-kowal"
+	m.setSize(80, 24)
+	m.page.Events = []rooms.Event{{
+		Kind:      "message.member",
+		Actor:     rooms.Actor{DisplayName: "Matt"},
+		CreatedAt: 1762245000,
+		Payload:   map[string]any{"text": strings.Repeat("slowly failing rollout in the staging cluster ", 4)},
+	}}
+
+	lines := m.transcriptLines()
+	if len(lines) < 3 {
+		t.Fatalf("expected the paragraph to wrap over several rows, got %d:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	for _, l := range lines[1:] {
+		if !strings.Contains(ansi.Strip(l), "│ ") {
+			t.Errorf("continuation row has no dim gutter: %q", ansi.Strip(l))
+		}
+	}
+	for _, l := range lines {
+		if w := ansi.StringWidth(l); w > m.width-1 {
+			t.Errorf("row is %d columns wide, pane is %d: %q", w, m.width-1, ansi.Strip(l))
+		}
+	}
+}
+
+// /help must never push the composer or the hint bar off a short terminal;
+// esc closes the help without leaving the room.
+func TestRoomsModel_HelpIsCappedAndEscClosesIt(t *testing.T) {
+	m := browseModel()
+	m.sub = roomsTranscript
+	m.openRoomID = "sztab-kowal"
+	m.setSize(80, 24)
+	m.page.Events = []rooms.Event{{Kind: "message.user", CreatedAt: 1762245000, Payload: map[string]any{"text": "hi"}}}
+
+	m, _ = m.handleTranscriptCommand("/help")
+	out := ansi.Strip(m.View())
+	if !strings.Contains(out, "… ") || !strings.Contains(out, "esc closes this") {
+		t.Fatalf("expected the help tail to be capped with a count, got:\n%s", out)
+	}
+	if !strings.Contains(out, "you › ") {
+		t.Fatalf("composer pushed off-screen by /help:\n%s", out)
+	}
+	if !strings.Contains(out, "/rooms") {
+		t.Fatalf("hint bar pushed off-screen by /help:\n%s", out)
+	}
+	if n := strings.Count(out, "\n"); n > 24 {
+		t.Fatalf("help view is %d lines for a 24-line terminal:\n%s", n, out)
+	}
+
+	next, cmd := m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if next.notice != "" {
+		t.Fatalf("esc should clear the help notice, notice=%q", next.notice)
+	}
+	if next.sub != roomsTranscript {
+		t.Fatalf("esc closed the room instead of the help (sub=%v)", next.sub)
+	}
+	if cmd != nil {
+		if _, back := cmd().(goBackFromRoomsMsg); back {
+			t.Fatal("esc on an open help emitted goBackFromRoomsMsg")
+		}
+	}
+}
+
+// A settled room must not keep claiming the roster is answering: the line
+// is derived from working/streams, and idle rooms say when they settled.
+func TestRoomsModel_SettledRoomDoesNotClaimToBeAnswering(t *testing.T) {
+	m := browseModel()
+	m.sub = roomsTranscript
+	m.openRoomID = "sztab-kowal"
+	m.setSize(80, 24)
+	stamp := time.Date(2026, 11, 4, 9, 30, 0, 0, time.UTC)
+	m.page.Events = []rooms.Event{{Kind: "message.user", CreatedAt: float64(stamp.Unix())}}
+
+	m, _ = m.Update(roomsSentMsg{})
+	if m.status != "" {
+		t.Errorf("sent stored a status %q; the answering line must be derived", m.status)
+	}
+	if out := ansi.Strip(m.View()); !strings.Contains(out, "roster is answering") {
+		t.Fatalf("expected the derived answering line while working:\n%s", out)
+	}
+
+	m, _ = m.Update(roomsStateMsg{})
+	out := ansi.Strip(m.View())
+	if strings.Contains(out, "roster is answering") {
+		t.Fatalf("a settled room still claims to be answering:\n%s", out)
+	}
+	want := "all members settled · " + time.Unix(stamp.Unix(), 0).Format("15:04")
+	if !strings.Contains(out, want) {
+		t.Fatalf("expected %q, got:\n%s", want, out)
+	}
+}

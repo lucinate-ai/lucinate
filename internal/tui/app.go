@@ -450,6 +450,10 @@ func (m AppModel) computeWantsInput() bool {
 		// focuses the list's fuzzy-filter query. Either means a typed
 		// key (including `q`) is text, not a navigation shortcut.
 		return m.selectModel.subState == subStateCreate || m.selectModel.filtering()
+	case viewSessions:
+		return m.sessionsModel.filtering()
+	case viewModelPicker:
+		return m.modelPicker.filtering()
 	case viewConnections:
 		return m.connectionsModel.wantsInput()
 	case viewConnecting:

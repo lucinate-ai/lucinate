@@ -4,7 +4,7 @@ import "charm.land/lipgloss/v2"
 
 var (
 	// Colours — using dark theme values.
-	subtle      = lipgloss.Color("#5C5C5C")
+	subtle      = lipgloss.Color("#8A8A8A")
 	accent      = lipgloss.Color("#AD8CFF")
 	userClr     = lipgloss.Color("#48CAE4")
 	errClr      = lipgloss.Color("#FF6B6B")

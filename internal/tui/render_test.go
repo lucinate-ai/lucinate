@@ -432,6 +432,11 @@ func TestRenderPendingMessages(t *testing.T) {
 	if !strings.Contains(footer, "first queued") || !strings.Contains(footer, "second queued") {
 		t.Errorf("footer should list every queued message, got %q", footer)
 	}
+	// A text marker survives terminals that drop Faint/italic, where a
+	// queued message otherwise looks identical to a sent one.
+	if !strings.Contains(footer, "You (queued):") {
+		t.Errorf("queued prefix should be textual, got %q", footer)
+	}
 	if h := m.pendingHeight(); h < 2 {
 		t.Errorf("two queued messages should reserve at least 2 rows, got %d", h)
 	}
@@ -918,5 +923,52 @@ func TestNarrowLayout_Threshold(t *testing.T) {
 					tt.width, tt.agentName, got, tt.wantNarrow)
 			}
 		})
+	}
+}
+
+// The header's token block used to vanish entirely when it did not fit —
+// a byte-based padding check dropped the whole right side. It must degrade
+// (full → compact → percentage) and keep the title inside the width.
+func TestChatHeader_DegradesTokenBlockInsteadOfDroppingIt(t *testing.T) {
+	m := chatModel{
+		width:         120,
+		agentName:     "scout",
+		contextWindow: 200_000,
+		promptTokens:  12_000,
+		stats:         &sessionStats{totalCost: 0.42},
+	}
+
+	full := ansi.Strip(m.headerView())
+	if !strings.Contains(full, "tokens:") || !strings.Contains(full, "$0.42") {
+		t.Fatalf("wide header should show the full token block, got %q", full)
+	}
+
+	m.width = 40
+	compact := ansi.Strip(m.headerView())
+	if strings.Contains(compact, "tokens:") {
+		t.Errorf("narrow header should use the compact form, got %q", compact)
+	}
+	if !strings.Contains(compact, "12k/200k") || !strings.Contains(compact, "$0.42") {
+		t.Errorf("compact form lost the numbers, got %q", compact)
+	}
+
+	m.width = 30
+	pct := ansi.Strip(m.headerView())
+	if !strings.Contains(pct, "6%") {
+		t.Errorf("narrowest fitting form should keep the percentage, got %q", pct)
+	}
+	if strings.Contains(pct, "$") {
+		t.Errorf("percentage form should not keep the cost, got %q", pct)
+	}
+
+	m.width = 20
+	tiny := m.headerView()
+	for _, line := range strings.Split(tiny, "\n") {
+		if w := ansi.StringWidth(line); w > 20 {
+			t.Errorf("header line is %d columns at width 20: %q", w, ansi.Strip(line))
+		}
+	}
+	if !strings.Contains(ansi.Strip(tiny), "6%") {
+		t.Errorf("token percentage was dropped even though it fits, got %q", ansi.Strip(tiny))
 	}
 }

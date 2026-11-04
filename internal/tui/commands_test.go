@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/a3tai/openclaw-go/protocol"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 )
@@ -77,6 +78,31 @@ func TestSlashCommand_Exit(t *testing.T) {
 	}
 	if _, ok := cmd().(requestExitMsg); !ok {
 		t.Fatalf("expected requestExitMsg, got %T", cmd())
+	}
+}
+
+// esc is "back" on every other screen; on the chat screen it used to be a
+// dead key, so leaving chat required knowing /agents — which the footer never
+// mentioned. With nothing in flight it must now land on the agent picker.
+func TestChatEsc_WithNothingInFlightGoesBackToTheAgentPicker(t *testing.T) {
+	m := newSlashTestModel()
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected esc to arm a navigation")
+	}
+	if _, ok := cmd().(goBackMsg); !ok {
+		t.Fatalf("expected goBackMsg, got %T", cmd())
+	}
+	if next.pendingNavConfirm != nil {
+		t.Error("esc with nothing in flight must not ask for confirmation")
+	}
+}
+
+// The footer is the only place a first-run user reads how to leave.
+func TestChatFooter_MentionsEscBack(t *testing.T) {
+	m := newSlashTabTestModel()
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "esc: back") {
+		t.Fatalf("chat footer does not advertise esc: back:\n%s", got)
 	}
 }
 
@@ -1142,15 +1168,20 @@ func TestEscKey_WhileSending_CancelsTurn(t *testing.T) {
 	}
 }
 
-func TestEscKey_WhileIdle_NoOp(t *testing.T) {
+// esc with nothing in flight used to be a no-op; it is "back" now, so the
+// chat screen finally honours the vocabulary the rest of the app uses.
+func TestEscKey_WhileIdle_GoesBack(t *testing.T) {
 	m := newSlashTestModel()
 	m.sending = false
 	initialCount := len(m.messages)
 
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
-	if cmd != nil {
-		t.Error("expected nil cmd from Escape when not sending")
+	if cmd == nil {
+		t.Fatal("expected Escape to arm the back navigation")
+	}
+	if _, ok := cmd().(goBackMsg); !ok {
+		t.Errorf("expected goBackMsg, got %T", cmd())
 	}
 	if len(updated.messages) != initialCount {
 		t.Errorf("expected no new messages, got %d (was %d)", len(updated.messages), initialCount)

@@ -514,7 +514,10 @@ func (m *chatModel) renderPendingMessages() string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		prefixIndent, wrapWidth := m.writePrefix(&b, pendingPrefixStyle, "You")
+		// A textual marker, not just Faint/italic: many terminals drop
+		// those attributes, leaving a queued message indistinguishable
+		// from one already sent.
+		prefixIndent, wrapWidth := m.writePrefix(&b, pendingPrefixStyle, "You (queued)")
 		body := wordWrap(text, wrapWidth)
 		b.WriteString(pendingBodyStyle.Render(indentMultiline(body, prefixIndent)))
 	}

@@ -15,6 +15,7 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/a3tai/openclaw-go/protocol"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/client"
@@ -974,7 +975,11 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			if m.transcript {
 				return m, func() tea.Msg { return goBackFromCronTranscriptMsg{} }
 			}
-			return m, nil
+			// Nothing in flight: esc means "back", the same promise every
+			// other screen keeps (rooms, pickers, forms). Before this it
+			// was a dead key on the one screen the user lives in, and the
+			// footer never said how to leave.
+			return m, m.gateNavigation("Switching agents", true, func() tea.Msg { return goBackMsg{} })
 		case "tab":
 			if ctx, ok := m.completionAtCursor(); ok {
 				m.handleCompletionTab(ctx)
@@ -1535,6 +1540,34 @@ func (m *chatModel) setSize(w, h int) {
 	m.updateViewport()
 }
 
+// fitHeaderTitle places the token block on the right of the title bar.
+// Everything is measured in display columns (not bytes), and the right
+// block degrades through the caller's candidates — full, compact,
+// percentage — before the title itself is truncated. The token block is
+// never dropped while any of its forms fits, which is what happened when
+// the header was merely a few columns short.
+func fitHeaderTitle(left string, variants []string, width int) string {
+	if width <= 0 {
+		return left
+	}
+	for _, right := range variants {
+		if right == "" {
+			continue
+		}
+		if pad := width - displayWidth(left) - displayWidth(right); pad > 0 {
+			return left + strings.Repeat(" ", pad) + right
+		}
+	}
+	if n := len(variants); n > 0 {
+		right := variants[n-1]
+		if budget := width - displayWidth(right) - 1; budget > 4 {
+			return ansi.Truncate(left, budget, "…") +
+				strings.Repeat(" ", width-budget-displayWidth(right)) + right
+		}
+	}
+	return ansi.Truncate(left, width, "…")
+}
+
 // headerView renders the chat header bar. It is a method rather than an
 // inline block so cursorOffset() can measure the same string View() emits.
 func (m chatModel) headerView() string {
@@ -1565,6 +1598,7 @@ func (m chatModel) headerView() string {
 		left += " · " + warnBadgeStyle.Render("↑ "+m.updateLatest)
 	}
 	right := ""
+	var rightVariants []string
 	if m.contextWindow > 0 && m.promptTokens > 0 {
 		// Per-session prompt-token snapshot from sessions.list — the
 		// "live context" size for the latest turn. Capped at 999% so
@@ -1579,18 +1613,27 @@ func (m chatModel) headerView() string {
 		}
 		right = fmt.Sprintf("tokens: %s/%s (%d%%)  $%.2f ",
 			formatTokensShort(m.promptTokens), formatTokensShort(m.contextWindow), pct, cost)
+		rightVariants = append(rightVariants,
+			right,
+			fmt.Sprintf("%s/%s %d%% $%.2f ",
+				formatTokensShort(m.promptTokens), formatTokensShort(m.contextWindow), pct, cost),
+			fmt.Sprintf("%d%% ", pct),
+		)
 	} else if m.stats != nil {
 		newTokens := m.stats.inputTokens + m.stats.outputTokens
 		right = fmt.Sprintf("tokens: %s (%s cached)  $%.2f ",
 			formatTokens(newTokens), formatTokens(m.stats.cacheRead), m.stats.totalCost)
+		rightVariants = append(rightVariants,
+			right,
+			fmt.Sprintf("%s %s $%.2f ", formatTokens(newTokens), formatTokens(m.stats.cacheRead), m.stats.totalCost),
+			fmt.Sprintf("%s ", formatTokens(newTokens)),
+		)
 	}
-	title := left
-	if right != "" {
-		padding := m.width - len(left) - len(right)
-		if padding > 0 {
-			title += strings.Repeat(" ", padding) + right
-		}
-	}
+	// Degrade the right block rather than dropping it when the header is
+	// narrow: the token block used to vanish entirely the moment it did
+	// not fit, which read as "this session has no usage". headerStyle
+	// pads one column each side, so the content box is two narrower.
+	title := fitHeaderTitle(left, rightVariants, m.width-2)
 	hdrStyle := headerStyle
 	if headerColor != "" {
 		hdrStyle = hdrStyle.Background(lipgloss.Color(headerColor))
@@ -1711,7 +1754,7 @@ func (m chatModel) View() string {
 		} else if m.hideInput {
 			help = helpStyle.Render(" /help: commands")
 		} else {
-			helpText := " enter: send | alt+enter: newline | /help: commands"
+			helpText := " enter: send | alt+enter: newline | esc: back | /help: commands"
 			if n := len(m.pendingMessages); n > 0 {
 				helpText += fmt.Sprintf(" | %d queued (up: edit last)", n)
 			}

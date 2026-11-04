@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/lucinate-ai/lucinate/internal/rooms"
 )
@@ -395,20 +396,22 @@ func (m roomsModel) modelPickerView() string {
 	var b strings.Builder
 	// The picker replaces the transcript, so its list has to leave room for the
 	// view's own chrome: the header (2 lines), the picker's title/subtitle
-	// (3), its scroll indicators (2), the filter line (2) and the help line (2).
+	// (3), its scroll indicators (2), the filter line (2) and the help line.
 	// The margin is deliberate — a picker that scrolls the hint off the screen
-	// hides the keys the user needs to leave it.
-	budget := m.height - 16
+	// hides the keys the user needs to leave it. The help line wraps on a
+	// narrow terminal, so its real height is part of the budget.
+	hint := wordWrap(modelPickerHint, m.viewWrapWidth())
+	budget := m.height - 14 - lipgloss.Height(hint)
 	if budget < 3 {
 		budget = 3
 	}
 	switch m.model.stage {
 	case modelStageMember:
-		b.WriteString(assistantPrefixStyle.Render("Wybierz członka pokoju") + "\n")
-		b.WriteString(statusStyle.Render("model obowiązuje tylko w tej sesji pokoju — profil i jego config zostają nietknięte") + "\n\n")
+		b.WriteString(assistantPrefixStyle.Render("Pick a room member") + "\n")
+		b.WriteString(statusStyle.Render(wordWrap("the model applies to this room session only — the profile and its config stay untouched", m.viewWrapWidth())) + "\n\n")
 		members := m.roster()
 		if len(members) == 0 {
-			b.WriteString(statusStyle.Render("ten pokój nie ma rosteru") + "\n")
+			b.WriteString(statusStyle.Render("this room has no roster") + "\n")
 			break
 		}
 		start, end, above, below := windowRows(len(members), m.model.memberCursor, budget)
@@ -433,18 +436,18 @@ func (m roomsModel) modelPickerView() string {
 		if current == "" {
 			current = "profile default"
 		}
-		b.WriteString(assistantPrefixStyle.Render("Model dla @"+m.model.handle) + "\n")
-		b.WriteString(statusStyle.Render("teraz: "+current+" · zmiana na czas tej sesji pokoju (profil nietknięty)") + "\n\n")
+		b.WriteString(assistantPrefixStyle.Render("Model for @"+m.model.handle) + "\n")
+		b.WriteString(statusStyle.Render(wordWrap("now: "+current+" · change applies to this room session (profile untouched)", m.viewWrapWidth())) + "\n\n")
 		switch {
 		case m.model.loading:
-			b.WriteString(statusStyle.Render("wczytuję listę modeli z gatewaya…") + "\n")
+			b.WriteString(statusStyle.Render("loading the model list from the gateway…") + "\n")
 		case m.model.supported != nil && !*m.model.supported:
-			b.WriteString(errorStyle.Render("ten gateway nie wspiera zmiany modelu członka") + "\n")
+			b.WriteString(errorStyle.Render("this gateway cannot switch a member's model") + "\n")
 			b.WriteString(statusStyle.Render(errNoMemberModel.Error()) + "\n")
 		default:
 			options := m.filteredModels()
 			if len(m.model.catalogue) == 0 {
-				b.WriteString(statusStyle.Render("gateway nie zwrócił listy modeli — wpisz nazwę ręcznie: /model @"+m.model.handle+" <nazwa>") + "\n")
+				b.WriteString(statusStyle.Render("the gateway returned no model list — type a name: /model @"+m.model.handle+" <name>") + "\n")
 			}
 			start, end, above, below := windowRows(len(options), m.model.cursor, budget)
 			if above > 0 {
@@ -457,7 +460,7 @@ func (m roomsModel) modelPickerView() string {
 				}
 				marker := ""
 				if options[i] == m.model.current {
-					marker = statusStyle.Render("  (obecny)")
+					marker = statusStyle.Render("  (current)")
 				}
 				b.WriteString(fmt.Sprintf("%s%s%s\n", cursor, options[i], marker))
 			}
@@ -465,14 +468,19 @@ func (m roomsModel) modelPickerView() string {
 				b.WriteString(statusStyle.Render(fmt.Sprintf("  ↓ %d more", below)) + "\n")
 			}
 			if len(m.model.catalogue) > 0 && len(options) == 0 {
-				b.WriteString(statusStyle.Render("brak modelu pasującego do filtra — backspace/ctrl+u czyści") + "\n")
+				b.WriteString(statusStyle.Render("no model matches the filter — backspace/ctrl+u clears it") + "\n")
 			}
-			b.WriteString("\n" + statusStyle.Render("filtr: "+m.model.filter+"▌") + "\n")
+			b.WriteString("\n" + statusStyle.Render("filter: "+m.model.filter+"▌") + "\n")
 		}
 	}
 	if m.model.err != nil {
 		b.WriteString("\n" + errorStyle.Render("error: "+m.model.err.Error()) + "\n")
 	}
-	b.WriteString("\n" + helpStyle.Render("↑/↓ wybór · enter zatwierdź · wpisz aby filtrować · ctrl+u czyści filtr · esc wstecz"))
+	b.WriteString("\n" + helpStyle.Render(hint))
 	return b.String()
 }
+
+// modelPickerHint is the /model overlay's key hint. It is wrapped to the
+// view width by modelPickerView, and its wrapped height is deducted from
+// the list budget so the keys can never scroll off the bottom.
+const modelPickerHint = "↑/↓ choose · enter confirm · type to filter · ctrl+u clears · esc back"

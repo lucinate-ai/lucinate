@@ -65,7 +65,7 @@ func TestRoomsModel_BareCommandListsMembers(t *testing.T) {
 		t.Fatalf("picker state = %+v, want the member list open", next.model)
 	}
 	view := ansi.Strip(next.View())
-	for _, want := range []string{"@matt", "@kowal", "profile default", "sesji pokoju"} {
+	for _, want := range []string{"@matt", "@kowal", "profile default", "room session"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
@@ -109,7 +109,7 @@ func TestRoomsModel_EnterOpensTheModelListAndShowsTheCurrentModel(t *testing.T) 
 		t.Fatal("the capability probe should have reported support")
 	}
 	view := ansi.Strip(next.View())
-	for _, want := range []string{"Model dla @matt", "teraz: profile default", "gpt-5", "claude-sonnet-4"} {
+	for _, want := range []string{"Model for @matt", "now: profile default", "gpt-5", "claude-sonnet-4"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
@@ -196,7 +196,7 @@ func TestRoomsModel_GatewayWithoutTheMethodRefusesInsteadOfPretending(t *testing
 		t.Fatal("the refusal must be explained")
 	}
 	view := ansi.Strip(refused.View())
-	if !strings.Contains(view, "nie wspiera zmiany modelu") {
+	if !strings.Contains(view, "cannot switch a member's model") {
 		t.Errorf("view should say the gateway cannot do it:\n%s", view)
 	}
 	if !strings.Contains(view, rooms.MemberModelMethod) {
@@ -376,7 +376,7 @@ func TestRoomsModel_EmptyCatalogueIsExplainedNotSilent(t *testing.T) {
 		t.Fatal("an empty catalogue must be explained")
 	}
 	view := ansi.Strip(m.View())
-	if !strings.Contains(view, "nie zwrócił listy modeli") {
+	if !strings.Contains(view, "returned no model list") {
 		t.Errorf("view should point at typing the name:\n%s", view)
 	}
 	// Enter on nothing must not send anything.
@@ -459,5 +459,29 @@ func TestRoomsModel_UnknownMemberInTheOverlayIsReported(t *testing.T) {
 	}
 	if next.model.err == nil || !strings.Contains(next.model.err.Error(), "ghost") {
 		t.Errorf("error = %v, want the missing member named", next.model.err)
+	}
+}
+
+// The /model overlay's footer is longer than a narrow terminal, so it is
+// wrapped to the view width and its wrapped height is part of the list
+// budget — the hint must never be clipped.
+func TestRoomsModel_ModelPickerFooterWrapsToWidth(t *testing.T) {
+	s := mdlCatalogue(t, tg.New(t, tg.DefaultOptions()))
+	s.SetMemberModelSupported(true)
+	m := mdlOpenModelStage(t, mdlModel(t, s), "@matt")
+	m.setSize(40, 20)
+
+	out := ansi.Strip(m.modelPickerView())
+	joined := ""
+	for _, line := range strings.Split(out, "\n") {
+		if w := ansi.StringWidth(line); w > 40 {
+			t.Errorf("overlay line is %d columns wide: %q", w, line)
+		}
+		joined += strings.TrimSpace(line) + " "
+	}
+	for _, want := range []string{"esc back", "ctrl+u clears", "enter confirm"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("footer lost %q after wrapping:\n%s", want, out)
+		}
 	}
 }

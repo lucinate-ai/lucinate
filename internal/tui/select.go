@@ -202,12 +202,12 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 	l := list.New(nil, agentDelegate{}, 0, 0)
 	l.Title = "Select an agent"
 	l.SetShowStatusBar(false)
-	// The bubbles list widget renders its own keyboard-hint footer
-	// ("↑ up · ↓/j down · q quit · ? more"). Embedders that surface
-	// actions through native controls suppress every hint line — those
-	// keys typically aren't reachable from the host's input surface
-	// anyway.
-	l.SetShowHelp(!hideHints)
+	// The bubbles list widget renders its own keyboard-hint footer, and
+	// that footer advertises the widget's Quit binding as "v select" plus
+	// "? more" — a `v` that quit the whole app from this picker. The view
+	// owns its hint line (renderHintLine over Actions()) instead, so the
+	// widget footer is always off.
+	l.SetShowHelp(false)
 	l.Styles.Title = headerStyle
 	// Live filtering lets the user narrow a long agent list by pressing
 	// `/` and typing a query, reusing the same fuzzy matcher as the
@@ -223,10 +223,11 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 	// longer moves the cursor.
 	l.KeyMap.CursorUp.SetKeys("up")
 	l.KeyMap.CursorUp.SetHelp("↑", "up")
-	if disableExitKeys {
-		l.KeyMap.Quit.Unbind()
-		l.KeyMap.ForceQuit.Unbind()
-	}
+	// Quit is bound to `v` by bubbles (help text "select"), which read as
+	// navigation and quit the app instead. ctrl+c is handled at the
+	// AppModel level, so unbinding both leaves no key stranded.
+	l.KeyMap.Quit.Unbind()
+	l.KeyMap.ForceQuit.Unbind()
 
 	return selectModel{
 		list:                 l,
@@ -857,17 +858,32 @@ func (m selectModel) View() string {
 	if m.subState == subStateConfirmDelete {
 		return banner + m.viewConfirmDelete()
 	}
-	return banner + m.list.View() + "\n" + hints
+	return banner + m.sizedListView(banner, hints) + "\n" + hints
 }
 
-// renderHints emits the inline action-hint help line, or the empty
+// sizedListView renders the list at the height this frame's chrome leaves.
+// Sizing here (rather than only in setSize) keeps the hint row visible when
+// the hint block wraps, or when the list was sized while the picker was
+// still loading and had no actions to measure.
+func (m selectModel) sizedListView(banner, hints string) string {
+	lm := m.list
+	if m.height > 0 {
+		lm.SetSize(m.width, maxInt(1, m.height-blockRows(banner)-blockRows(hints)))
+	}
+	return lm.View()
+}
+
+// renderHints emits the app-owned action-hint block, or the empty
 // string when the embedder has signalled (via HideActionHints) that it
 // will surface the same actions through native controls.
 func (m selectModel) renderHints() string {
 	if m.hideHints {
 		return ""
 	}
-	return helpStyle.Render(renderActionHints(m.Actions()))
+	if m.filtering() {
+		return renderFilterHint(m.width)
+	}
+	return renderHintLine(m.Actions(), m.width)
 }
 
 func (m selectModel) viewCreateForm() string {
@@ -1076,8 +1092,22 @@ func (m *selectModel) resetFilter() {
 func (m *selectModel) setSize(w, h int) {
 	m.width = w
 	m.height = h
-	m.list.SetSize(w, h-2)
+	m.list.SetSize(w, m.listHeight())
 	m.sizeFormBody()
+}
+
+// listHeight sizes the embedded list to what the view leaves after the
+// connection banner and the action-hint block. The hint wraps at 80
+// columns, so a flat h-2 clipped its last row off a 24-row terminal.
+func (m selectModel) listHeight() int {
+	if m.height <= 0 {
+		return 0
+	}
+	rows := m.height - blockRows(renderConnectionBanner(m.activeConn)) - blockRows(m.renderHints())
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
 }
 
 // sizeFormBody sizes the body viewport used by both the create-agent
