@@ -97,7 +97,7 @@ func TestRoomsRules_TallerPaneShowsAllFourRules(t *testing.T) {
 		"4. never reveal private conversations — replies are published verbatim",
 		"budget: 2–6 members · 3 rounds · 10 member messages",
 		"round 0 is your message",
-		"settled, silent round",
+		"settled — waiting for you",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("/rules view is missing %q:\n%s", want, out)
@@ -169,7 +169,7 @@ func TestRoomsHeader_ShowsTheEndReasonInWords(t *testing.T) {
 					settled,
 				}
 			}(),
-			want: "settled — silent round",
+			want: "settled — waiting for you",
 		},
 		{
 			name: "bounded by rounds",

@@ -113,7 +113,7 @@ func TestDiscussionBudgetFromLog(t *testing.T) {
 				Ended:         true,
 				EndReason:     EndReasonSettledSilentRound,
 			},
-			headerHas: "settled — silent round",
+			headerHas: "settled — waiting for you",
 		},
 	}
 

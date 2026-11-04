@@ -34,7 +34,9 @@ Hard budgets (module constants):
   never free-running, and never past the third round.
 - Within a round the speaking order **rotates** (`_rotate`), so the same member is not always
   first; `member_index` in the task identity records the position.
-- A round in which nobody speaks ends the discussion as `settled / silent_round`.
+- A round in which nobody speaks ends the discussion as `settled / silent_round`; the client shows
+  it as `settled — waiting for you`, because the ball is back with the owner rather than the room
+  being closed.
 - Every member keeps a **watermark** (last seq seen per thread). Pulling a peer in later still
   hands them the complete delta since their watermark, so they miss nothing and burn no turns
   while silent.
@@ -60,6 +62,19 @@ Rules for this Discussion:
 Two consequences a client must respect: a member may legitimately say nothing (`(pass)` becomes
 `turn.settled` with `passed: true`), and every member reply **is republished to the peers** as a
 user-role message — the room is a shared transcript, not a set of private channels.
+
+The constitution says nothing about the **owner** being the audience: it only tells members to
+cite a peer, which is why a room can run three rounds of members addressing each other and end
+with nobody having asked the owner a question (`internal/rooms/talk.go`). So the client appends
+its own **talk contract** to the first message of every room — after the project orientation and
+before the brief pointer — stating that the owner is a participant, that missing decisions are his
+to give, that one concrete question to him ends the turn (no files, no `HANDOFF` in it), that a
+peer mention opens a round so it needs his blessing, that a request for a conversation is not an
+order for a document, and that waiting on him should be said out loud. The gateway's payload has
+no system channel, so the first user message is the only place it can ride; `SendOpening` sends it
+once, so later turns stay clean. This is text shaping, not enforcement: the client shapes what
+members read, it cannot decide who runs — the contract is instruction, and the gateway remains the
+authority on turns.
 
 ## Interventions are supervised, not scripted
 

@@ -195,7 +195,7 @@ func DiscussionBudgetFor(events []Event) DiscussionBudget {
 func (b DiscussionBudget) EndText() string {
 	switch b.EndReason {
 	case EndReasonSettledSilentRound:
-		return "settled — silent round"
+		return "settled — waiting for you"
 	case EndReasonBoundedMaxRounds:
 		return "bounded — max rounds"
 	case EndReasonBoundedMaxMessages:

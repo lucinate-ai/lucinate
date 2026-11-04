@@ -840,7 +840,7 @@ func TestOrientationFromWorktree(t *testing.T) {
 }
 
 func TestClient_SendOpening_PrependsContextOnTheFirstMessage(t *testing.T) {
-	var sendParams []string
+	var sendTexts []string
 	wsURL := fakeServer(t, func(conn *websocket.Conn) {
 		for i := 0; i < 2; i++ {
 			id, method, params := readReq(t, conn)
@@ -849,7 +849,7 @@ func TestClient_SendOpening_PrependsContextOnTheFirstMessage(t *testing.T) {
 				respond(t, conn, id, map[string]any{"events": []any{}, "cursor": 0, "latest_seq": 0, "has_more": false,
 					"authority": map[string]any{"gateway_id": "g", "epoch": 1}})
 			case "groups.send":
-				sendParams = append(sendParams, string(params))
+				sendTexts = append(sendTexts, sendText(t, params))
 				respond(t, conn, id, map[string]any{"accepted": true, "driver_started": true,
 					"event": map[string]any{"room_id": "r1", "seq": 1, "event_id": "e1", "kind": "message.user",
 						"actor": map[string]any{"kind": "user", "id": "u"}, "payload": map[string]any{}, "created_at": 1.0}})
@@ -864,19 +864,76 @@ func TestClient_SendOpening_PrependsContextOnTheFirstMessage(t *testing.T) {
 	if _, err := c.SendOpening(context.Background(), "r1", "co robimy?", "main", orient); err != nil {
 		t.Fatalf("SendOpening: %v", err)
 	}
-	if len(sendParams) != 1 {
-		t.Fatalf("send calls = %d, want 1", len(sendParams))
+	if len(sendTexts) != 1 {
+		t.Fatalf("send calls = %d, want 1", len(sendTexts))
 	}
-	if !strings.Contains(sendParams[0], "kontekst projektu") || !strings.Contains(sendParams[0], "orca_tab_create") {
-		t.Fatalf("first message missing the project context: %s", sendParams[0])
+	if !strings.Contains(sendTexts[0], "kontekst projektu") || !strings.Contains(sendTexts[0], "orca_tab_create") {
+		t.Fatalf("first message missing the project context: %s", sendTexts[0])
 	}
-	if !strings.Contains(sendParams[0], "co robimy?") {
-		t.Fatalf("first message lost the user text: %s", sendParams[0])
+	if !strings.Contains(sendTexts[0], "co robimy?") {
+		t.Fatalf("first message lost the user text: %s", sendTexts[0])
+	}
+	if n := strings.Count(sendTexts[0], DiscussionBlock()); n != 1 {
+		t.Fatalf("first message carries the talk contract %d times, want 1: %s", n, sendTexts[0])
+	}
+	if oi, ci := strings.Index(sendTexts[0], OrientationMarker), strings.Index(sendTexts[0], DiscussionBlock()); oi < 0 || ci < oi {
+		t.Fatalf("talk contract must follow the orientation: %s", sendTexts[0])
+	}
+}
+
+// sendText decodes the text a groups.send carried, so assertions compare the
+// message the gateway saw rather than its JSON escaping.
+func sendText(t *testing.T, params json.RawMessage) string {
+	t.Helper()
+	var p struct {
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		t.Fatalf("send params decode: %v", err)
+	}
+	text, _ := p.Payload["text"].(string)
+	return text
+}
+
+// A room with no project context still has an owner: the talk contract rides
+// the first message even when the orientation is empty.
+func TestClient_SendOpening_CarriesTheTalkContractWithoutOrientation(t *testing.T) {
+	var sendTexts []string
+	wsURL := fakeServer(t, func(conn *websocket.Conn) {
+		for i := 0; i < 2; i++ {
+			id, method, params := readReq(t, conn)
+			switch method {
+			case "groups.log":
+				respond(t, conn, id, map[string]any{"events": []any{}, "cursor": 0, "latest_seq": 0, "has_more": false,
+					"authority": map[string]any{"gateway_id": "g", "epoch": 1}})
+			case "groups.send":
+				sendTexts = append(sendTexts, sendText(t, params))
+				respond(t, conn, id, map[string]any{"accepted": true, "driver_started": true,
+					"event": map[string]any{"room_id": "r1", "seq": 1, "event_id": "e1", "kind": "message.user",
+						"actor": map[string]any{"kind": "user", "id": "u"}, "payload": map[string]any{}, "created_at": 1.0}})
+			default:
+				t.Errorf("unexpected method %q", method)
+				return
+			}
+		}
+	})
+	c := dialTestClient(t, wsURL)
+	if _, err := c.SendOpening(context.Background(), "r1", "co robimy?", "main", Orientation{}); err != nil {
+		t.Fatalf("SendOpening: %v", err)
+	}
+	if len(sendTexts) != 1 {
+		t.Fatalf("send calls = %d, want 1", len(sendTexts))
+	}
+	if !strings.Contains(sendTexts[0], DiscussionBlock()) {
+		t.Fatalf("first message without an orientation lost the talk contract: %s", sendTexts[0])
+	}
+	if strings.Contains(sendTexts[0], OrientationMarker) {
+		t.Fatalf("empty orientation must not render a project block: %s", sendTexts[0])
 	}
 }
 
 func TestClient_SendOpening_LeavesLaterMessagesAlone(t *testing.T) {
-	var sendParams []string
+	var sendTexts []string
 	wsURL := fakeServer(t, func(conn *websocket.Conn) {
 		for i := 0; i < 2; i++ {
 			id, method, params := readReq(t, conn)
@@ -888,7 +945,7 @@ func TestClient_SendOpening_LeavesLaterMessagesAlone(t *testing.T) {
 					"cursor": 1, "latest_seq": 1, "has_more": false,
 					"authority": map[string]any{"gateway_id": "g", "epoch": 1}})
 			case "groups.send":
-				sendParams = append(sendParams, string(params))
+				sendTexts = append(sendTexts, sendText(t, params))
 				respond(t, conn, id, map[string]any{"accepted": true, "driver_started": true,
 					"event": map[string]any{"room_id": "r1", "seq": 2, "event_id": "e2", "kind": "message.user",
 						"actor": map[string]any{"kind": "user", "id": "u"}, "payload": map[string]any{}, "created_at": 2.0}})
@@ -903,14 +960,17 @@ func TestClient_SendOpening_LeavesLaterMessagesAlone(t *testing.T) {
 	if _, err := c.SendOpening(context.Background(), "r1", "drugie pytanie", "main", orient); err != nil {
 		t.Fatalf("SendOpening: %v", err)
 	}
-	if len(sendParams) != 1 {
-		t.Fatalf("send calls = %d, want 1", len(sendParams))
+	if len(sendTexts) != 1 {
+		t.Fatalf("send calls = %d, want 1", len(sendTexts))
 	}
-	if strings.Contains(sendParams[0], "kontekst projektu") {
-		t.Fatalf("context repeated on a later message: %s", sendParams[0])
+	if strings.Contains(sendTexts[0], "kontekst projektu") {
+		t.Fatalf("context repeated on a later message: %s", sendTexts[0])
 	}
-	if !strings.Contains(sendParams[0], "drugie pytanie") {
-		t.Fatalf("text missing: %s", sendParams[0])
+	if strings.Contains(sendTexts[0], DiscussionBlock()) {
+		t.Fatalf("talk contract repeated on a later message: %s", sendTexts[0])
+	}
+	if sendTexts[0] != "drugie pytanie" {
+		t.Fatalf("later message must be sent unchanged, got: %s", sendTexts[0])
 	}
 }
 

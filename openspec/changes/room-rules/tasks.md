@@ -26,17 +26,25 @@
       round-robin = next member; states that later rounds follow peer mentions and the gateway's
       rotation.
 
-## 4. Presets
+## 4. Talk contract (replaces the per-preset peer-discussion flag)
 
-- [ ] 4.1 `peer discussion` flag on a room preset (`on` default, `off` optional), injected into
-      the first message as a room instruction alongside the handoff contract; `lucinate rooms
-      presets` shows the flag.
-- [ ] 4.2 The instruction is honest about enforcement: "peers may pull each other in" / "answer
-      only when addressed", never "the client will block peer mentions".
+- [x] 4.1 `DiscussionBlock()` (`internal/rooms/talk.go`) carries the five-point contract: the owner
+      is the source of decisions, one concrete question to him ends the turn (no files, no
+      `HANDOFF`), a peer mention opens a round, a conversation request is not an order for a
+      document, and waiting on him is said out loud. Under 1200 bytes.
+- [x] 4.2 The instruction is honest about enforcement: it is text the client injects into the
+      first message, never a claim that the client blocks peer mentions.
+- [x] 4.3 `SendOpening` appends the contract exactly once, after the orientation and before the
+      brief pointer, including when the orientation is empty; later messages are untouched.
+- [x] 4.4 `DiscussionBudget.EndText()` reports `settled — waiting for you`; the `/rules` overlay
+      and `docs/room-rules.md` use the same label.
+- [x] 4.5 Tests: five points and size (`talk_test.go`), first message carries it exactly once and
+      after the orientation, second message does not, empty orientation still carries it
+      (`rooms_test.go`), and the settled label (`discussion_test.go`, `rooms_rules_test.go`).
 
 ## 5. Verification
 
-- [ ] 5.1 `go vet ./...`, `gofmt -l .`, `go test ./...`.
+- [x] 5.1 `go vet ./...`, `gofmt -l .`, `go test ./...`.
 - [ ] 5.2 Live pass against `hermes dashboard` v0.22.5: two profiles, broadcast round, one peer
       mention, one stop; header shows rounds/messages and the gateway's end reason.
 - [x] 5.3 `docs/rooms.md` and `README.md` point at `docs/room-rules.md`.

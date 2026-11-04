@@ -290,9 +290,6 @@ const DefaultThreadID = "main"
 // message is a fresh conversation, which is exactly when the members need
 // to be told where they are.
 func (c *Client) SendOpening(ctx context.Context, roomID, text, threadID string, orient Orientation) (Event, error) {
-	if orient.Empty() {
-		return c.Send(ctx, roomID, text, threadID)
-	}
 	page, err := c.Log(ctx, roomID, 0, 50)
 	if err != nil {
 		return Event{}, err
@@ -302,9 +299,15 @@ func (c *Client) SendOpening(ctx context.Context, roomID, text, threadID string,
 			return c.Send(ctx, roomID, text, threadID)
 		}
 	}
-	block := orient.Block()
-	block += briefPointer(orient)
-	return c.Send(ctx, roomID, block+"\n"+text, threadID)
+	var chunks []string
+	if block := strings.TrimRight(orient.Block(), "\n"); block != "" {
+		chunks = append(chunks, block)
+	}
+	chunks = append(chunks, DiscussionBlock())
+	if pointer := strings.TrimRight(briefPointer(orient), "\n"); pointer != "" {
+		chunks = append(chunks, pointer)
+	}
+	return c.Send(ctx, roomID, strings.Join(chunks, "\n")+"\n"+text, threadID)
 }
 
 // briefPointer writes the project brief into the room's shared directory and

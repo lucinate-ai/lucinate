@@ -612,7 +612,7 @@ func roomRulesNotice() string {
 		"budget: 2–6 members · 3 rounds · 10 member messages\n" +
 		"  round 0 is your message: @mention picks who answers; no mention means everyone\n" +
 		"  rounds 1 and 2 are opt-in: only a peer's citation pulls a member in\n" +
-		"  a round where nobody speaks ends the discussion — settled, silent round\n" +
+		"  a round where nobody speaks ends the discussion: settled — waiting for you\n" +
 		"  the gateway stops at 3 rounds or 10 member messages and says which"
 }
 

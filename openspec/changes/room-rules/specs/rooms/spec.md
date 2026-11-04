@@ -36,7 +36,7 @@ coordinates, and the reason a discussion ended.
 #### Scenario: A discussion that ended without a new round
 
 - **WHEN** the gateway settles the discussion because no member had anything new to say
-- **THEN** the header states `settled — silent round`
+- **THEN** the header states `settled — waiting for you` — the ball is with the owner, not closed
 
 #### Scenario: A discussion that hit a cap
 
@@ -81,19 +81,40 @@ SHALL NOT imply that the client decides who runs.
 - **THEN** the mode line states that the client addresses the next member, and that later rounds
   still follow peer mentions and the gateway's rotation
 
-### Requirement: A room preset can state its peer-discussion intent
+### Requirement: The first room message tells members the owner is the audience
 
-A room preset MAY carry a `peer discussion` flag; the flag SHALL be carried into the room as an
-instruction in the first message, never as a client-side block.
+The client SHALL append a talk contract to the first message of every room, once, whether or not
+the room carries a project orientation. The contract SHALL state that the owner is a participant
+and the source of decisions and missing numbers; that one concrete question to the owner ends the
+turn with no files and no `HANDOFF`; that citing a peer opens the next round and needs the owner's
+blessing; that a request for a conversation, brainstorming or a plan is a conversation, not an
+order for a document; and that waiting on the owner must be said out loud. The contract is an
+instruction the client injects into text; the client does not claim to enforce who runs.
 
-#### Scenario: Preset with peer discussion on
+#### Scenario: The first message carries the contract
 
-- **WHEN** a preset with `peer discussion: on` starts a room
-- **THEN** the room's first message tells the members they may cite a peer to pull them into the
-  next round
+- **WHEN** a room's first message is sent, with or without a project orientation
+- **THEN** the message carries the talk contract exactly once, after the project orientation and
+  before the brief pointer
 
-#### Scenario: Preset with peer discussion off
+#### Scenario: Later messages stay clean
 
-- **WHEN** a preset with `peer discussion: off` starts a room
-- **THEN** the first message tells the members to answer only when addressed
-- **AND** the client does not claim to block peer mentions, because it cannot
+- **WHEN** the room already has a user message and the next one is sent
+- **THEN** no project orientation and no talk contract are prepended; the text is sent unchanged
+
+#### Scenario: A member that never asks the owner is wrong
+
+- **WHEN** a member lacks a decision, a number or an access and answers its peers without asking
+  the owner one concrete question
+- **THEN** that reply violates the contract — a question to the owner ends the turn and is the
+  expected answer, not a document or a peer mention
+
+### Requirement: A discourse that ends silently returns the ball to the owner
+
+When no member opens another round, the client SHALL report the discussion as
+`settled — waiting for you` rather than implying the room is closed.
+
+#### Scenario: The end reason is shown in words
+
+- **WHEN** the discussion ends because a round produced no new member message
+- **THEN** the header states `settled — waiting for you`
