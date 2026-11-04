@@ -332,6 +332,43 @@ func (m roomsModel) pendingFor(handle string) (rooms.PendingAction, bool, bool) 
 	return found, n == 1, n > 1
 }
 
+// shortcutApproval is the one approval enter/x can resolve without a handle.
+// More than one pending action — or one that is a retry, not an approval —
+// keeps the explicit /approve @handle once|deny form: guessing which turn the
+// user meant would resolve the wrong one.
+func (m roomsModel) shortcutApproval() (rooms.PendingAction, string, bool) {
+	if len(m.pending) != 1 || !m.pending[0].IsApproval() {
+		return rooms.PendingAction{}, "", false
+	}
+	handle := m.handleForMember(m.pending[0].MemberID)
+	if handle == "" {
+		return rooms.PendingAction{}, "", false
+	}
+	return m.pending[0], handle, true
+}
+
+// approveShortcut resolves the single blocked member through the same
+// validation path as /approve, so the key and the command cannot drift.
+func (m roomsModel) approveShortcut(handle, choice string) (roomsModel, tea.Cmd) {
+	next, cmd, _ := m.cmdApprove([]string{"@" + handle, choice})
+	return next, cmd
+}
+
+// cycleRoutingMode walks the three modes the gateway accepts: everyone
+// answers, one moderator answers, members take turns — then round again.
+// @mention routing is implicit and untouched: it outranks the mode.
+func (m roomsModel) cycleRoutingMode() (roomsModel, tea.Cmd) {
+	next := rooms.RouteBroadcast
+	switch m.roomPrefs().RoutingMode() {
+	case rooms.RouteBroadcast:
+		next = rooms.RouteModerator
+	case rooms.RouteModerator:
+		next = rooms.RouteRoundRobin
+	}
+	nextModel, cmd, _ := m.setRoutingMode(next, "")
+	return nextModel, cmd
+}
+
 // ── colours ──────────────────────────────────────────────────────────────────
 
 // memberStyle renders a member's header. The colour comes from the room's

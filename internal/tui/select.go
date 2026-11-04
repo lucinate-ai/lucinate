@@ -24,6 +24,17 @@ type agentItem struct {
 	sessionKey string
 }
 
+// roomsItem is the picker's first-class entry for Hermes rooms. It sits above
+// the profiles because multi-profile rooms — not one-to-one chat — are the
+// app's reason to exist, so the surface is one keystroke from launch.
+type roomsItem struct {
+	label string
+}
+
+// FilterValue keeps the row reachable through the same fuzzy filter the
+// profiles use, so typing "rooms" narrows to it.
+func (i roomsItem) FilterValue() string { return "rooms multi-profile chats" }
+
 // FilterValue is the haystack the bubbles list filter (here: fuzzy
 // match) runs against. Concatenating Name and ID lets the user narrow
 // the list by either — typing part of a display name or part of the
@@ -43,6 +54,19 @@ func (d agentDelegate) Spacing() int                            { return 0 }
 func (d agentDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d agentDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	if r, ok := item.(roomsItem); ok {
+		label := r.label
+		if label == "" {
+			label = defaultRoomsLabel
+		}
+		if index == m.Index() {
+			fmt.Fprint(w, lipgloss.NewStyle().Foreground(accent).Bold(true).Render("> "+label))
+			return
+		}
+		fmt.Fprint(w, "  "+label)
+		return
+	}
+
 	i, ok := item.(agentItem)
 	if !ok {
 		return
@@ -75,6 +99,11 @@ const (
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
+// defaultRoomsLabel is the picker's rooms row. The live room count is
+// appended only when the rooms list has already been loaded this session —
+// the picker never invents a number it has not been told.
+const defaultRoomsLabel = "Rooms — multi-profile chats"
+
 // selectModel is the agent selection view.
 type selectModel struct {
 	list     list.Model
@@ -101,6 +130,15 @@ type selectModel struct {
 	// mode — legacy embedders that own the connection lifecycle
 	// themselves leave this false.
 	showConnections bool
+
+	// showRooms mirrors backend.Capabilities.Rooms. When true the picker
+	// carries a rooms entry above the profiles — rooms are the product, and
+	// a connection that cannot host them must not show a dead row.
+	showRooms bool
+
+	// roomCount is how many live rooms the gateway last reported, or -1
+	// when the rooms view has not loaded a list yet.
+	roomCount int
 
 	// useWorkspace mirrors backend.Capabilities.AgentWorkspace —
 	// only OpenClaw uses the workspace field today. When false, the
@@ -194,10 +232,12 @@ type agentDeletedMsg struct {
 func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeConn *config.Connection, disableExitKeys bool, autoPickName string) selectModel {
 	useWorkspace := false
 	allowAgentMgmt := false
+	showRooms := false
 	if b != nil {
 		caps := b.Capabilities()
 		useWorkspace = caps.AgentWorkspace
 		allowAgentMgmt = caps.AgentManagement
+		showRooms = caps.Rooms
 	}
 	l := list.New(nil, agentDelegate{}, 0, 0)
 	l.Title = "Select an agent"
@@ -235,6 +275,8 @@ func newSelectModel(b backend.Backend, hideHints, showConnections bool, activeCo
 		loading:              true,
 		hideHints:            hideHints,
 		showConnections:      showConnections,
+		showRooms:            showRooms,
+		roomCount:            -1,
 		useWorkspace:         useWorkspace,
 		allowAgentManagement: allowAgentMgmt,
 		activeConn:           activeConn,
@@ -405,13 +447,22 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 			return m, nil
 		}
 		m.mainKey = msg.result.MainKey
-		items := make([]list.Item, len(msg.result.Agents))
-		for i, a := range msg.result.Agents {
+		// The rooms entry rides above the profiles on a connection that
+		// hosts rooms. agentOffset is the index of the first agent, so the
+		// auto-pick paths below land on the intended row instead of the
+		// rooms row at 0.
+		items := make([]list.Item, 0, len(msg.result.Agents)+1)
+		agentOffset := 0
+		if m.showRooms {
+			items = append(items, roomsItem{label: m.roomsLabel()})
+			agentOffset = 1
+		}
+		for _, a := range msg.result.Agents {
 			sessionKey := m.mainKey
 			if a.ID != msg.result.DefaultID {
 				sessionKey = a.ID
 			}
-			items[i] = agentItem{agent: a, sessionKey: sessionKey}
+			items = append(items, agentItem{agent: a, sessionKey: sessionKey})
 		}
 		m.list.SetItems(items)
 
@@ -427,7 +478,7 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 			matched := false
 			for i, a := range msg.result.Agents {
 				if a.ID == query {
-					m.list.Select(i)
+					m.list.Select(i + agentOffset)
 					m.selected = true
 					matched = true
 					break
@@ -437,7 +488,7 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 				lc := strings.ToLower(query)
 				for i, a := range msg.result.Agents {
 					if strings.ToLower(a.Name) == lc {
-						m.list.Select(i)
+						m.list.Select(i + agentOffset)
 						m.selected = true
 						matched = true
 						break
@@ -463,8 +514,10 @@ func (m selectModel) Update(msg tea.Msg) (selectModel, tea.Cmd) {
 			return m, nil
 		}
 
-		// Auto-select if there's only one agent.
-		if len(msg.result.Agents) == 1 {
+		// Auto-select if there's only one agent — but not when the rooms
+		// row is present: there is then a real choice, and the picker must
+		// not skip past it straight into one-to-one chat.
+		if len(msg.result.Agents) == 1 && agentOffset == 0 {
 			m.selected = true
 		}
 		return m, nil
@@ -532,6 +585,11 @@ func (m selectModel) handleKey(msg tea.KeyPressMsg) (selectModel, tea.Cmd) {
 	// still gets the keystroke.
 	if msg.String() == "enter" {
 		if !m.loading && m.err == nil {
+			// The rooms row opens the room list through the same guard and
+			// navigation as /rooms, rather than picking an agent.
+			if _, ok := m.list.SelectedItem().(roomsItem); ok {
+				return m.TriggerAction("view-rooms")
+			}
 			if item, ok := m.list.SelectedItem().(agentItem); ok {
 				m.selected = true
 				m.selecting = true
@@ -610,6 +668,11 @@ func (m selectModel) Actions() []Action {
 		return nil
 	}
 	var actions []Action
+	// Rooms lead the hint line on a connection that hosts them: the surface
+	// is the product, and r is the shortest path to it from launch.
+	if m.showRooms && !m.loading && m.err == nil {
+		actions = append(actions, Action{ID: "view-rooms", Label: "Rooms", Key: "r"})
+	}
 	if !m.loading && m.err == nil && m.allowAgentManagement {
 		actions = append(actions, Action{ID: "new-agent", Label: "New agent", Key: "n"})
 		if m.list.SelectedItem() != nil {
@@ -697,6 +760,17 @@ func (m selectModel) TriggerAction(id string) (selectModel, tea.Cmd) {
 		return m, func() tea.Msg {
 			return showCronsMsg{filterAgentID: "", filterLabel: "all agents"}
 		}
+	case "view-rooms":
+		// The same guard /rooms runs in chat: a connection without a rooms
+		// endpoint says so instead of opening a view that would dial one.
+		if m.loading {
+			return m, nil
+		}
+		if m.backend == nil || !m.backend.Capabilities().Rooms {
+			m.err = fmt.Errorf("rooms are not available on this connection — rooms need a Hermes gateway")
+			return m, nil
+		}
+		return m, func() tea.Msg { return showRoomsMsg{} }
 	}
 	return m, nil
 }
@@ -1070,6 +1144,20 @@ func (m selectModel) backupHint() string {
 func (m selectModel) selectedAgent() (agentItem, bool) {
 	item, ok := m.list.SelectedItem().(agentItem)
 	return item, ok
+}
+
+// roomsLabel is the picker row's text. The count is shown only once the
+// rooms view has loaded a list (roomCount >= 0); otherwise the row states
+// what it opens and nothing more.
+func (m selectModel) roomsLabel() string {
+	if m.roomCount <= 0 {
+		return defaultRoomsLabel
+	}
+	noun := "rooms"
+	if m.roomCount == 1 {
+		noun = "room"
+	}
+	return fmt.Sprintf("%s · %d %s", defaultRoomsLabel, m.roomCount, noun)
 }
 
 // filtering reports whether the agent list's fuzzy filter input is

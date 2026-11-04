@@ -616,6 +616,10 @@ func (m AppModel) update(msg tea.Msg) (AppModel, tea.Cmd) {
 
 	case goBackMsg:
 		m.state = viewSelect
+		// The picker's rooms row carries the count the rooms view last
+		// loaded; without a load liveRoomCount is -1 and the row shows no
+		// number rather than inventing one.
+		m.selectModel.roomCount = m.roomsModel.liveRoomCount()
 		return m, nil
 
 	case requestExitMsg:

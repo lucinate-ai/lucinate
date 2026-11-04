@@ -625,6 +625,16 @@ func (m roomsModel) browseRows() []browseRow {
 	return rows
 }
 
+// liveRoomCount is how many live rooms the last load reported, or -1 when
+// this session has no meaningful list yet — the picker then shows the plain
+// rooms row instead of claiming the account has zero.
+func (m roomsModel) liveRoomCount() int {
+	if !m.loaded {
+		return -1
+	}
+	return len(m.live)
+}
+
 type browseRowKind int
 
 const (
@@ -679,11 +689,16 @@ func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
 			m.sub = roomsBrowse
 			return m, nil
 		}
+		// The create IS the entry: the room the gateway accepted is the one
+		// the user asked for, so land in its transcript instead of making
+		// them press enter a second time on the browse list. The notice
+		// stays in m.status, which the transcript renders under the log.
+		m.err = nil
 		m.status = fmt.Sprintf("room %s ready — %s", msg.roomID, rosterLabel(msg.room))
 		if msg.notice != "" {
 			m.notice = msg.notice
 		}
-		m.sub = roomsBrowse
+		m.sub = roomsTranscript
 		m.openRoomID = msg.roomID
 		m.openRoom = &msg.room
 		m.page = rooms.LogPage{}
@@ -691,7 +706,9 @@ func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
 		m.interrupted = nil
 		m.memberModels = nil
 		m.model = modelPicker{}
-		return m, tea.Batch(m.loadAll(), m.loadLog(msg.roomID, 0))
+		// Same batch as opening a room from the list: the log, the roster's
+		// live state, and the poll tick that keeps both honest.
+		return m, tea.Batch(m.loadAll(), m.loadLog(msg.roomID, 0), m.loadState(), roomsTick())
 
 	case restartDoneMsg:
 		if msg.err != nil {
@@ -1268,6 +1285,12 @@ func (m roomsModel) handleTranscriptKey(msg tea.KeyPressMsg, key string) (roomsM
 	case "enter":
 		text := strings.TrimSpace(m.composer)
 		if text == "" {
+			// Nothing typed: enter resolves the room's single blocked
+			// member instead of doing nothing. With several, the banner
+			// keeps the explicit /approve @handle form (see hint()).
+			if _, handle, ok := m.shortcutApproval(); ok {
+				return m.approveShortcut(handle, "once")
+			}
 			return m, nil
 		}
 		// A leading backslash escapes a message that would otherwise be
@@ -1281,6 +1304,20 @@ func (m roomsModel) handleTranscriptKey(msg tea.KeyPressMsg, key string) (roomsM
 		}
 		m.composer = ""
 		return m.post(text)
+	case "m":
+		// Mode cycling is gated on an empty draft: 'm' is a letter in a
+		// message first, a shortcut second.
+		if strings.TrimSpace(m.composer) == "" {
+			return m.cycleRoutingMode()
+		}
+	case "x":
+		// Deny is scoped to the transcript and to an empty draft: 'x' types
+		// normally inside a message, and in the browse list x is disband.
+		if strings.TrimSpace(m.composer) == "" {
+			if _, handle, ok := m.shortcutApproval(); ok {
+				return m.approveShortcut(handle, "deny")
+			}
+		}
 	case "up":
 		return m.scrollTranscript(1)
 	case "down":
@@ -1414,7 +1451,7 @@ func (m roomsModel) handleTranscriptCommand(text string) (roomsModel, tea.Cmd) {
 	case "/help", "/?":
 		m.notice = "room commands\n" +
 			"  /rooms, /back, /list — back to the room list\n" +
-			"  /mode [broadcast|moderator|round-robin] — who answers\n" +
+			"  /mode [broadcast|moderator|round-robin] — who answers (m cycles them)\n" +
 			"  /moderator [@handle] — the member moderator mode sends to\n" +
 			"  /export [md|json|both] — write the transcript to the lucinate data dir\n" +
 			"  /compact [N] — brief the older transcript through the room, keep N verbatim\n" +
@@ -1848,7 +1885,16 @@ func (m roomsModel) hint() string {
 	case roomsInvite:
 		return "↑/↓ move · space toggle · a all · c clear · r refresh profiles · enter create · esc cancel"
 	case roomsTranscript:
-		return "enter send · ↑↓/PgUp/PgDn/wheel scroll · End live · /help · /mode · /model · /export · /compact · /find · /cost · /rooms back"
+		// The leading segment is state-dependent: a room blocked on one
+		// member resolves it with enter/x, while several blocked members
+		// keep the explicit command (the banner shows it per handle).
+		head := "enter send"
+		if _, handle, ok := m.shortcutApproval(); ok {
+			head = "enter: approve once · x: deny (@" + handle + ")"
+		} else if len(m.pending) > 1 {
+			head = "enter send · several blocked — /approve @handle once|deny"
+		}
+		return head + " · m: mode · ↑↓/PgUp/PgDn/wheel scroll · End live · /help · /model · /export · /compact · /find · /cost · /rooms back"
 	}
 	return "↑/↓ move · enter open · n new room · p save as predefined · x disband · r refresh · esc back"
 }

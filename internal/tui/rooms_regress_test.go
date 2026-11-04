@@ -92,6 +92,6 @@ func TestRoomsView_WrapsHintAndInviteCopyToWidth(t *testing.T) {
 
 	transcript := roomsModel{width: width, height: 30, sub: roomsTranscript}
 	assertWrapped(t, transcript, []string{
-		"enter send · ↑↓/PgUp/PgDn/wheel scroll · End live · /help · /mode · /model · /export · /compact · /find · /cost · /rooms back",
+		"enter send · m: mode · ↑↓/PgUp/PgDn/wheel scroll · End live · /help · /model · /export · /compact · /find · /cost · /rooms back",
 	})
 }

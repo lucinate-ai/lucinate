@@ -268,11 +268,14 @@ func TestRoomsW1_CreateRoomFromTheInviteList(t *testing.T) {
 		t.Fatal("a created room should be opened")
 	}
 	requireRoomDir(t, m.openRoomID)
-	if m.sub != roomsBrowse {
-		t.Errorf("sub = %v, want back at the browse list after a create", m.sub)
+	if m.sub != roomsTranscript {
+		t.Errorf("sub = %v, want the created room's transcript — creating a room is entering it", m.sub)
 	}
 	if !strings.Contains(m.status, "ready") {
 		t.Errorf("status = %q, want the new room reported", m.status)
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "room "+m.openRoomID+" ready") {
+		t.Errorf("the create notice is not visible in the transcript:\n%s", view)
 	}
 }
 
