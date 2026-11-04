@@ -39,4 +39,4 @@
 - [ ] 5.1 `go vet ./...`, `gofmt -l .`, `go test ./...`.
 - [ ] 5.2 Live pass against `hermes dashboard` v0.22.5: two profiles, broadcast round, one peer
       mention, one stop; header shows rounds/messages and the gateway's end reason.
-- [ ] 5.3 `docs/rooms.md` and `README.md` point at `docs/room-rules.md`.
+- [x] 5.3 `docs/rooms.md` and `README.md` point at `docs/room-rules.md`.

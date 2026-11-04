@@ -165,6 +165,12 @@ per-member seat the gateway cannot honour.
 The same surface is scriptable: `lucinate rooms list|create|send|log|state|
 approve|retry|rename|stop|disband`. See [docs/rooms.md](docs/rooms.md).
 
+A room is a bounded discussion: round 0 answers your mentions (no mention means
+everyone), later rounds exist only when a member cites a peer, and the room stops
+at 3 rounds or 10 member messages. `/rules` shows that constitution, the header
+shows `round 2/3 · 7/10 messages`, and `m` cycles the routing mode. The policy
+itself — quoted from the gateway — is in [docs/room-rules.md](docs/room-rules.md).
+
 ### Settings
 Use `/settings` to open the settings view (also reachable as `/config`). Your settings are persisted to `~/.lucinate/config.json`.
 

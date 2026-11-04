@@ -101,6 +101,13 @@ The room's shared directory is created only after `groups.create` accepts the id
 for the requested slug first left an empty `.rooms/<requested-id>` behind whenever the gateway
 answered 4110 (tombstoned id) and the client retried under a minted one.
 
+## The room's rules live in one place
+
+Who may speak, how many rounds a discussion gets, when a member may pass, and how a citation pulls
+a peer into the next round are all decided by the gateway. [`room-rules.md`](room-rules.md) records
+that policy verbatim (constants, the member prompt, what the log exposes) and what the client may
+honestly claim about it; the in-room `/rules` overlay quotes the same text.
+
 ## Cost and usage
 
 Member usage arrives inline on `message.complete.payload.usage` in the chat; in rooms the
