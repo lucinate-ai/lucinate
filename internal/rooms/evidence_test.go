@@ -9,7 +9,7 @@ import (
 
 func TestVerifyReply_NoReceiptIsNone(t *testing.T) {
 	dir := t.TempDir()
-	ev := VerifyReply(dir, "a", "zrobilem zadanie, wszystko gotowe")
+	ev := VerifyReply(dir, "a", "moim zdaniem warto najpierw zebrać wymagania")
 	if ev.Status != EvidenceNone {
 		t.Errorf("Status = %q, want none", ev.Status)
 	}
@@ -18,6 +18,29 @@ func TestVerifyReply_NoReceiptIsNone(t *testing.T) {
 	}
 	if len(ev.Receipts) != 0 {
 		t.Errorf("Receipts = %+v, want none", ev.Receipts)
+	}
+}
+
+// A reply that says it wrote something without a HANDOFF receipt is a claim,
+// not an opinion — and not a proven write either.
+func TestVerifyReplyClaimsWithoutAReceipt(t *testing.T) {
+	dir := t.TempDir()
+	claimed := VerifyReply(dir, "a", "wdrożyłem zmiany w pliku X.md")
+	if claimed.Status != EvidenceClaimed {
+		t.Fatalf("Status = %q, want claimed (%s)", claimed.Status, claimed.Detail)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "X.md"), []byte("zmiany"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	verified := VerifyReply(dir, "a", "wdrożyłem zmiany w pliku X.md\nHANDOFF X.md bytes=6")
+	if verified.Status != EvidenceVerified {
+		t.Fatalf("Status = %q, want verified (%s)", verified.Status, verified.Detail)
+	}
+
+	opinion := VerifyReply(dir, "a", "uważam, że to dobry kierunek")
+	if opinion.Status != EvidenceNone {
+		t.Errorf("Status = %q, want none for a pure opinion", opinion.Status)
 	}
 }
 

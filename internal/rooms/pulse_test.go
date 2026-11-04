@@ -43,6 +43,30 @@ func TestPulseText_EmptyGoalAndBoardDefaults(t *testing.T) {
 	}
 }
 
+// A pulse whose brief digest moved must say so; one whose digest matches the
+// room's pointer must not, or the line becomes noise members learn to skip.
+func TestPulseTextCarriesTheRefreshedBriefDigest(t *testing.T) {
+	const oldDigest = "0123456789ab"
+	const newDigest = "ba9876543210"
+
+	unchanged := PulseTextWithBrief("", "", oldDigest, oldDigest)
+	if strings.Contains(unchanged, "brief sha=") {
+		t.Errorf("unchanged digest still adds a refresh line:\n%s", unchanged)
+	}
+
+	changed := PulseTextWithBrief("", "", newDigest, oldDigest)
+	if !strings.Contains(changed, "brief sha="+newDigest+" — odświeżony, przeczytaj ponownie") {
+		t.Errorf("changed digest missing the refresh line:\n%s", changed)
+	}
+	if !strings.HasPrefix(changed, "[Puls pokoju]") || !strings.HasSuffix(changed, pulseAsk) {
+		t.Errorf("the refresh line broke the pulse's shape:\n%s", changed)
+	}
+
+	if line := BriefRefreshLine("", ""); line != "" {
+		t.Errorf("BriefRefreshLine with no digests = %q, want empty", line)
+	}
+}
+
 func TestShouldPulse(t *testing.T) {
 	tests := []struct {
 		name    string

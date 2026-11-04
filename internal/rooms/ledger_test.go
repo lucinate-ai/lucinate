@@ -111,6 +111,48 @@ not json at all
 	}
 }
 
+// A member in a live room wrote the claim/file/ts shape instead of the
+// client's task/artifact/at. Dropping those rows hid every owner from the
+// board and from duplicate detection.
+func TestReadLedgerAcceptsTheMemberShape(t *testing.T) {
+	dir := t.TempDir()
+	line := `{"claim":"grep maili i sekwencji pod frazy zakazane","owner":"freelancer","status":"done","file":"freelancer-grep-maile-2026-11-04.md","ts":"2026-11-04"}`
+	if err := os.WriteFile(LedgerPath(dir), []byte(line+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	claims, err := ReadLedger(dir)
+	if err != nil {
+		t.Fatalf("ReadLedger: %v", err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("ReadLedger returned %d claims, want 1: %+v", len(claims), claims)
+	}
+	c := claims[0]
+	if c.Task != "grep maili i sekwencji pod frazy zakazane" {
+		t.Errorf("Task = %q, want the member's claim text", c.Task)
+	}
+	if c.Owner != "freelancer" || c.Status != "done" {
+		t.Errorf("Owner/Status = %q/%q", c.Owner, c.Status)
+	}
+	if c.Artifact != "freelancer-grep-maile-2026-11-04.md" {
+		t.Errorf("Artifact = %q, want the member's file", c.Artifact)
+	}
+	if c.At.IsZero() || c.At.Format("2006-01-02") != "2026-11-04" {
+		t.Errorf("At = %v, want the parsed date-only ts", c.At)
+	}
+
+	board := Board(claims)
+	if !strings.Contains(board, "zrobione: grep maili") || !strings.Contains(board, "@freelancer") {
+		t.Errorf("Board does not show the member's claim:\n%s", board)
+	}
+
+	dup := DuplicateOf(claims, "@ania", "freelancer-grep-maile-2026-11-04.md")
+	if dup == nil || dup.Owner != "freelancer" {
+		t.Errorf("DuplicateOf = %+v, want the member's done claim", dup)
+	}
+}
+
 func TestDuplicateOf_OnlyCountsAnotherOwnersDoneArtifact(t *testing.T) {
 	claims := []Claim{
 		{Task: "a", Owner: "a", Status: "done", Artifact: "out.md", Bytes: 5},

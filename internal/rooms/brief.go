@@ -27,11 +27,15 @@ const (
 	// brief larger than this stops being a summary.
 	maxBriefBytes = 6000
 	// section limits, applied before the byte budget.
-	briefRulesMax     = 12
-	briefReadmeLines  = 40
-	briefReadmeBytes  = 1500
-	briefTasksMax     = 15
-	briefHandoffBytes = 1500
+	briefRulesMax      = 12
+	briefReadmeLines   = 40
+	briefReadmeBytes   = 1500
+	briefTasksMax      = 15
+	briefHandoffBytes  = 1500
+	briefFallbackFiles = 2
+	briefFallbackBytes = 800
+	briefDirsMax       = 15
+	briefDirtyFilesMax = 10
 	// briefGitTimeout bounds all git probes together, not each one: the call
 	// happens on the send path, so a broken repo must not stall the room.
 	briefGitTimeout = 5 * time.Second
@@ -41,15 +45,17 @@ const (
 
 // Brief is the shared project state written to <room>/brief.md.
 type Brief struct {
-	Project string // filepath.Base(repo root)
-	Path    string // absolute repo root
-	Branch  string
-	Head    string   // short sha, 7-12 chars
-	Dirty   int      // count of `git status --porcelain` lines
-	Rules   []string // first 12 non-empty bullet lines of AGENTS.md, if present
-	Readme  string   // first 40 lines of README.md / README, trimmed to 1500 bytes
-	Tasks   []string // unchecked "- [ ]" items from openspec/changes/*/tasks.md, max 15
-	Handoff string   // newest file under docs/handoff/, first 1500 bytes, if present
+	Project    string // filepath.Base(repo root)
+	Path       string // absolute repo root
+	Branch     string
+	Head       string   // short sha, 7-12 chars
+	Dirty      int      // count of `git status --porcelain` lines
+	Rules      []string // first 12 non-empty bullet lines of AGENTS.md, if present
+	Readme     string   // first 40 lines of README.md / README, trimmed to 1500 bytes
+	Tasks      []string // unchecked "- [ ]" items from openspec/changes/*/tasks.md, max 15
+	Handoff    string   // newest file under docs/handoff/, first 1500 bytes, if present
+	Dirs       []string // up to 15 top-level directory names, the README fallback
+	DirtyFiles []string // first 10 paths from git status --porcelain
 }
 
 // BuildBrief reads the project state under repoPath. Missing files are normal,
@@ -90,18 +96,63 @@ func BuildBrief(repoPath string) (Brief, error) {
 		}
 	}
 	if status, ok := runGit(ctx, root, "status", "--porcelain"); ok {
-		for _, line := range strings.Split(status, "\n") {
-			if strings.TrimSpace(line) != "" {
-				b.Dirty++
+		for _, line := range splitLines(status) {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			b.Dirty++
+			if len(b.DirtyFiles) < briefDirtyFilesMax {
+				if path := porcelainPath(line); path != "" {
+					b.DirtyFiles = append(b.DirtyFiles, path)
+				}
 			}
 		}
 	}
 
 	b.Rules = readRules(filepath.Join(root, "AGENTS.md"))
 	b.Readme = readReadme(root)
+	if strings.TrimSpace(b.Readme) == "" {
+		b.Dirs = readTopDirs(root)
+	}
 	b.Tasks = readTasks(filepath.Join(root, "openspec", "changes"))
 	b.Handoff = readHandoff(filepath.Join(root, "docs", "handoff"))
+	if strings.TrimSpace(b.Handoff) == "" {
+		b.Handoff = readHandoffFallback(filepath.Join(root, "docs"))
+	}
 	return b, nil
+}
+
+// porcelainPath extracts the path from one `git status --porcelain` line.
+// The status columns are fixed-width, so the path starts at byte 3; a rename
+// keeps its full "old -> new" tail rather than inventing one path.
+func porcelainPath(line string) string {
+	if len(line) <= 3 {
+		return ""
+	}
+	return strings.TrimSpace(line[3:])
+}
+
+// readTopDirs lists the project's top-level directories, sorted, capped. It
+// is the brief's answer when there is no README: a member still learns the
+// shape of the repo instead of being told nothing. Dot-directories are
+// skipped — .git and .commandcode are furniture, not the project.
+func readTopDirs(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		dirs = append(dirs, entry.Name())
+	}
+	sort.Strings(dirs)
+	if len(dirs) > briefDirsMax {
+		dirs = dirs[:briefDirsMax]
+	}
+	return dirs
 }
 
 // runGit runs one git command against repoPath. ok is false on any failure —
@@ -236,6 +287,64 @@ func readHandoff(dir string) string {
 	return strings.TrimRight(truncateBytes(string(data), briefHandoffBytes), "\n ")
 }
 
+// readHandoffFallback is the handoff section for a project that keeps its
+// handoffs as loose docs instead of docs/handoff/. The two newest are enough:
+// the brief is a pointer, and an older handoff is a history lesson.
+func readHandoffFallback(dir string) string {
+	if !isDir(dir) {
+		return ""
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, pattern := range []string{"HANDOFF-*.md", "*HANDOFF*.md"} {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			continue
+		}
+		for _, match := range matches {
+			if seen[match] {
+				continue
+			}
+			seen[match] = true
+			files = append(files, match)
+		}
+	}
+	if len(files) == 0 {
+		return ""
+	}
+	sort.Slice(files, func(i, j int) bool {
+		mi, mj := fileModTime(files[i]), fileModTime(files[j])
+		if !mi.Equal(mj) {
+			return mi.After(mj)
+		}
+		return files[i] < files[j]
+	})
+	if len(files) > briefFallbackFiles {
+		files = files[:briefFallbackFiles]
+	}
+	var parts []string
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		body := strings.TrimRight(truncateBytes(string(data), briefFallbackBytes), "\n ")
+		if body == "" {
+			continue
+		}
+		parts = append(parts, "### "+filepath.Base(file)+"\n"+body)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func fileModTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
 // Markdown renders the brief file. Every list and file read above is already
 // ordered, and nothing here embeds a timestamp or a temp path, so equal repo
 // state produces equal bytes.
@@ -258,6 +367,7 @@ func (b Brief) Markdown() string {
 
 	sb.WriteString("\n## Zasady pracy (pokój)\n")
 	sb.WriteString("- przed pracą: sprawdź <roomdir>/work.jsonl, nie powtarzaj zadania, które ma już właściciela; nowe zadanie dopisz jako claim\n")
+	sb.WriteString(`- claim dopisz jako linie JSON: {"task":"...","owner":"@handle","status":"claim|done|blocked","artifact":"plik","bytes":0}` + "\n")
 	sb.WriteString("- po zapisie pliku: w odpowiedzi podaj `HANDOFF <ścieżka> bytes=<rozmiar>`\n")
 	sb.WriteString("- nie deklaruj zapisu bez odczytu zwrotnego\n")
 
@@ -271,6 +381,24 @@ func (b Brief) Markdown() string {
 	}
 	if strings.TrimSpace(b.Readme) != "" {
 		appendSection(&sb, "\n## README\n", ensureTrailingNewline(b.Readme))
+	}
+	if len(b.Dirs) > 0 && strings.TrimSpace(b.Readme) == "" {
+		var body strings.Builder
+		for _, dir := range b.Dirs {
+			body.WriteString("- ")
+			body.WriteString(dir)
+			body.WriteString("/\n")
+		}
+		appendSection(&sb, "\n## Co tu jest\n", body.String())
+	}
+	if len(b.DirtyFiles) > 0 {
+		var body strings.Builder
+		for _, path := range b.DirtyFiles {
+			body.WriteString("- ")
+			body.WriteString(path)
+			body.WriteString("\n")
+		}
+		appendSection(&sb, "\n## Brudne pliki\n", body.String())
 	}
 	if len(b.Tasks) > 0 {
 		var body strings.Builder

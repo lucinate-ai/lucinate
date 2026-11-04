@@ -535,23 +535,27 @@ func TestSanitizePaste_NormalisesLineEndingsAndDropsControlChars(t *testing.T) {
 	}
 }
 
-// A pasted document must not stretch the composer box down the screen:
-// the box keeps its shape and shows a size summary instead.
-func TestRoomsModel_MultiLineComposerKeepsTheBoxShape(t *testing.T) {
+// A multi-line draft now shows its real rows, but the box must stay inside
+// the terminal: the transcript budget shrinks instead of the composer
+// stretching off-screen.
+func TestRoomsModel_MultiLineComposerShowsItsRowsAndFitsTheTerminal(t *testing.T) {
 	m := browseModel()
 	m.sub = roomsTranscript
 	m.openRoomID = "sztab-kowal"
+	m.width, m.height = 80, 24
 	m.composer = "linia1\nlinia2\nlinia3"
 
 	out := ansi.Strip(m.View())
 	if rows := strings.Count(out, "\n") + 1; rows > 24 {
 		t.Fatalf("the view grew to %d rows — the box is stretching", rows)
 	}
-	if !strings.Contains(out, "3 lines") {
-		t.Fatalf("no line summary in:\n%s", out)
+	for _, want := range []string{"linia1", "linia2", "linia3"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("the draft row %q is not rendered:\n%s", want, out)
+		}
 	}
-	if strings.Contains(out, "linia1") || strings.Contains(out, "linia2") {
-		t.Fatalf("only the tail should render, got:\n%s", out)
+	if m.transcriptRows() < 3 {
+		t.Fatalf("the transcript kept %d rows, want at least 3", m.transcriptRows())
 	}
 }
 
@@ -728,9 +732,9 @@ func TestRoomsModel_CursorSitsInsideTheComposer(t *testing.T) {
 	}
 }
 
-// A pasted document is summarised in the box, so the caret must sit after
-// the summary, not after the invisible tail.
-func TestRoomsModel_CursorFollowsTheMultiLineSummary(t *testing.T) {
+// A multi-line draft now shows its real rows; the caret sits after the last
+// row's text, on the line being typed, inside the box.
+func TestRoomsModel_CursorFollowsTheMultiLineDraft(t *testing.T) {
 	m := transcriptWith(1)
 	m.composer = "linia1\nlinia2\nlinia3"
 
@@ -740,10 +744,11 @@ func TestRoomsModel_CursorFollowsTheMultiLineSummary(t *testing.T) {
 	}
 	lines := strings.Split(ansi.Strip(m.View()), "\n")
 	row := lines[cur.Position.Y]
-	if !strings.Contains(row, "3 lines") {
-		t.Fatalf("cursor is not on the summary row: %q", row)
+	if !strings.Contains(row, "linia3") {
+		t.Fatalf("cursor is not on the last visual line: %q", row)
 	}
-	want := 2 + lipgloss.Width("you › ") + lipgloss.Width(composerText(m.composer))
+	idx := strings.Index(row, "linia3")
+	want := lipgloss.Width(row[:idx]) + lipgloss.Width("linia3")
 	if cur.Position.X != want {
 		t.Fatalf("cursor col = %d, want %d", cur.Position.X, want)
 	}
@@ -1203,19 +1208,30 @@ func TestRoomsModel_MemberEvidenceRowIsRenderedAndCounted(t *testing.T) {
 
 	without := len(m.transcriptLines())
 
+	// An opinion gets no row at all: a discussion round is mostly opinions,
+	// and a cross under every one of them is noise.
 	m.evidence = map[string]rooms.ReplyEvidence{
 		roomEventKey(ev): {Status: rooms.EvidenceNone, Detail: "brak potwierdzenia zapisu"},
 	}
-	none := m.transcriptLines()
-	if len(none) != without+1 {
-		t.Fatalf("transcript has %d rows with evidence, want %d (the message plus one)", len(none), without+1)
+	none := ansi.Strip(strings.Join(m.transcriptLines(), "\n"))
+	if len(m.transcriptLines()) != without {
+		t.Fatalf("an opinion added a row; transcript has %d, want %d", len(m.transcriptLines()), without)
 	}
-	text := ansi.Strip(strings.Join(none, "\n"))
-	if n := strings.Count(text, "✗"); n != 1 {
-		t.Fatalf("rendered %d ✗ rows, want exactly 1:\n%s", n, text)
+	for _, glyph := range []string{"✗", "⚠", "✓"} {
+		if strings.Contains(none, glyph) {
+			t.Fatalf("an opinion rendered a %s row:\n%s", glyph, none)
+		}
 	}
-	if !strings.Contains(text, "brak potwierdzenia zapisu") {
-		t.Fatalf("the evidence detail is missing:\n%s", text)
+
+	// A claim without a receipt gets the warning row, not a cross.
+	m.evidence[roomEventKey(ev)] = rooms.ReplyEvidence{
+		Status: rooms.EvidenceClaimed, Detail: "deklaracja zapisu bez potwierdzenia — brak HANDOFF"}
+	claimed := ansi.Strip(strings.Join(m.transcriptLines(), "\n"))
+	if !strings.Contains(claimed, "⚠ deklaracja zapisu bez potwierdzenia") {
+		t.Fatalf("claimed evidence did not render a ⚠ row:\n%s", claimed)
+	}
+	if strings.Contains(claimed, "✗") || strings.Contains(claimed, "✓") {
+		t.Fatalf("claimed evidence rendered the wrong glyph:\n%s", claimed)
 	}
 
 	m.evidence[roomEventKey(ev)] = rooms.ReplyEvidence{
@@ -1224,8 +1240,8 @@ func TestRoomsModel_MemberEvidenceRowIsRenderedAndCounted(t *testing.T) {
 	if !strings.Contains(verified, "✓ zapis potwierdzony: out.md (5 B)") {
 		t.Fatalf("verified evidence did not render a ✓ row:\n%s", verified)
 	}
-	if strings.Contains(verified, "✗") {
-		t.Fatalf("verified evidence still renders ✗:\n%s", verified)
+	if strings.Contains(verified, "✗") || strings.Contains(verified, "⚠") {
+		t.Fatalf("verified evidence rendered the wrong glyph:\n%s", verified)
 	}
 }
 
@@ -1246,6 +1262,44 @@ func TestRoomsTranscript_PulseRefusedWhileTheRoomWorks(t *testing.T) {
 	}
 }
 
+// answeredRoom is the transcript state a pulse is allowed in: the user's last
+// instruction at 50 and a member's reply at 53.
+func answeredRoom() []rooms.Event {
+	return []rooms.Event{
+		{Seq: 50, Kind: "message.user", Payload: map[string]any{"text": "zrób X"}},
+		{Seq: 53, Kind: "message.member", Actor: rooms.Actor{DisplayName: "Matt"},
+			Payload: map[string]any{"text": "biorę X"}},
+	}
+}
+
+// The karndt failure: a user instruction sat unanswered and the pulse went
+// anyway, superseding it. The pulse must wait for the room's answer.
+func TestPulseRefusedUntilTheRoomAnswers(t *testing.T) {
+	m := v2Model(t)
+	m.page.Events = []rooms.Event{{Seq: 50, Kind: "message.user",
+		Payload: map[string]any{"text": "zrób X"}}}
+
+	if m.pulseReady() {
+		t.Fatal("pulseReady is true before the room answered the instruction")
+	}
+	if reason := m.pulseRefusal(); !strings.Contains(reason, "nie odpowiedział jeszcze") {
+		t.Errorf("refusal = %q, want the unanswered-instruction reason", reason)
+	}
+	next, cmd := m.handleTranscriptKey(tea.KeyPressMsg{}, "p")
+	if cmd != nil {
+		t.Fatal("p must not send while the instruction is unanswered")
+	}
+	if !strings.Contains(next.notice, "nie odpowiedział jeszcze") {
+		t.Errorf("notice = %q, want the unanswered-instruction reason", next.notice)
+	}
+
+	m.page.Events = append(m.page.Events, rooms.Event{Seq: 53, Kind: "message.member",
+		Actor: rooms.Actor{DisplayName: "Matt"}, Payload: map[string]any{"text": "biorę X"}})
+	if !m.pulseReady() {
+		t.Fatalf("pulseReady is false after the room answered: %q", m.pulseRefusal())
+	}
+}
+
 // In an idle room `p` posts the moderator message through the normal send
 // path, so the gateway sees a user turn and opens a new discussion.
 func TestRoomsTranscript_PulseSendsTheModeratorMessage(t *testing.T) {
@@ -1255,6 +1309,7 @@ func TestRoomsTranscript_PulseSendsTheModeratorMessage(t *testing.T) {
 	m.openRoomID = "sztab"
 	room := liveRoom("sztab", "Sztab", "matt", "kowal")
 	m.openRoom = &room
+	m.page.Events = answeredRoom()
 
 	next, cmd := m.handleTranscriptKey(tea.KeyPressMsg{}, "p")
 	if cmd == nil {
@@ -1284,6 +1339,7 @@ func TestRoomsTranscript_PulseSendsTheModeratorMessage(t *testing.T) {
 // The hint advertises the pulse key only where it acts: idle and undrafted.
 func TestRoomsTranscript_HintShowsPulseOnlyWhenIdle(t *testing.T) {
 	m := v2Model(t)
+	m.page.Events = answeredRoom()
 	if !strings.Contains(m.hint(), "p puls") {
 		t.Fatalf("idle hint does not offer the pulse: %q", m.hint())
 	}

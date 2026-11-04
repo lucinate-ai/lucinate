@@ -209,6 +209,11 @@ type roomsModel struct {
 	// rooms.ShouldPulse compares it with the newest seq so a silent room is
 	// not pulsed over and over.
 	lastPulseSeq int
+	// lastPulseAt debounces the `p` key: a second press within the debounce
+	// window is ignored, because two near-identical pulses superseded each
+	// other in a live room and the second one ate the instruction nobody
+	// had answered yet.
+	lastPulseAt time.Time
 
 	// scroll is how many lines back from the live tail the transcript
 	// window sits; 0 is pinned to the newest line. Without it the window
@@ -1113,32 +1118,125 @@ func (m roomsModel) scrollTranscript(delta int) (roomsModel, tea.Cmd) {
 	return m, nil
 }
 
-// composerText is what the composer box displays: the raw text for a
-// single line, or the tail plus a size summary for a pasted document.
-// Cursor() measures this same string, so the caret cannot drift from what
-// is drawn.
-func composerText(composer string) string {
-	if !strings.Contains(composer, "\n") {
-		return composer
+// composerPrompt is the label the draft is typed after.
+const composerPrompt = "you › "
+
+// composerMaxTextRows is how many rows of the draft are shown at once. A
+// seventh row is reserved for the overflow marker, so the box stays seven
+// content rows tall at most.
+const composerMaxTextRows = 6
+
+// composerTextWidth is the column budget for one visual row of the draft:
+// the view width minus the box border and padding and the prompt.
+func composerTextWidth(width int) int {
+	box := width - 1
+	if box < 20 {
+		box = 20
 	}
-	lines := strings.Split(composer, "\n")
-	tail := []rune(lines[len(lines)-1])
-	const maxTail = 48
-	if len(tail) > maxTail {
-		tail = append([]rune("…"), tail[len(tail)-maxTail:]...)
+	w := box - 4 - lipgloss.Width(composerPrompt)
+	if w < 8 {
+		w = 8
 	}
-	return fmt.Sprintf("%s [%d lines · %d chars]", string(tail), len(lines), len([]rune(composer)))
+	return w
 }
 
-// composerView renders the composer inside its box. A pasted document
-// would otherwise stretch the border down the screen, so a multi-line
-// composer shows the tail of the text plus a size summary: the box keeps
-// its shape and the summary is the confirmation that the paste landed.
-func composerView(composer string) string {
-	return inputBorderStyle.Render("you › " + composerText(composer))
+// composerVisualRows wraps the draft to the box width, one visual row per
+// terminal row. Nothing is dropped: the wrap is bottom-anchored to the
+// caret, and the caller keeps the tail.
+func (m roomsModel) composerVisualRows(width int) []string {
+	tw := composerTextWidth(width)
+	var rows []string
+	for _, line := range strings.Split(m.composer, "\n") {
+		line = strings.ReplaceAll(line, "\t", "    ")
+		rows = append(rows, strings.Split(ansi.Wrap(line, tw, " "), "\n")...)
+	}
+	if len(rows) == 0 {
+		rows = []string{""}
+	}
+	return rows
 }
 
-// Cursor places the terminal's cursor inside the composer.
+// composerLimit is the most content rows the box may take without starving
+// the transcript: everything above and below it fits, and the transcript
+// keeps at least three rows.
+func (m roomsModel) composerLimit(width int) int {
+	h := m.height
+	if h <= 0 {
+		h = 24
+	}
+	limit := h - m.roomsChromeRows() - 5
+	if limit > composerMaxTextRows+1 {
+		limit = composerMaxTextRows + 1
+	}
+	if limit < 2 {
+		// One row for the marker, one for the line being typed.
+		limit = 2
+	}
+	return limit
+}
+
+// composerLayout is the visible window of the draft and, when older rows
+// scrolled out, the one dim marker row above it. The window always ends at
+// the caret, so the tail is never dropped.
+func (m roomsModel) composerLayout(width int) (rows []string, marker string) {
+	all := m.composerVisualRows(width)
+	limit := m.composerLimit(width)
+	if len(all) <= limit {
+		return all, ""
+	}
+	textRows := limit - 1
+	if textRows < 1 {
+		textRows = 1
+	}
+	hidden := len(all) - textRows
+	marker = fmt.Sprintf("↑ %d earlier line(s)", hidden)
+	// A pasted document keeps its size summary as the top row: the tail is
+	// what matters, but the reader still needs to know how much is above it.
+	if strings.Contains(m.composer, "\n") {
+		marker += fmt.Sprintf(" · [%d lines · %d chars]",
+			strings.Count(m.composer, "\n")+1, len([]rune(m.composer)))
+	}
+	return all[len(all)-textRows:], marker
+}
+
+// composerHeight is the composer box's real height in terminal rows: its
+// visible content rows (1..7) plus the two border rows. The view and
+// transcriptRows share it so they can never disagree about the layout.
+func (m roomsModel) composerHeight(width int) int {
+	rows, marker := m.composerLayout(width)
+	n := len(rows)
+	if marker != "" {
+		n++
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n + 2
+}
+
+// composerView renders the composer inside its box. The box grows with the
+// draft: every visible visual row is drawn, with the prompt on the first
+// text row and the overflow marker above it when the draft is longer.
+func (m roomsModel) composerView(width int) string {
+	rows, marker := m.composerLayout(width)
+	gutter := strings.Repeat(" ", lipgloss.Width(composerPrompt))
+	content := make([]string, 0, len(rows)+1)
+	if marker != "" {
+		content = append(content, gutter+statusStyle.Render(marker))
+	}
+	for i, row := range rows {
+		prefix := gutter
+		if i == 0 {
+			prefix = composerPrompt
+		}
+		content = append(content, prefix+row)
+	}
+	return inputBorderStyle.Render(strings.Join(content, "\n"))
+}
+
+// Cursor places the terminal's cursor inside the composer, on the last
+// visible visual row — the line being typed — after the last rune of the
+// draft. It never leaves the box.
 //
 // The rooms composer is a plain string, so nothing ever positioned the
 // cursor: the terminal painted its own wherever the last write ended —
@@ -1160,10 +1258,15 @@ func (m roomsModel) Cursor() *tea.Cursor {
 	if row < 0 || row+1 >= len(lines) {
 		return nil
 	}
-	// Inside the box: its border and padding, the prompt, then the text
-	// that is actually drawn.
-	col := 2 + lipgloss.Width("you › ") + lipgloss.Width(composerText(m.composer))
-	return tea.NewCursor(col, row+1)
+	rows, marker := m.composerLayout(m.width)
+	contentRows := len(rows)
+	if marker != "" {
+		contentRows++
+	}
+	// Inside the box: its border and padding, the prompt gutter, then the
+	// last visual row of the draft.
+	col := 2 + lipgloss.Width(composerPrompt) + displayWidth(rows[len(rows)-1])
+	return tea.NewCursor(col, row+contentRows)
 }
 
 // deleteLastWord removes the trailing word and the spaces before it, so
@@ -1472,22 +1575,132 @@ func (m roomsModel) post(text string) (roomsModel, tea.Cmd) {
 	return m, tea.Batch(m.sendText(routed), routeCmd, m.ensureRoomsSpinner())
 }
 
+// pulseDebounce is how long a second `p` is ignored. Two pulses sent
+// back-to-back supersede each other on the gateway, and the second one landed
+// before the room had answered the instruction the user actually cared about.
+const pulseDebounce = 2 * time.Second
+
 // pulseRoom posts the moderator pulse: the room's board plus the three
 // opinion questions, as an ordinary user message. Members only ever see each
 // other inside one discussion, so the pulse starts a fresh one.
 //
-// A working room is not pulsed: a second user event cancels the turns in
-// flight, which is exactly the silence the pulse is meant to break. The
-// notice says so instead, and the key works once the room settles.
+// The pulse is a moderator turn, not a way to talk over the room: it fires
+// only after the room has answered the newest user message (see
+// pulseRefusal), it refreshes the shared brief first, and the brief's new
+// digest rides the pulse when it changed.
 func (m roomsModel) pulseRoom() (roomsModel, tea.Cmd) {
-	if m.working || len(m.activeStreams()) > 0 {
-		m.notice = "pokoj pracuje — puls po settle"
+	now := time.Now()
+	if !m.lastPulseAt.IsZero() && now.Sub(m.lastPulseAt) < pulseDebounce {
 		return m, nil
 	}
-	dir := m.roomDirIfExists(m.orientationFor(m.openRoomID), m.openRoomID)
+	if reason := m.pulseRefusal(); reason != "" {
+		m.notice = reason
+		return m, nil
+	}
+	orient := m.orientationFor(m.openRoomID)
+	dir := m.roomDirIfExists(orient, m.openRoomID)
 	claims, _ := rooms.ReadLedger(dir)
+
+	// The brief is rebuilt from the repo and rewritten into the room's shared
+	// directory before the pulse goes out; the digest is what lets the pulse
+	// tell the room the file it was pointed at has moved.
+	digest := ""
+	if strings.TrimSpace(orient.Path) != "" && dir != "" {
+		if brief, err := rooms.BuildBrief(orient.Path); err == nil {
+			if _, d, err := rooms.WriteBrief(dir, brief); err == nil {
+				digest = d
+			}
+		}
+	}
 	m.notice = "puls wyslany"
-	return m, m.sendText(rooms.PulseText("", rooms.Board(claims)))
+	m.lastPulseAt = now
+	return m, m.sendText(rooms.PulseTextWithBrief("", rooms.Board(claims), digest, m.quotedBriefDigest()))
+}
+
+// pulseRefusal explains why `p` would not act, or returns "" when it may.
+//
+// The room must have answered the last instruction before it is asked an
+// opinion question: a pulse posted first starts a second user turn, the
+// gateway supersedes the unanswered one, and the instruction silently gets
+// zero answers. That is the failure this guard exists for.
+func (m roomsModel) pulseRefusal() string {
+	if m.working || len(m.activeStreams()) > 0 {
+		return "pokoj pracuje — puls po settle"
+	}
+	newestUser, newestMember := m.newestMessageSeqs()
+	if newestMember <= newestUser {
+		return "puls wstrzymany — pokój nie odpowiedział jeszcze na twoje polecenie"
+	}
+	if m.lastPulseSeq > 0 && m.lastPulseSeq >= newestUser {
+		return "puls już poszedł w tej rundzie"
+	}
+	if !rooms.ShouldPulse(true, m.newestSeq(), m.lastPulseSeq) {
+		return "puls wstrzymany — brak nowej aktywności"
+	}
+	return ""
+}
+
+// newestMessageSeqs is the newest seq of the user's messages and of the
+// members' replies, compared against each other rather than against a count:
+// only seq order can tell whether the room answered after the question.
+func (m roomsModel) newestMessageSeqs() (user, member int) {
+	for _, ev := range m.page.Events {
+		switch ev.Kind {
+		case "message.user":
+			if ev.Seq > user {
+				user = ev.Seq
+			}
+		case "message.member":
+			if ev.Seq > member {
+				member = ev.Seq
+			}
+		}
+	}
+	return user, member
+}
+
+// newestSeq is the newest transcript seq the page knows about, event seqs
+// included because a test or a partial page can carry events without latest.
+func (m roomsModel) newestSeq() int {
+	seq := m.page.LatestSeq
+	for _, ev := range m.page.Events {
+		if ev.Seq > seq {
+			seq = ev.Seq
+		}
+	}
+	return seq
+}
+
+// quotedBriefDigest is the digest the room's first message pointed at. It is
+// the baseline a refreshed brief is compared with; without it the pulse stays
+// silent rather than claiming a refresh it cannot prove.
+func (m roomsModel) quotedBriefDigest() string {
+	for _, ev := range m.page.Events {
+		if ev.Kind != "message.user" {
+			continue
+		}
+		text := ev.Text()
+		i := strings.Index(text, "sha=")
+		if i < 0 {
+			continue
+		}
+		rest := text[i+len("sha="):]
+		if len(rest) < 12 {
+			continue
+		}
+		digest := rest[:12]
+		ok := true
+		for _, r := range digest {
+			if !strings.ContainsRune("0123456789abcdef", r) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return digest
+		}
+	}
+	return ""
 }
 
 // handleTranscriptCommand runs a slash command typed in the transcript.
@@ -1866,7 +2079,7 @@ func (m roomsModel) viewTranscript() string {
 	if block := m.noticeBlock(); block != "" {
 		b.WriteString("\n" + block + "\n")
 	}
-	b.WriteString("\n" + composerView(m.composer))
+	b.WriteString("\n" + m.composerView(m.width))
 	return b.String()
 }
 
@@ -1920,17 +2133,15 @@ func (m roomsModel) headerRows() int {
 	return rows
 }
 
-// transcriptRows is how many transcript lines fit above the composer.
-// The fixed chrome is: header (1), connection banner (1), blank (1), the
-// hidden-lines notice (1), the composer block (3) and the hint block (2)
-// — nine lines, plus two each for a status or error notice when present.
-// One extra line is reserved so a wrap never pushes the composer off.
-func (m roomsModel) transcriptRows() int {
-	h := m.height
-	if h <= 0 {
-		h = 24
-	}
-	chrome := 9 + m.headerRows()
+// roomsChromeRows is every row the transcript screen spends outside the
+// transcript itself and the composer box: the app header, connection banner,
+// blank separator, the real header height, the hint block, and any notices.
+// The composer is excluded because its height follows the draft
+// (composerHeight), not a fixed budget.
+func (m roomsModel) roomsChromeRows() int {
+	// Six fixed rows: header (1), connection banner (1), blank (1), the
+	// hidden-lines notice (1) and the hint block's two-line budget.
+	chrome := 6 + m.headerRows()
 	// The hint is wrapped to the view width, so a narrow terminal needs
 	// more rows for it than the single-line budget assumed.
 	if n := len(strings.Split(wordWrap(m.hint(), m.viewWrapWidth()), "\n")); n > 1 {
@@ -1945,25 +2156,31 @@ func (m roomsModel) transcriptRows() int {
 	if m.confirmDisband != "" {
 		chrome += 2
 	}
-	rows := h - chrome
 	// The connection banner is part of the transcript view whenever a
 	// connection is configured; leaving it out of the budget pushed the
 	// composer one line off the bottom of a full-height terminal.
 	if m.conn != nil {
-		rows--
+		chrome++
 	}
-	if n := m.noticeLineCount(); n > 0 {
-		rows -= n
-	}
-	if n := len(m.activeStreams()); n > 0 {
-		rows -= n
-	}
-	if n := len(m.interruptedRows()); n > 0 {
-		rows -= n
-	}
+	chrome += m.noticeLineCount()
+	chrome += len(m.activeStreams())
+	chrome += len(m.interruptedRows())
 	if m.working || len(m.queue) > 0 || m.settleLine() != "" {
-		rows-- // the roster-status line above the composer
+		chrome++ // the roster-status line above the composer
 	}
+	return chrome
+}
+
+// transcriptRows is how many transcript lines fit above the composer. The
+// composer's real height is subtracted (its box is content rows plus the two
+// border rows), so a growing draft takes rows from the transcript instead of
+// pushing it off-screen.
+func (m roomsModel) transcriptRows() int {
+	h := m.height
+	if h <= 0 {
+		h = 24
+	}
+	rows := h - m.roomsChromeRows() - m.composerHeight(m.width)
 	if rows < 3 {
 		rows = 3
 	}
@@ -2045,12 +2262,13 @@ func (m roomsModel) hint() string {
 }
 
 // pulseReady is the state the `p` key acts in: an open room, nothing being
-// typed, and the roster settled.
+// typed, and every condition in pulseRefusal met. The key refuses with a
+// notice where the hint does not advertise it, so the two never disagree
+// about whether a pulse is possible.
 func (m roomsModel) pulseReady() bool {
 	return m.openRoomID != "" &&
 		strings.TrimSpace(m.composer) == "" &&
-		!m.working &&
-		len(m.activeStreams()) == 0
+		m.pulseRefusal() == ""
 }
 
 // ── rendering helpers (pure; unit-tested) ────────────────────────────────────
@@ -2090,6 +2308,8 @@ func formatRoomsEventStyled(ev rooms.Event, body string, memberStyle lipgloss.St
 		return fmt.Sprintf("%s  %s %s", stamp, userPrefixStyle.Render("you →"), body)
 	case "message.member":
 		return fmt.Sprintf("%s  %s %s", stamp, memberStyle.Render("@"+ev.Speaker()+":"), body)
+	case "turn.cancelled":
+		return cancelledTurnRow(ev)
 	case "turn.started":
 		return fmt.Sprintf("%s  %s", stamp, toolRunningStyle.Render(ev.Speaker()+" is thinking…"))
 	case "turn.settled":
@@ -2107,4 +2327,20 @@ func formatRoomsEventStyled(ev rooms.Event, body string, memberStyle lipgloss.St
 		return fmt.Sprintf("%s  %s", stamp, errorStyle.Render(ev.Speaker()+" unavailable"))
 	}
 	return fmt.Sprintf("%s  %s", stamp, statusStyle.Render(ev.Kind+" "+ev.Speaker()))
+}
+
+// cancelledTurnRow renders a turn the gateway cancelled. A superseded turn is
+// the common case: a newer user message replaced the one in flight, which
+// otherwise looks like a member that silently stopped. It sits in the same
+// dim gutter as the evidence row so it reads as an annotation, not a reply.
+func cancelledTurnRow(ev rooms.Event) string {
+	reason, _ := ev.Payload["reason"].(string)
+	if reason == "superseded_by_newer_user_event" {
+		reason = "nowsza wiadomość"
+	}
+	handle := eventHandle(ev)
+	if reason == "" {
+		return statusStyle.Render(fmt.Sprintf("  @%s — przerwano", handle))
+	}
+	return statusStyle.Render(fmt.Sprintf("  @%s — przerwano: %s", handle, reason))
 }

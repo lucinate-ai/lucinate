@@ -175,6 +175,46 @@ func TestBuildBrief_FullSectionsCarryTheirContent(t *testing.T) {
 	}
 }
 
+// A repo with none of the standard sources must still describe what is there:
+// the top-level directories stand in for the README, a loose HANDOFF-*.md in
+// docs/ stands in for docs/handoff/, and the dirty paths are named.
+func TestBriefFallsBackToDirsAndHandoffFiles(t *testing.T) {
+	dir := initBriefRepo(t)
+	writeBriefTestFile(t, filepath.Join(dir, "app", "main.go"), "package main\n")
+	writeBriefTestFile(t, filepath.Join(dir, "docs", "HANDOFF-x.md"), "# Handoff\n\nstan prac\n")
+
+	b, err := BuildBrief(dir)
+	if err != nil {
+		t.Fatalf("BuildBrief: %v", err)
+	}
+	md := b.Markdown()
+	for _, section := range []string{"## Co tu jest", "## Handoff", "## Brudne pliki"} {
+		if !strings.Contains(md, section) {
+			t.Errorf("missing %q section:\n%s", section, md)
+		}
+	}
+	if !strings.Contains(md, "- app/\n- docs/\n") {
+		t.Errorf("Co tu jest does not list the top-level dirs in order:\n%s", md)
+	}
+	if !strings.Contains(md, "HANDOFF-x.md") || !strings.Contains(md, "stan prac") {
+		t.Errorf("Handoff does not quote the fallback file:\n%s", md)
+	}
+	if len(md) > maxBriefBytes {
+		t.Errorf("Markdown is %d bytes, budget is %d", len(md), maxBriefBytes)
+	}
+
+	again, err := BuildBrief(dir)
+	if err != nil {
+		t.Fatalf("second BuildBrief: %v", err)
+	}
+	if again.Markdown() != md {
+		t.Errorf("the fallback brief is not byte-stable across two builds")
+	}
+	if again.Digest() != b.Digest() {
+		t.Errorf("Digest changed across two builds: %q vs %q", b.Digest(), again.Digest())
+	}
+}
+
 // ── stability and digest ─────────────────────────────────────────────────────
 
 func TestBuildBrief_IsStable(t *testing.T) {

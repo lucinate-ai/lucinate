@@ -19,6 +19,15 @@ const pulseAsk = "Odpowiedz w maksymalnie 120 slowach: (1) twoje stanowisko, (2)
 // about an empty table. Nothing here embeds a timestamp, so equal inputs
 // produce equal bytes.
 func PulseText(goal string, board string) string {
+	return PulseTextWithBrief(goal, board, "", "")
+}
+
+// PulseTextWithBrief is PulseText plus the one line that tells the room its
+// brief was regenerated. digest is the brief just written, quoted the digest
+// the room's first message carried. The line appears only when both are known
+// and differ — a pulse that always claimed a refresh would teach members to
+// ignore the claim.
+func PulseTextWithBrief(goal, board, digest, quoted string) string {
 	goal = strings.TrimSpace(goal)
 	if goal == "" {
 		goal = "co dalej"
@@ -32,8 +41,24 @@ func PulseText(goal string, board string) string {
 		sb.WriteString(board)
 		sb.WriteString("\n\n")
 	}
+	if line := BriefRefreshLine(digest, quoted); line != "" {
+		sb.WriteString(line)
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString(pulseAsk)
 	return sb.String()
+}
+
+// BriefRefreshLine reports the line a pulse carries when the brief on disk no
+// longer matches the digest the room was pointed at. Empty when the two agree
+// or either is unknown.
+func BriefRefreshLine(digest, quoted string) string {
+	digest = strings.TrimSpace(digest)
+	quoted = strings.TrimSpace(quoted)
+	if digest == "" || digest == quoted {
+		return ""
+	}
+	return "brief sha=" + digest + " — odświeżony, przeczytaj ponownie"
 }
 
 // ShouldPulse reports whether the room has earned another pulse: it must be

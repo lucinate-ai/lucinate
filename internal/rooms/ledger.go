@@ -111,13 +111,92 @@ func ReadLedger(dir string) ([]Claim, error) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var c Claim
-		if err := json.Unmarshal([]byte(line), &c); err != nil {
+		c, ok := parseLedgerLine(line)
+		if !ok {
 			continue
 		}
 		claims = append(claims, c)
 	}
 	return claims, nil
+}
+
+// ledgerLine is the union of the two shapes members write. The canonical row
+// is AppendClaim's, but a member in a live room produced
+// {"claim","file","ts"} instead — a ledger that silently dropped those rows
+// hid every owner from Board and DuplicateOf.
+type ledgerLine struct {
+	Task     string          `json:"task"`
+	Owner    string          `json:"owner"`
+	Status   string          `json:"status"`
+	Artifact string          `json:"artifact"`
+	Bytes    int64           `json:"bytes"`
+	Note     string          `json:"note,omitempty"`
+	At       json.RawMessage `json:"at"`
+
+	Claim string `json:"claim"`
+	File  string `json:"file"`
+	TS    string `json:"ts"`
+}
+
+// parseLedgerLine maps one JSON line onto a Claim, accepting either shape.
+// ok is false for a line that is not JSON at all.
+func parseLedgerLine(line string) (Claim, bool) {
+	var raw ledgerLine
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return Claim{}, false
+	}
+	c := Claim{
+		Task:     firstNonEmpty(raw.Task, raw.Claim),
+		Owner:    raw.Owner,
+		Status:   raw.Status,
+		Artifact: firstNonEmpty(raw.Artifact, raw.File),
+		Bytes:    raw.Bytes,
+		Note:     raw.Note,
+		At:       firstTime(raw.At, raw.TS),
+	}
+	return c, true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// firstTime reads the timestamp from either the canonical `at` (an RFC 3339
+// string or a time.Time marshal) or the member's date-only `ts`.
+func firstTime(raw json.RawMessage, ts string) time.Time {
+	if len(raw) > 0 {
+		var t time.Time
+		if err := json.Unmarshal(raw, &t); err == nil && !t.IsZero() {
+			return t
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil && s != "" {
+			if parsed, ok := parseTimeString(s); ok {
+				return parsed
+			}
+		}
+	}
+	if ts != "" {
+		if parsed, ok := parseTimeString(ts); ok {
+			return parsed
+		}
+	}
+	return time.Time{}
+}
+
+func parseTimeString(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // Board renders the ledger for the room transcript: at most 12 lines, the

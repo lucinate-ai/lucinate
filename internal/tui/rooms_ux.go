@@ -1159,19 +1159,24 @@ func (m roomsModel) formatEventRow(ev rooms.Event) string {
 }
 
 // evidenceLine is the one dim line a checked member reply gets: ✓ when a
-// HANDOFF receipt was read back and matched, ✗ for a declaration without one,
-// a failed read-back or a duplicate.
+// HANDOFF receipt was read back and matched, ⚠ for a write claim with no
+// receipt, ✗ for a failed read-back or a duplicate, and no row at all for an
+// opinion. A discussion round is mostly opinions; painting each with a red
+// cross taught readers to ignore the column.
 func (m roomsModel) evidenceLine(ev rooms.Event) string {
 	if ev.Kind != "message.member" {
 		return ""
 	}
 	ev2, ok := m.evidence[roomEventKey(ev)]
-	if !ok {
+	if !ok || ev2.Status == rooms.EvidenceNone {
 		return ""
 	}
 	glyph := "✗"
-	if ev2.Status == rooms.EvidenceVerified {
+	switch ev2.Status {
+	case rooms.EvidenceVerified:
 		glyph = "✓"
+	case rooms.EvidenceClaimed:
+		glyph = "⚠"
 	}
 	return statusStyle.Render("  " + glyph + " " + ev2.Detail)
 }

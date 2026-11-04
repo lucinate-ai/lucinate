@@ -538,14 +538,15 @@ func TestRoomsW1_ComposerAndPasteHelpers(t *testing.T) {
 	}
 
 	multi := "pierwsza linia\ndruga linia\ntrzecia"
-	summary := composerText(multi)
-	if !strings.Contains(summary, "3 lines") || !strings.Contains(summary, "trzecia") {
-		t.Errorf("composerText(multi-line) = %q, want the tail plus a size summary", summary)
+	draft := roomsModel{composer: multi, width: 100}
+	rows, marker := draft.composerLayout(100)
+	if marker != "" {
+		t.Fatalf("a three-line draft fits, unexpected overflow marker %q", marker)
 	}
-	if single := composerText("krotko"); single != "krotko" {
-		t.Errorf("composerText(single line) = %q, want it unchanged", single)
+	if len(rows) != 3 || !strings.Contains(rows[2], "trzecia") {
+		t.Errorf("composer rows = %q, want the draft's three lines with the tail last", rows)
 	}
-	if box := composerView(multi); !strings.Contains(ansi.Strip(box), "you ›") {
+	if box := draft.composerView(100); !strings.Contains(ansi.Strip(box), "you ›") {
 		t.Errorf("composerView = %q, want the prompt inside its box", box)
 	}
 	if on := mouseStatusText(true); !strings.Contains(on, "mouse capture on") {
