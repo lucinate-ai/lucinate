@@ -21,7 +21,7 @@ import (
 // plumbing against an in-memory fake; this test covers the
 // production wrapper end-to-end against a real OpenAI backend.
 func TestSecretAwareOpenAIBackend_StoreAPIKeyPersistsToDisk(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"data":[]}`)
@@ -73,7 +73,7 @@ func TestSecretAwareOpenAIBackend_StoreAPIKeyPersistsToDisk(t *testing.T) {
 // currently the TUI does not expose this but the contract is worth
 // pinning).
 func TestSecretAwareOpenAIBackend_StoreAPIKeyClear(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"data":[]}`)
@@ -113,7 +113,7 @@ func TestSecretAwareOpenAIBackend_StoreAPIKeyClear(t *testing.T) {
 // ID and update the in-memory copy used by the next dial. (Dial-time
 // propagation itself is covered by the hermes package's own tests.)
 func TestSecretAwareHermesBackend_StoreAPIKeyPersistsToDisk(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	connID := "hermes-conn"
 	inner, err := hermesBackend.New(hermesBackend.Options{
@@ -142,7 +142,7 @@ func TestSecretAwareHermesBackend_StoreAPIKeyPersistsToDisk(t *testing.T) {
 // CLI relies on: a missing connection should never reach a switch
 // branch and produce an opaque dispatch failure.
 func TestDefaultBackendFactory_NilConnection(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	if _, err := DefaultBackendFactory(nil); err == nil {
 		t.Fatal("expected error for nil connection")
 	}
@@ -152,7 +152,7 @@ func TestDefaultBackendFactory_NilConnection(t *testing.T) {
 // connection persisted under a deprecated or future Type doesn't fall
 // through silently and panic in the TUI.
 func TestDefaultBackendFactory_UnknownType(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	conn := &Connection{ID: "id", Type: ConnectionType("nope"), URL: "http://x"}
 	if _, err := DefaultBackendFactory(conn); err == nil || !strings.Contains(err.Error(), "unsupported connection type") {
 		t.Fatalf("expected unsupported-type error, got %v", err)
@@ -163,7 +163,7 @@ func TestDefaultBackendFactory_UnknownType(t *testing.T) {
 // produces a non-nil backend without requiring a live gateway: the
 // factory only constructs the wrapper, the TUI calls Connect later.
 func TestDefaultBackendFactory_OpenClawDispatch(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	conn := &Connection{ID: "id", Type: ConnTypeOpenClaw, URL: "http://gateway.example.com"}
 	b, err := DefaultBackendFactory(conn)
 	if err != nil {
@@ -182,7 +182,7 @@ func TestDefaultBackendFactory_OpenClawDispatch(t *testing.T) {
 // path where config.FromConnection bubbles up a URL parse failure
 // before the SDK ever touches the network.
 func TestDefaultBackendFactory_OpenClawRejectsBadURL(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	conn := &Connection{ID: "id", Type: ConnTypeOpenClaw, URL: "ftp://nope"}
 	if _, err := DefaultBackendFactory(conn); err == nil {
 		t.Fatal("expected error for unsupported scheme")
@@ -194,7 +194,7 @@ func TestDefaultBackendFactory_OpenClawRejectsBadURL(t *testing.T) {
 // the secret-aware wrapper (so subsequent StoreAPIKey calls persist to
 // disk).
 func TestDefaultBackendFactory_OpenAIWraps(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	connID := "openai-id"
 	if err := config.SetAPIKey(connID, "from-store"); err != nil {
 		t.Fatalf("SetAPIKey: %v", err)
@@ -214,7 +214,7 @@ func TestDefaultBackendFactory_OpenAIWraps(t *testing.T) {
 // empty — the integration test suite relies on this to inject a key
 // without reaching the modal.
 func TestDefaultBackendFactory_OpenAIEnvFallback(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	t.Setenv("LUCINATE_OPENAI_API_KEY", "from-env")
 	conn := &Connection{ID: "id", Type: ConnTypeOpenAI, URL: "http://localhost:11434/v1"}
 	b, err := DefaultBackendFactory(conn)
@@ -257,7 +257,7 @@ func TestDefaultBackendFactory_OpenAIEnvFallback(t *testing.T) {
 // for Hermes. There's no env-var fallback at this layer — the secrets
 // store is the only source.
 func TestDefaultBackendFactory_HermesWraps(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	connID := "hermes-id"
 	if err := config.SetAPIKey(connID, "hk"); err != nil {
 		t.Fatalf("SetAPIKey: %v", err)

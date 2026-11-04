@@ -46,7 +46,7 @@ func connectTestBackend(t *testing.T) *Backend {
 	if _, err := os.Stat(envFile); err == nil {
 		_ = godotenv.Load(envFile)
 	}
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 
 	baseURL := os.Getenv("LUCINATE_OPENAI_BASE_URL")
 	if baseURL == "" {

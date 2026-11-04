@@ -316,6 +316,190 @@ func TestDial_UpgradeRejectionCarriesStatus(t *testing.T) {
 	}
 }
 
+// A frame with both an id and a method is a server→client request: it
+// must surface on Requests, and Respond must write the JSON-RPC response
+// bearing the same id.
+func TestServerRequest_SurfacedAndAnswered(t *testing.T) {
+	response := make(chan map[string]json.RawMessage, 1)
+	wsURL := fakeServer(t, func(conn *websocket.Conn) {
+		_ = conn.WriteJSON(map[string]any{
+			"jsonrpc": "2.0", "id": 7, "method": "approval",
+			"params": map[string]any{"request_id": "r1", "command": "ls"},
+		})
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var f map[string]json.RawMessage
+		_ = json.Unmarshal(data, &f)
+		response <- f
+		_, _, _ = conn.ReadMessage()
+	})
+	c := dialT(t, wsURL)
+
+	var req Request
+	select {
+	case req = <-c.Requests():
+	case <-time.After(5 * time.Second):
+		t.Fatal("inbound request not surfaced")
+	}
+	if string(req.ID) != "7" || req.Method != "approval" {
+		t.Fatalf("request = %+v (raw id %s)", req, req.ID)
+	}
+	var p struct {
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal(req.Params, &p); err != nil || p.RequestID != "r1" {
+		t.Fatalf("params = %s (%v)", req.Params, err)
+	}
+
+	if err := c.Respond(req.ID, map[string]string{"choice": "once"}); err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+	select {
+	case f := <-response:
+		if got := string(f["id"]); got != "7" {
+			t.Fatalf("response id = %s, want 7", got)
+		}
+		var result struct {
+			Choice string `json:"choice"`
+		}
+		if err := json.Unmarshal(f["result"], &result); err != nil || result.Choice != "once" {
+			t.Fatalf("result = %s (%v)", f["result"], err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("response frame not written")
+	}
+}
+
+// RespondError writes a JSON-RPC error frame — the fast-fail path for a
+// method this client does not implement.
+func TestServerRequest_RespondError(t *testing.T) {
+	response := make(chan map[string]json.RawMessage, 1)
+	wsURL := fakeServer(t, func(conn *websocket.Conn) {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var f map[string]json.RawMessage
+		_ = json.Unmarshal(data, &f)
+		response <- f
+		_, _, _ = conn.ReadMessage()
+	})
+	c := dialT(t, wsURL)
+
+	if err := c.RespondError(json.RawMessage("3"), -32601, "method not found: sudo"); err != nil {
+		t.Fatalf("RespondError: %v", err)
+	}
+	select {
+	case f := <-response:
+		var e struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(f["error"], &e)
+		if string(f["id"]) != "3" || e.Code != -32601 || !strings.Contains(e.Message, "sudo") {
+			t.Fatalf("error frame = %+v", f)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("error frame not written")
+	}
+}
+
+// The gateway's own request ids are strings ("srq-…"). They must surface
+// verbatim and go back verbatim: a numeric-only decoder would drop the
+// whole frame and the ask would vanish.
+func TestServerRequest_StringIDRoundTrips(t *testing.T) {
+	response := make(chan map[string]json.RawMessage, 1)
+	wsURL := fakeServer(t, func(conn *websocket.Conn) {
+		_ = conn.WriteJSON(map[string]any{
+			"jsonrpc": "2.0", "id": "srq-abc123", "method": "approval",
+			"params": map[string]any{"command": "ls"},
+		})
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var f map[string]json.RawMessage
+		_ = json.Unmarshal(data, &f)
+		response <- f
+		_, _, _ = conn.ReadMessage()
+	})
+	c := dialT(t, wsURL)
+
+	var req Request
+	select {
+	case req = <-c.Requests():
+	case <-time.After(5 * time.Second):
+		t.Fatal("string-id request not surfaced")
+	}
+	if got := string(req.ID); got != `"srq-abc123"` {
+		t.Fatalf("raw id = %s", got)
+	}
+	if req.Method != "approval" {
+		t.Fatalf("method = %q", req.Method)
+	}
+
+	if err := c.Respond(req.ID, map[string]string{"choice": "deny"}); err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+	select {
+	case f := <-response:
+		if got := string(f["id"]); got != `"srq-abc123"` {
+			t.Fatalf("response id = %s, want the string id unchanged", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("response frame not written")
+	}
+}
+
+// A frame whose id is neither a number nor a string (here an array) is
+// ignored without panicking, and the next call still settles.
+func TestDispatch_UnknownIDTypeIgnored(t *testing.T) {
+	wsURL := fakeServer(t, func(conn *websocket.Conn) {
+		_ = conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": []int{1, 2}, "result": map[string]string{"ghost": "yes"}})
+		id, _, _ := readReq(t, conn)
+		_ = respond(conn, id, map[string]string{"ok": "real"})
+		_, _, _ = conn.ReadMessage()
+	})
+	c := dialT(t, wsURL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out struct {
+		OK string `json:"ok"`
+	}
+	if err := c.Call(ctx, "real.call", nil, &out); err != nil {
+		t.Fatalf("call after unknown-id frame: %v", err)
+	}
+	if out.OK != "real" {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
+// A response for an id we never issued must not disturb a real call.
+func TestDispatch_UnknownResponseIDIgnored(t *testing.T) {
+	wsURL := fakeServer(t, func(conn *websocket.Conn) {
+		_ = conn.WriteJSON(map[string]any{"jsonrpc": "2.0", "id": 999999, "result": map[string]string{"ghost": "yes"}})
+		id, _, _ := readReq(t, conn)
+		_ = respond(conn, id, map[string]string{"ok": "real"})
+		_, _, _ = conn.ReadMessage()
+	})
+	c := dialT(t, wsURL)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var out struct {
+		OK string `json:"ok"`
+	}
+	if err := c.Call(ctx, "real.call", nil, &out); err != nil {
+		t.Fatalf("call after unknown response: %v", err)
+	}
+	if out.OK != "real" {
+		t.Fatalf("out = %+v", out)
+	}
+}
+
 // Frames batched newline-delimited inside a single WS message are all
 // dispatched — upstream documents the wire as NDJSON.
 func TestReadLoop_NewlineBatchedFrames(t *testing.T) {

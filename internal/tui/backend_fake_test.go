@@ -53,6 +53,10 @@ type fakeBackend struct {
 	// an error).
 	sessionsListHook func(ctx context.Context, agentID string) (json.RawMessage, error)
 
+	// usageKeys records the session key handed to SessionUsage: /stats
+	// must send the chat's own session, never an empty string.
+	usageKeys []string
+
 	// Cron RPC seams — tests pre-seed jobs / runs / errors and read
 	// back the recorded calls through these fields.
 	cronJobs          []protocol.CronJob
@@ -89,6 +93,11 @@ type fakeBackend struct {
 	patchedModelID    string
 	patchedSessionKey string
 	patchModelErr     error
+
+	// Usage seams. usageRaw is the session.usage payload ({} by default);
+	// usageErr forces the /stats load to fail.
+	usageRaw json.RawMessage
+	usageErr error
 }
 
 func newFakeBackend() *fakeBackend {
@@ -201,6 +210,13 @@ func (f *fakeBackend) SessionPatchThinking(ctx context.Context, sessionKey, leve
 // --- UsageBackend ---
 
 func (f *fakeBackend) SessionUsage(ctx context.Context, sessionKey string) (json.RawMessage, error) {
+	f.usageKeys = append(f.usageKeys, sessionKey)
+	if f.usageErr != nil {
+		return nil, f.usageErr
+	}
+	if f.usageRaw != nil {
+		return f.usageRaw, nil
+	}
 	return json.RawMessage(`{}`), nil
 }
 

@@ -1008,3 +1008,30 @@ func TestCronsTranscript_HiddenWhenNoRunOutput(t *testing.T) {
 		}
 	}
 }
+
+// The cron form's pinned help line is 116 columns; on an 80-column
+// terminal it must wrap instead of running off the edge, and the body
+// budget must leave room for every wrapped footer row.
+func TestCronsForm_HelpLineWrapsToWidth(t *testing.T) {
+	m, _ := newTestCronsModel(t)
+	m.setSize(80, 24)
+	m, _ = m.Update(cronsLoadedMsg{jobs: sampleJobs()})
+	m = openDetail(t, m)
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if m.subset != cronSubForm {
+		t.Fatalf("expected form substate, got %v", m.subset)
+	}
+
+	out := ansi.Strip(m.viewForm())
+	for _, line := range strings.Split(out, "\n") {
+		if w := ansi.StringWidth(line); w > 80 {
+			t.Errorf("form line is %d columns wide: %q", w, line)
+		}
+	}
+	joined := strings.Join(strings.Fields(out), " ")
+	for _, want := range []string{"Ctrl+S: save anywhere", "Esc: cancel"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("footer lost %q after wrapping:\n%s", want, out)
+		}
+	}
+}

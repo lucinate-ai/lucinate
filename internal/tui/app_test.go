@@ -669,7 +669,7 @@ func TestAppModel_CreateSessionHonoursRequestTimeout(t *testing.T) {
 		if !errors.Is(created.err, context.DeadlineExceeded) {
 			t.Fatalf("expected DeadlineExceeded, got %v", created.err)
 		}
-	case <-time.After(2 * time.Second + 500*time.Millisecond):
+	case <-time.After(2*time.Second + 500*time.Millisecond):
 		t.Fatal("CreateSession command never returned — request deadline is not wired")
 	}
 }

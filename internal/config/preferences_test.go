@@ -17,11 +17,9 @@ func TestDefaultPreferences(t *testing.T) {
 }
 
 func TestSaveAndLoadPreferences(t *testing.T) {
-	// Use a temp dir to avoid touching the real config.
-	dir := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Setenv("HOME", dir)
-	defer func() { _ = os.Setenv("HOME", origHome) }()
+	// Use a temp dir to avoid touching the real config. setTestHome
+	// registers its own cleanup, so no manual save/restore is needed.
+	dir := setTestHome(t)
 
 	p := Preferences{CompletionBell: false, HistoryLimit: 100}
 	if err := SavePreferences(p); err != nil {
@@ -52,7 +50,7 @@ func TestDefaultPreferences_ConnectTimeout(t *testing.T) {
 
 func TestLoadPreferences_MissingConnectTimeout(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	configDir := filepath.Join(dir, ".lucinate")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
@@ -70,7 +68,7 @@ func TestLoadPreferences_MissingConnectTimeout(t *testing.T) {
 
 func TestLoadPreferences_MissingHistoryLimit(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	// Write a config file without historyLimit (simulates upgrade from old version).
 	configDir := filepath.Join(dir, ".lucinate")
@@ -89,7 +87,7 @@ func TestLoadPreferences_MissingHistoryLimit(t *testing.T) {
 
 func TestLoadPreferences_MissingFile(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	p := LoadPreferences()
 	if !p.CompletionBell {
@@ -102,7 +100,7 @@ func TestLoadPreferences_MissingFile(t *testing.T) {
 
 func TestLoadPreferences_MissingCheckForUpdates(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	configDir := filepath.Join(dir, ".lucinate")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
@@ -126,7 +124,7 @@ func TestLoadPreferences_MissingCheckForUpdates(t *testing.T) {
 
 func TestLoadPreferences_ExplicitlyDisabledUpdateChecks(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	configDir := filepath.Join(dir, ".lucinate")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
@@ -144,7 +142,7 @@ func TestLoadPreferences_ExplicitlyDisabledUpdateChecks(t *testing.T) {
 
 func TestSaveAndLoad_UpdateCheckFields(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	disabled := false
 	p := DefaultPreferences()
@@ -200,7 +198,7 @@ func TestNormalizeHexColor(t *testing.T) {
 
 func TestSaveAndLoadPreferences_HeaderColors(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	p := DefaultPreferences()
 	p.SetHeaderColor("agent-one", "#4FC3F7")
@@ -250,7 +248,7 @@ func TestSetHeaderColor_EmptyAgentIDIsNoop(t *testing.T) {
 
 func TestLoadPreferences_FutureTimestampReset(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	configDir := filepath.Join(dir, ".lucinate")
 	if err := os.MkdirAll(configDir, 0700); err != nil {

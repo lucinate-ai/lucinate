@@ -1,0 +1,2363 @@
+package tui
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/lucinate-ai/lucinate/internal/config"
+	"github.com/lucinate-ai/lucinate/internal/rooms"
+)
+
+// The rooms view is lucinate's menu over Hermes hosted rooms ("Bot Mode"
+// group chats). It is a three-screen flow:
+//
+//	browse     — predefined rooms + live rooms; pick one, or start a new one
+//	invite     — the invite list: toggle local Hermes profiles (2-6) to seat a room
+//	transcript — the room log, with a one-line composer; the roster answers
+//
+// The roster is frozen when the room is created (the gateway refuses a
+// re-create with different members), so "invite" always means "seat this
+// roster in a new room". That constraint is stated on screen rather than
+// hidden, because the alternative — silently forking a room — would lose
+// the transcript the user was reading.
+
+type roomsSubState int
+
+const (
+	roomsBrowse roomsSubState = iota
+	roomsInvite
+	roomsTranscript
+)
+
+const roomsPollInterval = 1500 * time.Millisecond
+
+// roomsVisibleRows caps how many list rows a rooms screen renders. The
+// invite list is every local Hermes profile (dozens on a real host), and
+// without a window the summary and the key hints get pushed off-screen —
+// the menu then shows nothing about what is selected.
+const roomsVisibleRows = 14
+
+// windowRows returns the [start, end) slice of total rows to render so
+// that cursor stays visible inside a window of at most size rows. It
+// reports how many rows were hidden above and below so the caller can
+// say so instead of silently truncating.
+func windowRows(total, cursor, size int) (start, end, hiddenAbove, hiddenBelow int) {
+	if total <= size {
+		return 0, total, 0, 0
+	}
+	if size < 1 {
+		size = 1
+	}
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > total-1 {
+		cursor = total - 1
+	}
+	start = cursor - size/2
+	if start < 0 {
+		start = 0
+	}
+	if start > total-size {
+		start = total - size
+	}
+	end = start + size
+	return start, end, start, total - end
+}
+
+// ── messages ─────────────────────────────────────────────────────────────────
+
+type roomsLoadedMsg struct {
+	presets rooms.PresetStore
+	live    []rooms.Room
+	err     error
+}
+
+type roomsProfilesMsg struct {
+	profiles []string
+	err      error
+}
+
+type roomsCreatedMsg struct {
+	roomID string
+	room   rooms.Room
+	// notice is a non-fatal remark about what happened on the way — a
+	// preset that had to follow a minted id, say. The room is open either
+	// way, so it is shown, not returned as an error.
+	notice string
+	err    error
+}
+
+type roomsLogMsg struct {
+	page rooms.LogPage
+	err  error
+	// client is the connection the page came from, so the error path can
+	// tell "the socket died" (redial) from "the gateway refused" (report).
+	client *rooms.Client
+}
+
+// newRoomEvents returns the events in incoming that the transcript does not
+// already hold. Log polls and reconnect replays overlap, so the same event
+// (same event id; same seq/kind/text for older payloads without one) must
+// never be appended twice.
+func newRoomEvents(existing, incoming []rooms.Event) []rooms.Event {
+	if len(incoming) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(existing))
+	for _, ev := range existing {
+		seen[roomEventKey(ev)] = true
+	}
+	var fresh []rooms.Event
+	for _, ev := range incoming {
+		key := roomEventKey(ev)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		fresh = append(fresh, ev)
+	}
+	return fresh
+}
+
+func roomEventKey(ev rooms.Event) string {
+	if ev.EventID != "" {
+		return "id:" + ev.EventID
+	}
+	return fmt.Sprintf("seq:%d|%s|%s", ev.Seq, ev.Kind, ev.Text())
+}
+
+type roomsSentMsg struct {
+	err error
+	// seq and text describe what actually reached the gateway: seq lets a
+	// pending /compact learn where its request landed, text is the routed
+	// form (a mode that picks a member prepends that member's mention).
+	seq  int
+	text string
+}
+
+// roomsStateMsg carries the driver status the composer needs to know
+// whether the roster is still answering, plus the room row itself: the gateway
+// is the authority on the roster (and on the models its members run), so every
+// state poll is also a refresh of what the view shows.
+type roomsStateMsg struct {
+	working  bool
+	room     *rooms.Room
+	activity []rooms.MemberActivity
+	pending  []rooms.PendingAction
+	blocked  bool
+	err      error
+}
+
+type roomsTickMsg struct{}
+
+// ── model ────────────────────────────────────────────────────────────────────
+
+type roomsModel struct {
+	conn      *config.Connection
+	token     string
+	hideHints bool
+
+	width, height int
+	sub           roomsSubState
+
+	// shared holds the gateway connection across model copies. roomsModel is
+	// a value type that Update returns by value, so a plain `client` field
+	// written from a method lands in a temporary and is thrown away. That
+	// is exactly what made dial() open — and leak — a new socket on every
+	// poll: two per tick, thousands an hour, until Windows ran out of socket
+	// buffers (WSAENOBUFS) and room members could no longer reach the model
+	// APIs, which the user saw as "the roster stopped answering".
+	shared *clientHolder
+
+	presets  rooms.PresetStore
+	live     []rooms.Room
+	profiles []string
+	page     rooms.LogPage
+
+	// evidence is the verdict on each member reply, keyed by event key. A map
+	// is shared through roomsModel's value copies, so writing it from Update
+	// survives the copy the next message runs against.
+	evidence map[string]rooms.ReplyEvidence
+
+	cursor       int
+	inviteCursor int
+	selected     map[string]bool
+
+	openRoomID string
+	openRoom   *rooms.Room
+	composer   string
+	since      int
+
+	// working mirrors the room driver: while a turn is in flight, sending
+	// another message CANCELS it (the gateway marks the older event
+	// `superseded_by_newer_user_event`). Messages typed meanwhile are held
+	// in queue and sent when the roster settles, matching what the chat
+	// view does for the same reason.
+	working bool
+	queue   []string
+
+	// lastPulseSeq is the seq of the last moderator pulse this view posted.
+	// rooms.ShouldPulse compares it with the newest seq so a silent room is
+	// not pulsed over and over.
+	lastPulseSeq int
+	// lastPulseAt debounces the `p` key: a second press within the debounce
+	// window is ignored, because two near-identical pulses superseded each
+	// other in a live room and the second one ate the instruction nobody
+	// had answered yet.
+	lastPulseAt time.Time
+
+	// scroll is how many lines back from the live tail the transcript
+	// window sits; 0 is pinned to the newest line. Without it the window
+	// only ever showed the tail and history was unreachable.
+	scroll int
+
+	// lastProgress is when the room transcript last grew. It bounds the
+	// hold: a driver can claim to be working while its task is pinned, and
+	// the transcript then stops moving — holding a message behind that is
+	// the same silence as no reply.
+	lastProgress time.Time
+
+	// prefs is the room's local settings — routing mode, per-member header
+	// colours, the compaction window and the live compaction. They are
+	// loaded with the view and persisted on the first change, so a mode set
+	// once survives a restart.
+	prefs rooms.PrefsStore
+
+	// findQuery is the live /find query: matched lines are highlighted in
+	// the transcript and listed in the notice.
+	findQuery string
+
+	// notice is a multi-line block above the composer: the /cost table,
+	// /find hits, /help. It never becomes part of the transcript, and esc
+	// clears it.
+	notice string
+
+	// spinnerFrame animates the braille glyph on the in-flight reply rows;
+	// spinnerTicking keeps exactly one tick scheduled, the same discipline
+	// the chat view uses.
+	spinnerFrame   int
+	spinnerTicking bool
+
+	// backoff is the redial schedule for a dropped gateway socket, and
+	// reconnecting says a redial is in flight. attempt is stamped onto the
+	// scheduled tick so a stale one cannot redial twice.
+	backoff          rooms.Backoff
+	reconnecting     bool
+	reconnectAttempt int
+
+	// pendingCompact is a /compact request waiting for the roster's brief.
+	pendingCompact *pendingCompact
+
+	// interrupted holds replies the connection cut in half, keyed by member.
+	// The gateway log never records the failure, so this is the only place
+	// the truth lives until the member answers again.
+	interrupted map[string]interruptedTurn
+
+	// model is the /model overlay: the member list, then the model list.
+	model modelPicker
+	// memberModels is the model each member answers with *for this room
+	// session*. It is memory only — never written to the profile, to
+	// config.yaml or to lucinate's prefs — and rebuilt from the gateway's
+	// roster whenever the room is (re)loaded.
+	memberModels map[string]string
+
+	// activity is who the gateway says is answering right now. The durable
+	// log never carries member text deltas (upstream keeps them out of it),
+	// so this poll result is the only live signal the view can render.
+	activity []rooms.MemberActivity
+	// pending is what the room is waiting on: an approval, or a retry of an
+	// indeterminate task. Both are actionable from the transcript.
+	pending []rooms.PendingAction
+	blocked bool
+
+	confirmDisband string
+	err            error
+	status         string
+	loaded         bool
+}
+
+func newRoomsModel(conn *config.Connection, hideHints bool) roomsModel {
+	m := roomsModel{
+		conn:      conn,
+		hideHints: hideHints,
+		selected:  map[string]bool{},
+		shared:    &clientHolder{},
+	}
+	if conn != nil {
+		m.token = config.GetAPIKey(conn.ID)
+	}
+	return m
+}
+
+func (m *roomsModel) setSize(w, h int) {
+	m.width, m.height = w, h
+}
+
+// viewWrapWidth is the column budget for hint and explanatory lines: one
+// column short of the terminal so a full row never runs into the edge.
+func (m roomsModel) viewWrapWidth() int {
+	w := m.width - 1
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
+func (m roomsModel) Init() tea.Cmd {
+	return tea.Batch(m.loadAll(), m.loadProfiles(), m.loadPrefs())
+}
+
+// clientHolder shares one gateway connection across model copies. Cmds run
+// on their own goroutines, hence the mutex.
+type clientHolder struct {
+	mu     sync.Mutex
+	client *rooms.Client
+}
+
+func (h *clientHolder) get() *rooms.Client {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.client
+}
+
+func (h *clientHolder) set(c *rooms.Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.client = c
+}
+
+// drop closes c if it is still the cached connection, so a failed call
+// cannot pin a dead socket for the rest of the session.
+func (h *clientHolder) drop(c *rooms.Client) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.client == c {
+		_ = h.client.Close()
+		h.client = nil
+	}
+}
+
+// dial returns the view's one gateway connection, opening it on first use.
+//
+// Value receiver on purpose: every caller holds a model copy, and a pointer
+// receiver here is what silently defeated the cache before. The connection
+// lives in shared, which survives the copies.
+func (m roomsModel) dial() (*rooms.Client, error) {
+	if m.shared == nil {
+		return nil, fmt.Errorf("no connection holder")
+	}
+	if c := m.shared.get(); c != nil {
+		return c, nil
+	}
+	if m.conn == nil {
+		return nil, fmt.Errorf("no active connection")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c, err := roomsDialer(ctx, m.conn.URL, m.token)
+	if err != nil {
+		return nil, err
+	}
+	m.shared.set(c)
+	return c, nil
+}
+
+func (m roomsModel) Close() {
+	if m.shared == nil {
+		return
+	}
+	if c := m.shared.get(); c != nil {
+		m.shared.drop(c)
+	}
+}
+
+// ── commands ─────────────────────────────────────────────────────────────────
+
+func (m roomsModel) loadAll() tea.Cmd {
+	conn, token := m.conn, m.token
+	return func() tea.Msg {
+		path, err := rooms.DefaultPresetsPath()
+		if err != nil {
+			return roomsLoadedMsg{err: err}
+		}
+		presets, _ := rooms.LoadPresets(path)
+		if conn == nil {
+			return roomsLoadedMsg{presets: presets, err: fmt.Errorf("no active connection")}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		c, err := rooms.DialBaseURL(ctx, conn.URL, token)
+		if err != nil {
+			return roomsLoadedMsg{presets: presets, err: err}
+		}
+		defer c.Close()
+		live, err := c.List(ctx, false)
+		return roomsLoadedMsg{presets: presets, live: live, err: err}
+	}
+}
+
+func (m roomsModel) loadProfiles() tea.Cmd {
+	return func() tea.Msg {
+		profiles, err := rooms.DiscoverLocalProfiles()
+		return roomsProfilesMsg{profiles: profiles, err: err}
+	}
+}
+
+func (m roomsModel) createRoom() tea.Cmd {
+	profiles := m.selectedProfiles()
+	members := rooms.RosterFor(profiles)
+	name := rooms.DisplayNameFor(profiles)
+	conn, token := m.conn, m.token
+	return func() tea.Msg {
+		if err := rooms.ValidateRoster(members); err != nil {
+			return roomsCreatedMsg{err: err}
+		}
+		// A room starts with its shared directory on disk: every member's
+		// handoffs land there, so it has to exist before the first turn
+		// (and its path is what the first message hands out). It is
+		// created only for the id the gateway actually accepted — creating
+		// it for the requested slug before the call leaves an empty
+		// .rooms/<requested-id> behind whenever the id is rejected and
+		// retried under a minted one.
+		roomID := rooms.Slug(name)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		c, err := rooms.DialBaseURL(ctx, conn.URL, token)
+		if err != nil {
+			return roomsCreatedMsg{err: err}
+		}
+		defer c.Close()
+		room, err := c.Create(ctx, roomID, name, members)
+		if err != nil {
+			return roomsCreatedMsg{err: err}
+		}
+		if _, err := rooms.EnsureDefaultRoomDir(room.RoomID); err != nil {
+			return roomsCreatedMsg{err: err}
+		}
+		return roomsCreatedMsg{roomID: room.RoomID, room: room}
+	}
+}
+
+func (m roomsModel) createFromPreset(p rooms.Preset) tea.Cmd {
+	conn, token := m.conn, m.token
+	return func() tea.Msg {
+		// The room directory is created once the gateway has accepted the
+		// id: creating it for the preset's id first leaves an orphan when
+		// that id is tombstoned and Create mints a replacement.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		c, err := rooms.DialBaseURL(ctx, conn.URL, token)
+		if err != nil {
+			return roomsCreatedMsg{err: err}
+		}
+		defer c.Close()
+		room, err := c.Create(ctx, p.RoomID, p.Name, p.Members)
+		if err != nil {
+			return roomsCreatedMsg{err: err}
+		}
+		if _, err := rooms.OrientationFromWorktree(p.Worktree).WithRoomDir(room.RoomID); err != nil {
+			return roomsCreatedMsg{err: err}
+		}
+		notice := ""
+		if room.RoomID != p.RoomID {
+			// The id this preset named was refused (tombstoned, or held by
+			// another room), so the room it started lives under a minted id.
+			// The preset follows it — otherwise the next start would mint
+			// yet another room.
+			path, pathErr := rooms.DefaultPresetsPath()
+			if pathErr == nil {
+				if changed, err := rooms.UpdatePresetRoomID(path, p.Name, room.RoomID); err != nil {
+					notice = fmt.Sprintf("room %s started, but preset %q still points at %s: %v",
+						room.RoomID, p.Name, p.RoomID, err)
+				} else if changed {
+					notice = fmt.Sprintf("preset %q now points at room %s (the old id %s is gone)",
+						p.Name, room.RoomID, p.RoomID)
+				}
+			}
+		}
+		return roomsCreatedMsg{roomID: room.RoomID, room: room, notice: notice}
+	}
+}
+
+func (m roomsModel) loadLog(roomID string, since int) tea.Cmd {
+	return func() tea.Msg {
+		c, err := m.dial()
+		if err != nil {
+			return roomsLogMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		page, err := c.Log(ctx, roomID, since, rooms.DefaultLogLimit)
+		if err != nil {
+			// A transport failure keeps the client in place: the message
+			// handler drops it and arms the redial, so the reconnect
+			// schedule is decided in one place.
+			if disconnected(c, err) {
+				return roomsLogMsg{err: err, client: c}
+			}
+			m.shared.drop(c)
+		}
+		return roomsLogMsg{page: page, err: err, client: c}
+	}
+}
+
+func (m roomsModel) send() tea.Cmd {
+	return m.sendText(strings.TrimSpace(m.composer))
+}
+
+// sendText posts a message to the open room. It is separate from send() so
+// a queued message can be dispatched without touching the composer.
+func (m roomsModel) sendText(text string) tea.Cmd {
+	roomID := m.openRoomID
+	if roomID == "" || text == "" {
+		return nil
+	}
+	orient := m.orientationFor(roomID)
+	return func() tea.Msg {
+		// The room directory rides the first message, and it has to exist
+		// by then: a contract naming a path we could not create is an
+		// error, not a message worth sending.
+		orient, err := orient.WithRoomDir(roomID)
+		if err != nil {
+			return roomsSentMsg{err: err}
+		}
+		c, err := m.dial()
+		if err != nil {
+			return roomsSentMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		event, err := c.SendOpening(ctx, roomID, text, rooms.DefaultThreadID, orient)
+		if err != nil {
+			m.shared.drop(c)
+		}
+		return roomsSentMsg{err: err, seq: event.Seq, text: text}
+	}
+}
+
+// loadState asks the driver whether the roster is still answering. The
+// composer needs this before it sends: a second user event cancels the
+// first one's in-flight turns.
+func (m roomsModel) loadState() tea.Cmd {
+	roomID := m.openRoomID
+	if roomID == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		c, err := m.dial()
+		if err != nil {
+			return roomsStateMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		st, err := c.State(ctx, roomID)
+		if err != nil {
+			m.shared.drop(c)
+			return roomsStateMsg{err: err}
+		}
+		working := st.DriverStatus != nil && st.DriverStatus.Working
+		room := st.Room
+		var activity []rooms.MemberActivity
+		var pending []rooms.PendingAction
+		blocked := false
+		if st.DriverStatus != nil {
+			activity = st.DriverStatus.MemberActivity
+			pending = st.DriverStatus.PendingActions
+			blocked = st.DriverStatus.Blocked
+		}
+		// The room row travels with the status: the roster (and the model each
+		// member runs) is the gateway's to define, so every poll refreshes it.
+		return roomsStateMsg{working: working, room: &room, activity: activity, pending: pending, blocked: blocked}
+	}
+}
+
+// orientationFor resolves the project context a room's first message
+// carries: the predefined room's worktree when the room was seated from
+// one, else the Orca terminal this TUI runs in.
+func (m roomsModel) orientationFor(roomID string) rooms.Orientation {
+	if path, err := rooms.DefaultPresetsPath(); err == nil {
+		if store, err := rooms.LoadPresets(path); err == nil {
+			if p := store.Find(roomID); p != nil && strings.TrimSpace(p.Worktree) != "" {
+				return rooms.OrientationFromWorktree(p.Worktree)
+			}
+		}
+	}
+	return rooms.OrientationFromEnv()
+}
+
+func (m roomsModel) disband(roomID string) tea.Cmd {
+	return func() tea.Msg {
+		c, err := m.dial()
+		if err != nil {
+			return roomsSentMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err = c.Disband(ctx, roomID)
+		if err != nil {
+			m.shared.drop(c)
+		}
+		return roomsSentMsg{err: err}
+	}
+}
+
+func roomsTick() tea.Cmd {
+	return tea.Tick(roomsPollInterval, func(time.Time) tea.Msg { return roomsTickMsg{} })
+}
+
+// ── selection helpers (pure; unit-tested) ────────────────────────────────────
+
+func (m roomsModel) selectedProfiles() []string {
+	out := make([]string, 0, len(m.selected))
+	for p, on := range m.selected {
+		if on {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// browseRows is the flat list the cursor walks: predefined rooms first,
+// then the live rooms on the gateway.
+func (m roomsModel) browseRows() []browseRow {
+	rows := make([]browseRow, 0, len(m.presets.Presets)+len(m.live))
+	for i := range m.presets.Presets {
+		rows = append(rows, browseRow{kind: rowPreset, preset: &m.presets.Presets[i]})
+	}
+	for i := range m.live {
+		rows = append(rows, browseRow{kind: rowLive, room: &m.live[i]})
+	}
+	return rows
+}
+
+// liveRoomCount is how many live rooms the last load reported, or -1 when
+// this session has no meaningful list yet — the picker then shows the plain
+// rooms row instead of claiming the account has zero.
+func (m roomsModel) liveRoomCount() int {
+	if !m.loaded {
+		return -1
+	}
+	return len(m.live)
+}
+
+type browseRowKind int
+
+const (
+	rowPreset browseRowKind = iota
+	rowLive
+)
+
+type browseRow struct {
+	kind   browseRowKind
+	preset *rooms.Preset
+	room   *rooms.Room
+}
+
+// toggle flips a profile in the invite list, refusing to exceed the
+// gateway's roster ceiling rather than letting the create call fail.
+func (m *roomsModel) toggle(profile string) string {
+	if m.selected[profile] {
+		delete(m.selected, profile)
+		return ""
+	}
+	if len(m.selectedProfiles()) >= rooms.MaxMembers {
+		return fmt.Sprintf("a room seats at most %d profiles — deselect one first", rooms.MaxMembers)
+	}
+	m.selected[profile] = true
+	return ""
+}
+
+// ── update ───────────────────────────────────────────────────────────────────
+
+func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
+	switch msg := msg.(type) {
+	case roomsLoadedMsg:
+		m.presets, m.live = msg.presets, msg.live
+		m.err = msg.err
+		// loaded means "the gateway answered and this list is meaningful": on
+		// a failure the view must not claim the account simply has no rooms.
+		m.loaded = msg.err == nil
+		if m.cursor >= len(m.browseRows()) && m.cursor > 0 {
+			m.cursor = len(m.browseRows()) - 1
+		}
+		return m, nil
+
+	case roomsProfilesMsg:
+		if msg.err == nil {
+			m.profiles = msg.profiles
+		}
+		return m, nil
+
+	case roomsCreatedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.sub = roomsBrowse
+			return m, nil
+		}
+		// The create IS the entry: the room the gateway accepted is the one
+		// the user asked for, so land in its transcript instead of making
+		// them press enter a second time on the browse list. The notice
+		// stays in m.status, which the transcript renders under the log.
+		m.err = nil
+		m.status = fmt.Sprintf("room %s ready — %s", msg.roomID, rosterLabel(msg.room))
+		if msg.notice != "" {
+			m.notice = msg.notice
+		}
+		m.sub = roomsTranscript
+		m.openRoomID = msg.roomID
+		m.openRoom = &msg.room
+		m.page = rooms.LogPage{}
+		m.since = 0
+		m.interrupted = nil
+		m.memberModels = nil
+		m.model = modelPicker{}
+		// Same batch as opening a room from the list: the log, the roster's
+		// live state, and the poll tick that keeps both honest.
+		return m, tea.Batch(m.loadAll(), m.loadLog(msg.roomID, 0), m.loadState(), roomsTick())
+
+	case restartDoneMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			m.status = ""
+			return m, nil
+		}
+		// The room is open even when a model did not seat: the roster is
+		// what a restart is for, and the model can be reseated with /model.
+		m.err = msg.seatErr
+		m.status = fmt.Sprintf("room %s ready — %s", msg.room.RoomID, rosterLabel(msg.room))
+		m.sub = roomsTranscript
+		m.openRoomID = msg.room.RoomID
+		m.openRoom = &msg.room
+		m.page = rooms.LogPage{}
+		m.since = 0
+		m.interrupted = nil
+		m.memberModels = nil
+		m.model = modelPicker{}
+		cmds := []tea.Cmd{m.loadAll(), m.loadLog(msg.room.RoomID, 0)}
+		if msg.summary != "" {
+			m.working = true
+			m.lastProgress = time.Now()
+			cmds = append(cmds, m.sendText(msg.summary), m.ensureRoomsSpinner())
+		}
+		return m, tea.Batch(cmds...)
+
+	case roomsLogMsg:
+		if msg.err != nil {
+			// A dropped socket is recoverable: the transcript already on
+			// screen stays valid, so it must not read as a room error.
+			if disconnected(msg.client, msg.err) {
+				return m, m.scheduleReconnect(msg.err.Error())
+			}
+			m.err = msg.err
+			return m, nil
+		}
+		m.reconnecting = false
+		// A member answering after the drop clears its interrupted marker;
+		// the reconnect's own history replay does not (see AfterSeq).
+		m.clearResumedInterruptions(msg.page.Events)
+		if len(msg.page.Events) > 0 {
+			// A poll/reconnect can replay events already on screen. Only
+			// genuinely new events may advance the scroll offset or enter
+			// the transcript — otherwise /find reports every match twice.
+			fresh := newRoomEvents(m.page.Events, msg.page.Events)
+			// Every member reply is checked against the room directory once,
+			// when it first arrives: the ledger and the file are on disk, and
+			// the verdict is stored by event key so scrolling never re-reads
+			// them. The row the renderer adds is counted below and in
+			// transcriptEventLines, so the pager stays honest.
+			if len(fresh) > 0 {
+				dir := ""
+				if m.openRoomID != "" {
+					dir = m.roomDirIfExists(m.orientationFor(m.openRoomID), m.openRoomID)
+				}
+				if m.evidence == nil {
+					m.evidence = make(map[string]rooms.ReplyEvidence)
+				}
+				for _, ev := range fresh {
+					if ev.Kind != "message.member" {
+						continue
+					}
+					m.evidence[roomEventKey(ev)] = rooms.VerifyReply(dir, eventHandle(ev, m.roster()), ev.Text())
+				}
+			}
+			if m.scroll > 0 {
+				// The user is reading history. New arrivals must not push
+				// the text they are looking at down the screen, so advance
+				// the offset by exactly what was appended.
+				for _, ev := range fresh {
+					m.scroll += len(strings.Split(m.formatEvent(ev), "\n"))
+				}
+			}
+			m.page.Events = append(m.page.Events, fresh...)
+			m.since = msg.page.Cursor
+		}
+		// Progress = the room's newest seq moved. Polling returns the same
+		// events again when the cursor does not advance, so counting any
+		// payload as progress would keep the hold alive forever.
+		if msg.page.LatestSeq > m.page.LatestSeq {
+			m.lastProgress = time.Now()
+		}
+		m.page.LatestSeq = msg.page.LatestSeq
+		return m, tea.Batch(m.ensureRoomsSpinner(), m.applyBrief())
+
+	case roomsSentMsg:
+		if msg.err != nil {
+			if rooms.IsDisconnect(msg.err) {
+				return m, m.scheduleReconnect(msg.err.Error())
+			}
+			m.err = msg.err
+			return m, nil
+		}
+		m.status = ""
+		// Optimistic: the driver is now busy, and the state poll is up to
+		// 1.5s away. Without this a message typed immediately after would
+		// still be sent, cancelling the turn set that just started. The
+		// "roster is answering" row is derived from working/streams at
+		// render time — storing it here left a settled room claiming to be
+		// answering for the rest of the session.
+		m.working = true
+		// A pending /compact learns where its request landed, so the brief
+		// is the first member reply posted after it.
+		if m.pendingCompact != nil && msg.seq > 0 {
+			m.pendingCompact.promptSeq = msg.seq
+		}
+		// A pulse is the moderator's own message: its seq is where the new
+		// discussion starts, and ShouldPulse measures the next one from here.
+		if strings.HasPrefix(msg.text, "[Puls pokoju]") {
+			m.lastPulseSeq = msg.seq
+		}
+		if m.openRoomID != "" {
+			return m, tea.Batch(m.loadLog(m.openRoomID, m.since), m.ensureRoomsSpinner())
+		}
+		return m, nil
+
+	case roomsTickMsg:
+		if m.sub == roomsTranscript && m.openRoomID != "" {
+			return m, tea.Batch(m.loadLog(m.openRoomID, m.since), m.loadState(), roomsTick(), m.ensureRoomsSpinner())
+		}
+		return m, nil
+
+	case roomsSpinnerTickMsg:
+		return m.handleSpinnerTick()
+
+	case roomsReconnectMsg:
+		return m.handleReconnect(msg.attempt)
+
+	case roomsPrefsMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.prefs = msg.store
+		return m, nil
+
+	case roomsExportedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.status = "exported: " + strings.Join(msg.paths, ", ")
+		m.notice = "transcript exported:\n" + strings.Join(msg.paths, "\n")
+		return m, nil
+
+	case roomsModelsMsg:
+		m.applyModels(msg)
+		return m, nil
+
+	case roomsModelSetMsg:
+		m.applyModelSet(msg)
+		return m, nil
+
+	case roomsStateMsg:
+		if msg.room != nil {
+			// The gateway owns the roster, so a poll is also how a member's
+			// model (changed here or elsewhere) becomes the view's truth. The
+			// local overlay stays as a fallback for a gateway that accepts a
+			// switch without storing it; the roster wins when it says anything.
+			room := *msg.room
+			m.openRoom = &room
+		}
+		if msg.err != nil {
+			return m, nil
+		}
+		m.working = msg.working
+		m.activity = msg.activity
+		m.pending = msg.pending
+		m.blocked = msg.blocked
+		// Keep the queue's status honest: the user is staring at "queued"
+		// and cannot tell a thinking roster from a pinned one. Show the
+		// elapsed silence and the deadline, so it reads as a countdown
+		// rather than a hang.
+		if len(m.queue) > 0 && m.working && !m.logIdle() {
+			elapsed := time.Since(m.lastProgress).Round(time.Second)
+			left := (staleWorkingAfter - time.Since(m.lastProgress)).Round(time.Second)
+			if left < 0 {
+				left = 0
+			}
+			m.status = fmt.Sprintf(
+				"queued %d — roster quiet for %s, sends in %s if it stays silent (sending now would cancel its work)",
+				len(m.queue), elapsed, left)
+		}
+		// Drain one queued message per settle, so a burst typed while the
+		// roster was busy does not itself supersede the next round.
+		if !m.working && len(m.queue) > 0 {
+			text := m.queue[0]
+			m.queue = m.queue[1:]
+			m.status = "sending queued message"
+			m.working = true
+			return m, tea.Batch(m.sendText(text), m.loadState())
+		}
+		return m, nil
+
+	case roomsApprovedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.status = fmt.Sprintf("approved @%s (%s)", msg.member, msg.choice)
+		return m, m.loadState()
+
+	case roomsRetriedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.status = fmt.Sprintf("retried @%s's task", msg.member)
+		return m, m.loadState()
+
+	case roomsStoppedMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.working = false
+		m.activity = nil
+		m.status = fmt.Sprintf("cancelled %d turn(s)", msg.cancelled)
+		cmds := []tea.Cmd{m.loadState()}
+		if m.openRoomID != "" {
+			cmds = append(cmds, m.loadLog(m.openRoomID, m.since))
+		}
+		return m, tea.Batch(cmds...)
+
+	case tea.PasteMsg:
+		// Bracketed paste. Only the transcript has a composer; anywhere
+		// else there is nothing to paste into, and silently dropping it
+		// is correct.
+		if m.sub != roomsTranscript {
+			return m, nil
+		}
+		text := sanitizePaste(msg.Content)
+		if text == "" {
+			return m, nil
+		}
+		m.composer += text
+		return m, nil
+
+	case tea.MouseWheelMsg:
+		if m.sub != roomsTranscript {
+			return m, nil
+		}
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			return m.scrollTranscript(3)
+		case tea.MouseWheelDown:
+			return m.scrollTranscript(-3)
+		}
+		return m, nil
+
+	case tea.KeyPressMsg:
+		return m.handleKey(msg)
+	}
+	return m, nil
+}
+
+// sanitizePaste normalises clipboard text. CRLF and lone CR become LF so a
+// paste from a Windows app does not arrive as stray carriage returns, and
+// control characters are dropped so they cannot corrupt the rendered box.
+func sanitizePaste(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n', r >= 0x20, r == '\t':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// transcriptLines flattens the room history into the exact lines the view
+// renders, so scrolling and rendering agree on what a "line" is.
+//
+// Long messages are wrapped HERE, to the pane width. A line left to wrap on
+// its own occupies two terminal rows while the view counted one, so the
+// next frame overwrites the wrapped remainder and the whole layout shifts —
+// which is what a cursor that "jumps on its own" actually was.
+func (m roomsModel) transcriptLines() []string {
+	width := m.width - 1
+	if width < 20 {
+		width = 20
+	}
+	var lines []string
+	// A compaction replaces the part of the transcript it covers, so the
+	// brief is the first thing the reader sees — right where the summarised
+	// messages used to be.
+	if c := m.roomPrefs().Compaction; c != nil && strings.TrimSpace(c.Summary) != "" {
+		lines = append(lines, compactionRule(c))
+		for _, l := range strings.Split(c.Summary, "\n") {
+			lines = append(lines, roomsBriefStyle.Render("  "+strings.TrimSpace(l)))
+		}
+		lines = append(lines, "")
+	}
+	pulls := m.peerPullAnnotations()
+	for _, ev := range m.compactedEvents() {
+		lines = append(lines, m.transcriptEventLines(ev, width)...)
+		if ann := pulls[roomEventKey(ev)]; ann != "" {
+			lines = append(lines, statusStyle.Render("  "+ann))
+		}
+	}
+	return lines
+}
+
+// transcriptEventLines renders one event as one or more pane rows. The body
+// is wrapped with a hanging indent so a paragraph stays visually attached to
+// its timestamp and @handle: left to wrap on its own, the continuation began
+// at column 0 and read as a new event (and the pager counted one row where
+// the terminal drew three).
+func (m roomsModel) transcriptEventLines(ev rooms.Event, width int) []string {
+	out := m.transcriptBodyLines(ev, width)
+	// The evidence row is added after the message body, as its own wrapped
+	// row, so it enters the same line list the pager counts.
+	if line := m.evidenceLine(ev); line != "" {
+		out = append(out, wrapTranscriptRow(line, width)...)
+	}
+	return out
+}
+
+// transcriptBodyLines renders the message itself; the caller adds the
+// evidence row on top.
+func (m roomsModel) transcriptBodyLines(ev rooms.Event, width int) []string {
+	row := m.formatEventRow(ev)
+	// The body as formatEvent rendered it (highlighting included), so the
+	// prefix/body split works while /find is active too.
+	body := ev.Text()
+	if m.findQuery != "" && body != "" {
+		body = highlightQuery(body, m.findQuery, roomsMatchStyle)
+	}
+	// Lifecycle events (turn.started, turn.settled, …) have no body of
+	// their own; the whole row is already short and styled.
+	if body == "" || !strings.HasSuffix(row, body) {
+		return wrapTranscriptRow(row, width)
+	}
+	prefix := strings.TrimSuffix(row, body)
+	indent := displayWidth(prefix)
+	bodyWidth := width - indent
+	if bodyWidth < 12 {
+		// Too narrow for a hanging indent to leave a readable column; fall
+		// back to wrapping the whole row so short bodies stay together.
+		return wrapTranscriptRow(row, width)
+	}
+	parts := strings.Split(wordWrap(body, bodyWidth), "\n")
+	out := make([]string, 0, len(parts))
+	out = append(out, prefix+parts[0])
+	for _, p := range parts[1:] {
+		out = append(out, continuationGutter(indent)+p)
+	}
+	return out
+}
+
+// wrapTranscriptRow hard-wraps a pre-formatted row (no event body) to the
+// pane width, so a long speaker label still cannot overflow the pane.
+func wrapTranscriptRow(row string, width int) []string {
+	var out []string
+	for _, l := range strings.Split(ansi.Wordwrap(row, width, " "), "\n") {
+		out = append(out, strings.Split(ansi.Hardwrap(l, width, false), "\n")...)
+	}
+	return out
+}
+
+// continuationGutter is the hanging indent under a wrapped event body: it
+// aligns the continuation with the first body column and marks it with a
+// dimmed bar so the paragraph reads as one event.
+func continuationGutter(indent int) string {
+	if indent < 2 {
+		if indent < 0 {
+			indent = 0
+		}
+		return strings.Repeat(" ", indent)
+	}
+	return strings.Repeat(" ", indent-2) + statusStyle.Render("│ ")
+}
+
+// scrollTranscript moves the window: positive goes back into history,
+// negative returns toward the live tail, 0 is pinned to the newest line.
+//
+// The maximum offset keeps one full window of history on screen. Clamping to
+// the total line count instead let the window collapse to nothing — pressing
+// Home on a long room blanked the transcript instead of showing its start.
+func (m roomsModel) scrollTranscript(delta int) (roomsModel, tea.Cmd) {
+	m.scroll += delta
+	total := len(m.transcriptLines())
+	if max := total - m.transcriptRows(); m.scroll > max {
+		m.scroll = max
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+	return m, nil
+}
+
+// composerPrompt is the label the draft is typed after.
+const composerPrompt = "you › "
+
+// composerMaxTextRows is how many rows of the draft are shown at once. A
+// seventh row is reserved for the overflow marker, so the box stays seven
+// content rows tall at most.
+const composerMaxTextRows = 6
+
+// composerTextWidth is the column budget for one visual row of the draft:
+// the view width minus the box border and padding and the prompt.
+func composerTextWidth(width int) int {
+	box := width - 1
+	if box < 20 {
+		box = 20
+	}
+	w := box - 4 - lipgloss.Width(composerPrompt)
+	if w < 8 {
+		w = 8
+	}
+	return w
+}
+
+// composerVisualRows wraps the draft to the box width, one visual row per
+// terminal row. Nothing is dropped: the wrap is bottom-anchored to the
+// caret, and the caller keeps the tail.
+func (m roomsModel) composerVisualRows(width int) []string {
+	tw := composerTextWidth(width)
+	var rows []string
+	for _, line := range strings.Split(m.composer, "\n") {
+		line = strings.ReplaceAll(line, "\t", "    ")
+		rows = append(rows, strings.Split(ansi.Wrap(line, tw, " "), "\n")...)
+	}
+	if len(rows) == 0 {
+		rows = []string{""}
+	}
+	return rows
+}
+
+// composerLimit is the most content rows the box may take without starving
+// the transcript: everything above and below it fits, and the transcript
+// keeps at least three rows.
+func (m roomsModel) composerLimit(width int) int {
+	h := m.height
+	if h <= 0 {
+		h = 24
+	}
+	limit := h - m.roomsChromeRows() - 5
+	if limit > composerMaxTextRows+1 {
+		limit = composerMaxTextRows + 1
+	}
+	if limit < 2 {
+		// One row for the marker, one for the line being typed.
+		limit = 2
+	}
+	return limit
+}
+
+// composerLayout is the visible window of the draft and, when older rows
+// scrolled out, the one dim marker row above it. The window always ends at
+// the caret, so the tail is never dropped.
+func (m roomsModel) composerLayout(width int) (rows []string, marker string) {
+	all := m.composerVisualRows(width)
+	limit := m.composerLimit(width)
+	if len(all) <= limit {
+		return all, ""
+	}
+	textRows := limit - 1
+	if textRows < 1 {
+		textRows = 1
+	}
+	hidden := len(all) - textRows
+	marker = fmt.Sprintf("↑ %d earlier line(s)", hidden)
+	// A pasted document keeps its size summary as the top row: the tail is
+	// what matters, but the reader still needs to know how much is above it.
+	if strings.Contains(m.composer, "\n") {
+		marker += fmt.Sprintf(" · [%d lines · %d chars]",
+			strings.Count(m.composer, "\n")+1, len([]rune(m.composer)))
+	}
+	return all[len(all)-textRows:], marker
+}
+
+// composerHeight is the composer box's real height in terminal rows: its
+// visible content rows (1..7) plus the two border rows. The view and
+// transcriptRows share it so they can never disagree about the layout.
+func (m roomsModel) composerHeight(width int) int {
+	rows, marker := m.composerLayout(width)
+	n := len(rows)
+	if marker != "" {
+		n++
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n + 2
+}
+
+// composerView renders the composer inside its box. The box grows with the
+// draft: every visible visual row is drawn, with the prompt on the first
+// text row and the overflow marker above it when the draft is longer.
+func (m roomsModel) composerView(width int) string {
+	rows, marker := m.composerLayout(width)
+	gutter := strings.Repeat(" ", lipgloss.Width(composerPrompt))
+	content := make([]string, 0, len(rows)+1)
+	if marker != "" {
+		content = append(content, gutter+statusStyle.Render(marker))
+	}
+	for i, row := range rows {
+		prefix := gutter
+		if i == 0 {
+			prefix = composerPrompt
+		}
+		content = append(content, prefix+row)
+	}
+	return inputBorderStyle.Render(strings.Join(content, "\n"))
+}
+
+// Cursor places the terminal's cursor inside the composer, on the last
+// visible visual row — the line being typed — after the last rune of the
+// draft. It never leaves the box.
+//
+// The rooms composer is a plain string, so nothing ever positioned the
+// cursor: the terminal painted its own wherever the last write ended —
+// outside the box, below it. The row is found in the rendered view rather
+// than recomputed, so the caret cannot drift when the layout changes.
+func (m roomsModel) Cursor() *tea.Cursor {
+	if m.sub != roomsTranscript {
+		return nil
+	}
+	lines := strings.Split(m.View(), "\n")
+	row := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		// The composer is the last rounded block in the view.
+		if strings.HasPrefix(ansi.Strip(lines[i]), "╭") {
+			row = i
+			break
+		}
+	}
+	if row < 0 || row+1 >= len(lines) {
+		return nil
+	}
+	rows, marker := m.composerLayout(m.width)
+	contentRows := len(rows)
+	if marker != "" {
+		contentRows++
+	}
+	// Inside the box: its border and padding, the prompt gutter, then the
+	// last visual row of the draft.
+	col := 2 + lipgloss.Width(composerPrompt) + displayWidth(rows[len(rows)-1])
+	return tea.NewCursor(col, row+contentRows)
+}
+
+// deleteLastWord removes the trailing word and the spaces before it, so
+// ctrl+w in the composer behaves like it does in a shell.
+func deleteLastWord(s string) string {
+	trimmed := strings.TrimRight(s, " \t")
+	if i := strings.LastIndexAny(trimmed, " \t"); i >= 0 {
+		return trimmed[:i+1]
+	}
+	return ""
+}
+
+// mouseStatusText explains the capture mode from the rooms transcript. The
+// chat has its own /mouse feedback row, but that row is off-screen while the
+// rooms view is up, so the transcript reports it here instead.
+func mouseStatusText(on bool) string {
+	if on {
+		return "mouse capture on — the wheel scrolls and drag selects in the chat; /mouse off gives click-drag back to the terminal"
+	}
+	return "mouse capture off — the terminal's own click-drag selection works now; /mouse on restores wheel scrolling"
+}
+
+func (m roomsModel) handleKey(msg tea.KeyPressMsg) (roomsModel, tea.Cmd) {
+	key := msg.String()
+
+	// A disband confirm swallows the next key: y commits, anything else cancels.
+	if m.confirmDisband != "" {
+		target := m.confirmDisband
+		m.confirmDisband = ""
+		if key == "y" || key == "Y" {
+			m.status = "disbanding " + target
+			return m, m.disband(target)
+		}
+		return m, nil
+	}
+
+	switch m.sub {
+	case roomsInvite:
+		return m.handleInviteKey(key)
+	case roomsTranscript:
+		return m.handleTranscriptKey(msg, key)
+	}
+	return m.handleBrowseKey(key)
+}
+
+func (m roomsModel) handleBrowseKey(key string) (roomsModel, tea.Cmd) {
+	rows := m.browseRows()
+	switch key {
+	case "esc", "q":
+		return m, func() tea.Msg { return goBackFromRoomsMsg{} }
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(rows)-1 {
+			m.cursor++
+		}
+	case "r":
+		m.err = nil
+		m.status = "refreshing…"
+		return m, m.loadAll()
+	case "n":
+		m.sub = roomsInvite
+		m.inviteCursor = 0
+		m.err = nil
+		m.status = ""
+		// Always re-discover: a profile created since the view opened (or
+		// since the last visit) must appear, and the scan is a local disk
+		// read.
+		return m, m.loadProfiles()
+	case "enter":
+		if m.cursor < 0 || m.cursor >= len(rows) {
+			return m, nil
+		}
+		row := rows[m.cursor]
+		if row.kind == rowPreset {
+			m.status = "starting " + row.preset.Name + "…"
+			return m, m.createFromPreset(*row.preset)
+		}
+		m.sub = roomsTranscript
+		m.openRoomID = row.room.RoomID
+		m.openRoom = row.room
+		m.page = rooms.LogPage{}
+		m.since = 0
+		m.interrupted = nil
+		m.memberModels = nil
+		m.model = modelPicker{}
+		m.err = nil
+		return m, tea.Batch(m.loadLog(row.room.RoomID, 0), m.loadState(), roomsTick())
+	case "x":
+		if m.cursor >= 0 && m.cursor < len(rows) && rows[m.cursor].kind == rowLive {
+			m.confirmDisband = rows[m.cursor].room.RoomID
+		}
+	case "p":
+		if m.cursor >= 0 && m.cursor < len(rows) && rows[m.cursor].kind == rowLive {
+			return m, m.savePreset(*rows[m.cursor].room)
+		}
+	}
+	return m, nil
+}
+
+func (m roomsModel) handleInviteKey(key string) (roomsModel, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.sub = roomsBrowse
+	case "up", "k":
+		if m.inviteCursor > 0 {
+			m.inviteCursor--
+		}
+	case "down", "j":
+		if m.inviteCursor < len(m.profiles)-1 {
+			m.inviteCursor++
+		}
+	case " ", "space":
+		if m.inviteCursor >= 0 && m.inviteCursor < len(m.profiles) {
+			if warn := m.toggle(m.profiles[m.inviteCursor]); warn != "" {
+				m.status = warn
+			} else {
+				m.status = ""
+			}
+		}
+	case "a":
+		for _, p := range m.profiles {
+			if len(m.selectedProfiles()) >= rooms.MaxMembers {
+				break
+			}
+			m.selected[p] = true
+		}
+	case "c":
+		m.selected = map[string]bool{}
+		m.status = ""
+	case "r":
+		m.status = "refreshing profiles…"
+		return m, m.loadProfiles()
+	case "enter":
+		members := rooms.RosterFor(m.selectedProfiles())
+		if err := rooms.ValidateRoster(members); err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.err = nil
+		m.status = "creating room…"
+		return m, m.createRoom()
+	}
+	return m, nil
+}
+
+func (m roomsModel) handleTranscriptKey(msg tea.KeyPressMsg, key string) (roomsModel, tea.Cmd) {
+	// The /model overlay owns every key while it is open: its member list and
+	// its filter would otherwise fight the transcript's keys.
+	if m.model.active {
+		next, cmd, _ := m.handleModelKey(msg, key)
+		return next, cmd
+	}
+	switch key {
+	case "esc":
+		// A notice (most often /help) is the topmost thing on screen, so
+		// esc closes it before it means "back": the help used to be
+		// dismissed only by leaving the room, which also lost the draft.
+		if m.notice != "" {
+			m.notice = ""
+			return m, nil
+		}
+		m.sub = roomsBrowse
+		m.composer = ""
+		m.status = ""
+		m.findQuery = ""
+		return m, m.loadAll()
+	case "enter":
+		text := strings.TrimSpace(m.composer)
+		if text == "" {
+			// Nothing typed: enter resolves the room's single blocked
+			// member instead of doing nothing. With several, the banner
+			// keeps the explicit /approve @handle form (see hint()).
+			if _, handle, ok := m.shortcutApproval(); ok {
+				return m.approveShortcut(handle, "once")
+			}
+			return m, nil
+		}
+		// A leading backslash escapes a message that would otherwise be
+		// read as a command.
+		if strings.HasPrefix(text, "\\") {
+			m.composer = ""
+			return m.post(strings.TrimPrefix(text, "\\"))
+		}
+		if strings.HasPrefix(text, "/") {
+			return m.handleTranscriptCommand(text)
+		}
+		m.composer = ""
+		return m.post(text)
+	case "m":
+		// Mode cycling is gated on an empty draft: 'm' is a letter in a
+		// message first, a shortcut second.
+		if strings.TrimSpace(m.composer) == "" {
+			return m.cycleRoutingMode()
+		}
+	case "x":
+		// Deny is scoped to the transcript and to an empty draft: 'x' types
+		// normally inside a message, and in the browse list x is disband.
+		if strings.TrimSpace(m.composer) == "" {
+			if _, handle, ok := m.shortcutApproval(); ok {
+				return m.approveShortcut(handle, "deny")
+			}
+		}
+	case "p":
+		// Pulse is the client moderating: it publishes the board and an
+		// opinion prompt as a normal user message, which opens a new
+		// discussion. Like m/x it is a letter in a draft first.
+		if strings.TrimSpace(m.composer) == "" && m.openRoomID != "" {
+			return m.pulseRoom()
+		}
+	case "up":
+		return m.scrollTranscript(1)
+	case "down":
+		return m.scrollTranscript(-1)
+	case "pgup":
+		return m.scrollTranscript(m.transcriptRows())
+	case "pgdown":
+		return m.scrollTranscript(-m.transcriptRows())
+	case "home":
+		return m.scrollTranscript(len(m.transcriptLines()))
+	case "end":
+		m.scroll = 0
+		return m, nil
+	case "ctrl+u":
+		// Kill the line. The composer has no cursor to move, so this is the
+		// whole draft — the shell habit users reach for first.
+		m.composer = ""
+		return m, nil
+	case "ctrl+w", "alt+backspace":
+		m.composer = deleteLastWord(m.composer)
+		return m, nil
+	case "backspace":
+		if len(m.composer) > 0 {
+			m.composer = m.composer[:len(m.composer)-1]
+		}
+		return m, nil
+	}
+	if t := msg.Text; t != "" && !strings.HasPrefix(key, "ctrl+") && !strings.HasPrefix(key, "alt+") {
+		m.composer += t
+	}
+	return m, nil
+}
+
+// logIdle reports whether the transcript's last event proves nothing is in
+// flight.
+//
+// The driver's `working` flag sticks at true after a turn dies — the gateway
+// keeps a stale `running` count — and a message held behind a flag that will
+// never clear is the same silence as no reply at all. The transcript is the
+// honest signal: a room mid-answer ends on the user's message or a member's
+// reply, and once the set finishes it ends on a settle/activity event.
+func (m roomsModel) logIdle() bool {
+	evs := m.page.Events
+	if len(evs) == 0 {
+		return false // no evidence yet; trust the driver
+	}
+	switch evs[len(evs)-1].Kind {
+	case "message.user", "message.member":
+		return false
+	}
+	return true
+}
+
+// staleWorkingAfter bounds the hold. The transcript is the honest signal for
+// whether a turn set is in flight, but it goes quiet forever when the driver
+// pins a task — so a hold needs both a busy transcript AND recent movement.
+const staleWorkingAfter = 75 * time.Second
+
+// post sends a message, or holds it while the roster is still answering.
+//
+// Sending during a live turn set is not a queue on the gateway — it CANCELS
+// the older turns (`superseded_by_newer_user_event`), which reads as a
+// roster that suddenly stopped responding. So the message waits while the
+// transcript shows a set in flight.
+//
+// Two signals, both required to hold: the transcript's last event says a set
+// is in flight (logIdle), and that transcript is still MOVING. A pinned task
+// leaves the first true and the second false, and a message held behind it
+// would never go out at all.
+func (m roomsModel) post(text string) (roomsModel, tea.Cmd) {
+	if text == "" {
+		return m, nil
+	}
+	// Route before the hold decision: the text that reaches the gateway (and
+	// the round-robin cursor it advances) is what the queue has to carry, so
+	// a drained message goes out the way it was addressed.
+	routed, routingNote, routeCmd := m.routeOutgoing(text)
+	if routingNote != "" {
+		// Where the message went is the user's business: an un-mentioned
+		// message in moderator mode is not obviously going to one member.
+		m.status = routingNote
+	}
+	if m.working && !m.logIdle() && time.Since(m.lastProgress) < staleWorkingAfter {
+		m.queue = append(m.queue, routed)
+		m.status = fmt.Sprintf("queued — the roster is still answering (%d in queue)", len(m.queue))
+		return m, routeCmd
+	}
+	if m.working && !m.logIdle() {
+		m.status = fmt.Sprintf("roster quiet for %s — sending anyway",
+			time.Since(m.lastProgress).Round(time.Second))
+	}
+	m.working = true
+	m.lastProgress = time.Now()
+	return m, tea.Batch(m.sendText(routed), routeCmd, m.ensureRoomsSpinner())
+}
+
+// pulseDebounce is how long a second `p` is ignored. Two pulses sent
+// back-to-back supersede each other on the gateway, and the second one landed
+// before the room had answered the instruction the user actually cared about.
+const pulseDebounce = 2 * time.Second
+
+// pulseRoom posts the moderator pulse: the room's board plus the three
+// opinion questions, as an ordinary user message. Members only ever see each
+// other inside one discussion, so the pulse starts a fresh one.
+//
+// The pulse is a moderator turn, not a way to talk over the room: it fires
+// only after the room has answered the newest user message (see
+// pulseRefusal), it refreshes the shared brief first, and the brief's new
+// digest rides the pulse when it changed.
+func (m roomsModel) pulseRoom() (roomsModel, tea.Cmd) {
+	now := time.Now()
+	if !m.lastPulseAt.IsZero() && now.Sub(m.lastPulseAt) < pulseDebounce {
+		return m, nil
+	}
+	if reason := m.pulseRefusal(); reason != "" {
+		m.notice = reason
+		return m, nil
+	}
+	orient := m.orientationFor(m.openRoomID)
+	dir := m.roomDirIfExists(orient, m.openRoomID)
+	claims, _ := rooms.ReadLedger(dir)
+
+	// The brief is rebuilt from the repo and rewritten into the room's shared
+	// directory before the pulse goes out; the digest is what lets the pulse
+	// tell the room the file it was pointed at has moved.
+	digest := ""
+	if strings.TrimSpace(orient.Path) != "" && dir != "" {
+		if brief, err := rooms.BuildBrief(orient.Path); err == nil {
+			if _, d, err := rooms.WriteBrief(dir, brief); err == nil {
+				digest = d
+			}
+		}
+	}
+	m.notice = "puls wyslany"
+	m.lastPulseAt = now
+	return m, m.sendText(rooms.PulseTextWithBrief("", rooms.Board(claims), digest, m.quotedBriefDigest()))
+}
+
+// pulseRefusal explains why `p` would not act, or returns "" when it may.
+//
+// The room must have answered the last instruction before it is asked an
+// opinion question: a pulse posted first starts a second user turn, the
+// gateway supersedes the unanswered one, and the instruction silently gets
+// zero answers. That is the failure this guard exists for.
+func (m roomsModel) pulseRefusal() string {
+	if m.working || len(m.activeStreams()) > 0 {
+		return "pokoj pracuje — puls po settle"
+	}
+	newestUser, newestMember := m.newestMessageSeqs()
+	if newestMember <= newestUser {
+		return "puls wstrzymany — pokój nie odpowiedział jeszcze na twoje polecenie"
+	}
+	if m.lastPulseSeq > 0 && m.lastPulseSeq >= newestUser {
+		return "puls już poszedł w tej rundzie"
+	}
+	if !rooms.ShouldPulse(true, m.newestSeq(), m.lastPulseSeq) {
+		return "puls wstrzymany — brak nowej aktywności"
+	}
+	return ""
+}
+
+// newestMessageSeqs is the newest seq of the user's messages and of the
+// members' replies, compared against each other rather than against a count:
+// only seq order can tell whether the room answered after the question.
+func (m roomsModel) newestMessageSeqs() (user, member int) {
+	for _, ev := range m.page.Events {
+		switch ev.Kind {
+		case "message.user":
+			if ev.Seq > user {
+				user = ev.Seq
+			}
+		case "message.member":
+			if ev.Seq > member {
+				member = ev.Seq
+			}
+		}
+	}
+	return user, member
+}
+
+// newestSeq is the newest transcript seq the page knows about, event seqs
+// included because a test or a partial page can carry events without latest.
+func (m roomsModel) newestSeq() int {
+	seq := m.page.LatestSeq
+	for _, ev := range m.page.Events {
+		if ev.Seq > seq {
+			seq = ev.Seq
+		}
+	}
+	return seq
+}
+
+// quotedBriefDigest is the digest the room's first message pointed at. It is
+// the baseline a refreshed brief is compared with; without it the pulse stays
+// silent rather than claiming a refresh it cannot prove.
+func (m roomsModel) quotedBriefDigest() string {
+	for _, ev := range m.page.Events {
+		if ev.Kind != "message.user" {
+			continue
+		}
+		text := ev.Text()
+		i := strings.Index(text, "sha=")
+		if i < 0 {
+			continue
+		}
+		rest := text[i+len("sha="):]
+		if len(rest) < 12 {
+			continue
+		}
+		digest := rest[:12]
+		ok := true
+		for _, r := range digest {
+			if !strings.ContainsRune("0123456789abcdef", r) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return digest
+		}
+	}
+	return ""
+}
+
+// handleTranscriptCommand runs a slash command typed in the transcript.
+//
+// Without this the composer posts it to the room as a message: typing
+// /rooms to get back would land in the transcript as a user turn and set
+// the whole roster answering — the exact misfire this prevents. An
+// unrecognised command is refused rather than sent, so a typo costs a
+// notice instead of a round of agent turns.
+func (m roomsModel) handleTranscriptCommand(text string) (roomsModel, tea.Cmd) {
+	fields := strings.Fields(text)
+	name := fields[0]
+	m.composer = ""
+	m.err = nil
+	switch name {
+	case "/rooms", "/back", "/list":
+		m.sub = roomsBrowse
+		m.status = ""
+		return m, m.loadAll()
+	case "/mouse":
+		arg := ""
+		if len(fields) > 1 {
+			arg = strings.ToLower(fields[1])
+		}
+		if arg == "" {
+			arg = "status"
+		}
+		switch arg {
+		case "status", "on", "off", "toggle":
+		default:
+			m.err = fmt.Errorf("unknown /mouse argument %q — use /mouse on, /mouse off or /mouse toggle", arg)
+			return m, nil
+		}
+		// The capture flag lives on AppModel, so this only raises the msg;
+		// the app applies it and writes the rooms status line.
+		return m, func() tea.Msg { return mouseModeMsg{action: arg} }
+	case "/help", "/?":
+		m.notice = "room commands\n" +
+			"  /rooms, /back, /list — back to the room list\n" +
+			"  /rules — the discussion rules and budgets the gateway enforces\n" +
+			"  /mode [broadcast|moderator|round-robin] — who answers (m cycles them)\n" +
+			"  /moderator [@handle] — the member moderator mode sends to\n" +
+			"  /export [md|json|both] — write the transcript to the lucinate data dir\n" +
+			"  /compact [N] — brief the older transcript through the room, keep N verbatim\n" +
+			"  /compact local [N] — same, but a local brief with no roster reply\n" +
+			"  /restart [fresh|with-summary] — same roster in a new room (the old room stays)\n" +
+			"  /find <phrase> — search the transcript (/find clears)\n" +
+			"  /cost — tokens and cost per member\n" +
+			"  /model [@handle [name]] — each member's model for this room session\n" +
+			"  /header [@handle #RRGGBB|default] — per-member header colours\n" +
+			"  /approve @handle once|deny — resolve a member blocked on an approval\n" +
+			"  /retry — retry the room's indeterminate task\n" +
+			"  /stop — cancel queued and running member turns\n" +
+			"  /mouse off — hand click-drag back to the terminal\n" +
+			"typed text goes to the room; prefix \\\\ to send a line that starts with /\n" +
+			"an @handle in the message addresses that member and outranks the mode\n" +
+			"↑↓/PgUp/PgDn/wheel scroll · End jumps to the live tail · ctrl+u clears the draft"
+		return m, nil
+	case "/rules":
+		// The constitution and the budgets, quoted rather than paraphrased:
+		// the member prompt is the room's actual law (D3). The notice path
+		// caps it to the pane, so esc closes it before it means "back".
+		m.notice = roomRulesNotice()
+		return m, nil
+	case "/quit", "/exit":
+		return m, func() tea.Msg { return goBackFromRoomsMsg{} }
+	}
+	// The rooms v2 surface (routing, export, compact, find, cost, colours)
+	// lives in rooms_ux.go; it reports whether it recognised the input.
+	if mm, cmd, ok := m.handleRoomUXCommand(text); ok {
+		return mm, cmd
+	}
+	m.err = fmt.Errorf("%s is not a room command — /rooms goes back, /help lists them", name)
+	return m, nil
+}
+
+// savePreset writes the room's roster to the preset store so it can be
+// restarted with one keystroke later.
+func (m roomsModel) savePreset(room rooms.Room) tea.Cmd {
+	return func() tea.Msg {
+		path, err := rooms.DefaultPresetsPath()
+		if err != nil {
+			return roomsSentMsg{err: err}
+		}
+		store, err := rooms.LoadPresets(path)
+		if err != nil {
+			return roomsSentMsg{err: err}
+		}
+		store.Remove(room.Name)
+		if err := store.Add(rooms.Preset{
+			Name: room.Name, RoomID: room.RoomID,
+			ThreadID: rooms.DefaultThreadID, Members: room.Members,
+		}); err != nil {
+			return roomsSentMsg{err: err}
+		}
+		return roomsSentMsg{err: rooms.SavePresets(path, store)}
+	}
+}
+
+// ── view ─────────────────────────────────────────────────────────────────────
+
+func (m roomsModel) View() string {
+	var b strings.Builder
+	b.WriteString(headerStyle.Render("Rooms — Hermes Bot Mode") + "\n")
+	if m.conn != nil {
+		b.WriteString(connBannerStyle.Render(fmt.Sprintf("%s — %s", m.conn.Name, m.conn.URL)) + "\n")
+	}
+	b.WriteString("\n")
+
+	switch m.sub {
+	case roomsInvite:
+		b.WriteString(m.viewInvite())
+	case roomsTranscript:
+		b.WriteString(m.viewTranscript())
+	default:
+		b.WriteString(m.viewBrowse())
+	}
+
+	if m.err != nil {
+		b.WriteString("\n" + errorStyle.Render("error: "+m.err.Error()))
+	}
+	if m.status != "" {
+		b.WriteString("\n" + statusStyle.Render(m.status))
+	}
+	if m.confirmDisband != "" {
+		b.WriteString("\n" + navConfirmStyle.Render(
+			fmt.Sprintf("disband %s permanently? its history is tombstoned. y/n", m.confirmDisband)))
+	}
+	b.WriteString("\n\n" + helpStyle.Render(wordWrap(m.hint(), m.viewWrapWidth())))
+	return b.String()
+}
+
+func (m roomsModel) viewBrowse() string {
+	var b strings.Builder
+	rows := m.browseRows()
+	if len(rows) == 0 {
+		if !m.loaded && m.err == nil {
+			return statusStyle.Render("loading rooms…")
+		}
+		if m.err != nil {
+			return statusStyle.Render("rooms could not be loaded — see the error below") + "\n"
+		}
+		b.WriteString(emptyHistoryStyle.Render("no rooms yet") + "\n\n")
+		b.WriteString(statusStyle.Render("press n to seat a room from the local Hermes profiles") + "\n")
+		return b.String()
+	}
+	presets := len(m.presets.Presets)
+	start, end, above, below := windowRows(len(rows), m.cursor, roomsVisibleRows)
+	if above > 0 {
+		b.WriteString(statusStyle.Render(fmt.Sprintf("  ↑ %d more", above)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		row := rows[i]
+		if i == presets {
+			b.WriteString("\n" + statusStyle.Render("rooms on this gateway") + "\n")
+		}
+		cursor := "  "
+		if i == m.cursor {
+			cursor = completionMenuHighlightStyle.Render("› ")
+		}
+		switch row.kind {
+		case rowPreset:
+			p := row.preset
+			b.WriteString(fmt.Sprintf("%s%-22s %s\n", cursor, p.Name,
+				statusStyle.Render("predefined · "+profileList(p.Members))))
+		default:
+			r := row.room
+			b.WriteString(fmt.Sprintf("%s%-22s %s\n", cursor, r.RoomID,
+				statusStyle.Render(fmt.Sprintf("rev=%d · %s", r.Revision, profileList(r.Members)))))
+		}
+	}
+	if below > 0 {
+		b.WriteString(statusStyle.Render(fmt.Sprintf("  ↓ %d more", below)) + "\n")
+	}
+	return b.String()
+}
+
+func (m roomsModel) viewInvite() string {
+	var b strings.Builder
+	b.WriteString(assistantPrefixStyle.Render("Invite profiles to a new room") + "\n")
+	b.WriteString(statusStyle.Render(wordWrap(inviteDescription(), m.viewWrapWidth())) + "\n")
+
+	// The list takes only the rows the fixed chrome leaves. The counter and
+	// the name are answers to "what am I about to create", so they are
+	// rendered after the list but budgeted for before it: a fixed 14-row
+	// window pushed them, and the hint, off a 24-row terminal.
+	chosen := m.selectedProfiles()
+	if len(m.profiles) == 0 {
+		b.WriteString("\n" + statusStyle.Render("discovering local profiles…") + "\n")
+	} else {
+		b.WriteString("\n")
+		start, end, above, below := windowRows(len(m.profiles), m.inviteCursor, m.inviteVisibleRows())
+		if above > 0 {
+			b.WriteString(statusStyle.Render(fmt.Sprintf("  ↑ %d more", above)) + "\n")
+		}
+		for i := start; i < end; i++ {
+			cursor := "  "
+			if i == m.inviteCursor {
+				cursor = completionMenuHighlightStyle.Render("› ")
+			}
+			mark := "[ ]"
+			if m.selected[m.profiles[i]] {
+				mark = "[x]"
+			}
+			b.WriteString(fmt.Sprintf("%s%s %s\n", cursor, mark, m.profiles[i]))
+		}
+		if below > 0 {
+			b.WriteString(statusStyle.Render(fmt.Sprintf("  ↓ %d more", below)) + "\n")
+		}
+	}
+	if len(chosen) > 0 {
+		b.WriteString(statusStyle.Render(fmt.Sprintf("selected %d/%d — need at least %d: %s",
+			len(chosen), rooms.MaxMembers, rooms.MinMembers, strings.Join(chosen, ", "))) + "\n")
+	} else {
+		b.WriteString(statusStyle.Render(fmt.Sprintf("selected 0/%d — need at least %d",
+			rooms.MaxMembers, rooms.MinMembers)) + "\n")
+	}
+	b.WriteString(statusStyle.Render("new room name: "+rooms.DisplayNameFor(chosen)) + "\n")
+	return b.String()
+}
+
+// inviteDescription is the invite screen's one explanatory paragraph.
+func inviteDescription() string {
+	return fmt.Sprintf(
+		"seat %d-%d local Hermes profiles. The roster is frozen once the room exists — to change members, seat a new room.",
+		rooms.MinMembers, rooms.MaxMembers)
+}
+
+// inviteChromeRows is every row the invite screen spends outside the
+// profile list: the app header, the connection banner, the screen title,
+// the wrapped description, the counter and name lines, and the wrapped
+// hint block the outer View appends. Anything the list does not budget for
+// lands below the terminal's last row.
+func (m roomsModel) inviteChromeRows() int {
+	rows := 1 // "Rooms — Hermes Bot Mode"
+	if m.conn != nil {
+		rows++ // connection banner
+	}
+	rows++ // blank under the header
+	rows++ // "Invite profiles to a new room"
+	rows += lipgloss.Height(wordWrap(inviteDescription(), m.viewWrapWidth()))
+	rows++ // blank before the list
+	rows++ // selected counter
+	rows++ // new room name
+	rows++ // blank before the hint
+	rows += lipgloss.Height(wordWrap(m.hint(), m.viewWrapWidth()))
+	if m.err != nil {
+		rows++
+	}
+	if m.status != "" {
+		rows++
+	}
+	if m.confirmDisband != "" {
+		rows++
+	}
+	return rows
+}
+
+// inviteVisibleRows windows the profile list from the real terminal height
+// so the counter, the name and the hint always render.
+func (m roomsModel) inviteVisibleRows() int {
+	h := m.height
+	if h <= 0 {
+		h = 24
+	}
+	rows := h - m.inviteChromeRows()
+	if rows < 1 {
+		rows = 1
+	}
+	// Reserve the ↑/↓ "more" markers when the list overflows.
+	if len(m.profiles) > rows {
+		if rows > 2 {
+			rows -= 2
+		} else if rows > 1 {
+			rows--
+		}
+	}
+	return rows
+}
+
+func (m roomsModel) viewTranscript() string {
+	var b strings.Builder
+	// The room's header line carries the roster, the budget the gateway
+	// enforces and (below) what the routing mode does to the gateway's turn
+	// selection. The budget is derived from the log, never counted locally.
+	title := m.transcriptTitle()
+	inline, budgetBelow := m.transcriptBudget()
+	titleLine := headerStyle.Render(title)
+	if inline != "" {
+		titleLine += " " + statusStyle.Render("· "+inline)
+	}
+	b.WriteString(titleLine + "\n")
+	if budgetBelow != "" {
+		b.WriteString(statusStyle.Render(budgetBelow) + "\n")
+	}
+	if m.showRoutingNote() {
+		b.WriteString(statusStyle.Render(wordWrap(m.routingNote(), m.viewWrapWidth())) + "\n")
+	}
+	if banner := m.blockedRow(); banner != "" {
+		b.WriteString(banner + "\n")
+	}
+	b.WriteString("\n")
+
+	// The /model overlay replaces the transcript: it owns the keys while it is
+	// open, so there is nothing below it to act on.
+	if m.model.active {
+		b.WriteString(m.modelPickerView())
+		return b.String()
+	}
+
+	// Flatten the transcript and window it around the scroll offset. The
+	// room keeps growing as members reply, and an unbounded render slides
+	// the composer — and with it the terminal cursor — further down on
+	// every poll, which reads as a cursor that jumps on its own.
+	lines := m.transcriptLines()
+	budget := m.transcriptRows()
+	total := len(lines)
+
+	end := total - m.scroll
+	if end < 0 {
+		end = 0
+	}
+	if end > total {
+		end = total
+	}
+	start := end - budget
+	if start < 0 {
+		start = 0
+	}
+	above, below := start, total-end
+
+	if total == 0 {
+		b.WriteString(emptyHistoryStyle.Render("no messages yet — type below and press enter") + "\n")
+	} else if above > 0 || below > 0 {
+		parts := make([]string, 0, 2)
+		if above > 0 {
+			parts = append(parts, fmt.Sprintf("↑ %d earlier line(s) hidden", above))
+		}
+		if below > 0 {
+			parts = append(parts, fmt.Sprintf("↓ %d newer line(s)", below))
+		}
+		hint := fmt.Sprintf(" — full history: lucinate rooms log %s", m.openRoomID)
+		if below > 0 {
+			hint = " — End: back to the live tail"
+		}
+		b.WriteString(statusStyle.Render(strings.Join(parts, " · ")+hint) + "\n")
+	}
+	for _, l := range lines[start:end] {
+		b.WriteString(l + "\n")
+	}
+	// Replies the connection cut in half: shown under the transcript, above
+	// anything still in flight, so a dead turn is visible where it stopped.
+	for _, l := range m.interruptedRows() {
+		b.WriteString(l + "\n")
+	}
+	// In-flight replies render as their own rows under the transcript, so the
+	// text a member has produced so far is visible while it is still being
+	// written — and disappears the moment the turn ends (an empty reply must
+	// not leave a spinner behind).
+	streamRows := m.streamRows()
+	for _, l := range streamRows {
+		b.WriteString(l + "\n")
+	}
+	if m.reconnecting {
+		b.WriteString(statusStyle.Render(spinnerGlyph(m.spinnerFrame)+" reconnecting — the transcript above is intact") + "\n")
+	} else if len(streamRows) == 0 && (m.working || len(m.queue) > 0) {
+		line := spinnerGlyph(m.spinnerFrame) + " roster is answering…"
+		if n := len(m.queue); n > 0 {
+			line = fmt.Sprintf("%s roster is answering… %d queued — sent when it settles (sending now would cancel its work)",
+				spinnerGlyph(m.spinnerFrame), n)
+		}
+		b.WriteString(statusStyle.Render(line) + "\n")
+	} else if settled := m.settleLine(); settled != "" {
+		b.WriteString(statusStyle.Render(settled) + "\n")
+	}
+	if block := m.noticeBlock(); block != "" {
+		b.WriteString("\n" + block + "\n")
+	}
+	b.WriteString("\n" + m.composerView(m.width))
+	return b.String()
+}
+
+// transcriptTitle is the room's header line minus the budget: the id and the
+// roster with each member's model, so the room answers "who is on what"
+// without a command.
+func (m roomsModel) transcriptTitle() string {
+	if m.openRoom != nil {
+		return fmt.Sprintf("%s — %s", m.openRoom.RoomID, m.rosterLine())
+	}
+	return m.openRoomID
+}
+
+// transcriptBudget places the discussion budget on the header line. It
+// degrades to `2/3 · 7/10` when the title leaves no room for the words, and
+// falls back to a line of its own when even the short form cannot share the
+// title's row — the budget is never silently dropped.
+func (m roomsModel) transcriptBudget() (inline, below string) {
+	budget := rooms.DiscussionBudgetFor(m.page.Events)
+	if !budget.HasDiscussion {
+		return "", ""
+	}
+	avail := m.viewWrapWidth() - displayWidth(m.transcriptTitle()) - displayWidth(" · ")
+	if label := budget.HeaderText(avail); label != "" {
+		return label, ""
+	}
+	return "", budget.HeaderText(m.viewWrapWidth())
+}
+
+// showRoutingNote keeps the mode explanation off a terminal too short to
+// afford it: the transcript, composer and hint are the room's working
+// surface, and at 24 rows the header has room for all three.
+func (m roomsModel) showRoutingNote() bool {
+	h := m.height
+	if h <= 0 {
+		h = 24
+	}
+	return h >= 24
+}
+
+// headerRows is the transcript header's real height, so the transcript window
+// can account for a wrapped mode line or a budget on its own row.
+func (m roomsModel) headerRows() int {
+	rows := 1
+	if _, below := m.transcriptBudget(); below != "" {
+		rows++
+	}
+	if m.showRoutingNote() {
+		rows += lipgloss.Height(wordWrap(m.routingNote(), m.viewWrapWidth()))
+	}
+	return rows
+}
+
+// roomsChromeRows is every row the transcript screen spends outside the
+// transcript itself and the composer box: the app header, connection banner,
+// blank separator, the real header height, the hint block, and any notices.
+// The composer is excluded because its height follows the draft
+// (composerHeight), not a fixed budget.
+func (m roomsModel) roomsChromeRows() int {
+	// Six fixed rows: header (1), connection banner (1), blank (1), the
+	// hidden-lines notice (1) and the hint block's two-line budget.
+	chrome := 6 + m.headerRows()
+	// The hint is wrapped to the view width, so a narrow terminal needs
+	// more rows for it than the single-line budget assumed.
+	if n := len(strings.Split(wordWrap(m.hint(), m.viewWrapWidth()), "\n")); n > 1 {
+		chrome += n - 1
+	}
+	if m.err != nil {
+		chrome += 2
+	}
+	if m.status != "" {
+		chrome += 2
+	}
+	if m.confirmDisband != "" {
+		chrome += 2
+	}
+	// The connection banner is part of the transcript view whenever a
+	// connection is configured; leaving it out of the budget pushed the
+	// composer one line off the bottom of a full-height terminal.
+	if m.conn != nil {
+		chrome++
+	}
+	chrome += m.noticeLineCount()
+	chrome += len(m.activeStreams())
+	chrome += len(m.interruptedRows())
+	if m.working || len(m.queue) > 0 || m.settleLine() != "" {
+		chrome++ // the roster-status line above the composer
+	}
+	return chrome
+}
+
+// transcriptRows is how many transcript lines fit above the composer. The
+// composer's real height is subtracted (its box is content rows plus the two
+// border rows), so a growing draft takes rows from the transcript instead of
+// pushing it off-screen.
+func (m roomsModel) transcriptRows() int {
+	h := m.height
+	if h <= 0 {
+		h = 24
+	}
+	rows := h - m.roomsChromeRows() - m.composerHeight(m.width)
+	if rows < 3 {
+		rows = 3
+	}
+	return rows
+}
+
+// settleLine is the idle counterpart of the "roster is answering" row: a
+// room that has finished says when its last movement was, rather than
+// keeping a stale status string for the rest of the session.
+func (m roomsModel) settleLine() string {
+	if m.openRoomID == "" || m.reconnecting || m.working || len(m.queue) > 0 || len(m.activeStreams()) > 0 {
+		return ""
+	}
+	if len(m.page.Events) == 0 {
+		return ""
+	}
+	at := time.Now()
+	if last := m.page.Events[len(m.page.Events)-1].CreatedAt; last > 0 {
+		at = time.Unix(int64(last), 0)
+	}
+	return "all members settled · " + at.Format("15:04")
+}
+
+// noticeBudget is how many rows a notice may use without pushing the
+// composer or the hint bar off the terminal: everything above the composer,
+// less the three-row transcript floor and the blank noticeLineCount adds.
+func (m roomsModel) noticeBudget() int {
+	probe := m
+	probe.notice = ""
+	rows := probe.transcriptRows() - 3 - 1
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// fitNotice wraps a notice to the view and caps it to the rows that fit,
+// replacing the tail with "… N more". /help used to fill the pane with
+// eighteen lines and push the composer and the hint bar off-screen.
+func (m roomsModel) fitNotice(text string) string {
+	lines := strings.Split(strings.TrimRight(wordWrap(text, m.viewWrapWidth()), "\n"), "\n")
+	maxRows := m.noticeBudget()
+	if len(lines) <= maxRows {
+		return strings.Join(lines, "\n")
+	}
+	keep := maxRows - 1
+	if keep < 0 {
+		keep = 0
+	}
+	hidden := len(lines) - keep
+	out := append([]string(nil), lines[:keep]...)
+	out = append(out, fmt.Sprintf("… %d more — esc closes this", hidden))
+	return strings.Join(out, "\n")
+}
+
+func (m roomsModel) hint() string {
+	switch m.sub {
+	case roomsInvite:
+		return "↑/↓ move · space toggle · a all · c clear · r refresh profiles · enter create · esc cancel"
+	case roomsTranscript:
+		// The leading segment is state-dependent: a room blocked on one
+		// member resolves it with enter/x, while several blocked members
+		// keep the explicit command (the banner shows it per handle).
+		head := "enter send"
+		if _, handle, ok := m.shortcutApproval(); ok {
+			head = "enter: approve once · x: deny (@" + handle + ")"
+		} else if len(m.pending) > 1 {
+			head = "enter send · several blocked — /approve @handle once|deny"
+		}
+		line := head + " · m: mode"
+		// The pulse key is advertised only where it acts: idle room, empty
+		// draft. Otherwise it would promise an action the key refuses.
+		if m.pulseReady() {
+			line += " · p puls"
+		}
+		return line + " · ↑↓/PgUp/PgDn/wheel scroll · End live · /help · /model · /export · /compact · /find · /cost · /rooms back"
+	}
+	return "↑/↓ move · enter open · n new room · p save as predefined · x disband · r refresh · esc back"
+}
+
+// pulseReady is the state the `p` key acts in: an open room, nothing being
+// typed, and every condition in pulseRefusal met. The key refuses with a
+// notice where the hint does not advertise it, so the two never disagree
+// about whether a pulse is possible.
+func (m roomsModel) pulseReady() bool {
+	return m.openRoomID != "" &&
+		strings.TrimSpace(m.composer) == "" &&
+		m.pulseRefusal() == ""
+}
+
+// ── rendering helpers (pure; unit-tested) ────────────────────────────────────
+
+func profileList(members []rooms.Member) string {
+	names := make([]string, 0, len(members))
+	for _, m := range members {
+		names = append(names, m.Profile)
+	}
+	return strings.Join(names, ", ")
+}
+
+func rosterLabel(room rooms.Room) string {
+	if len(room.Members) == 0 {
+		return "no members"
+	}
+	handles := make([]string, 0, len(room.Members))
+	for _, m := range room.Members {
+		handles = append(handles, "@"+m.Handle)
+	}
+	return strings.Join(handles, " ")
+}
+
+// formatRoomsEvent renders one transcript row the same way the CLI does,
+// so the two surfaces read identically. With no roster it falls back to the
+// actor label, which is what the plain formatting tests rely on.
+func formatRoomsEvent(ev rooms.Event) string {
+	return formatRoomsEventStyled(ev, ev.Text(), assistantPrefixStyle, nil)
+}
+
+// formatRoomsEventStyled renders one transcript row with a caller-supplied
+// body (so /find can highlight inside the text) and the member's colour on
+// the label. formatRoomsEvent is the plain wrapper the CLI-matching tests use.
+//
+// roster is the open room's roster: the turn.* cases name the member from the
+// payload rather than the gateway actor, and fall back to the actor when the
+// roster cannot place it.
+func formatRoomsEventStyled(ev rooms.Event, body string, memberStyle lipgloss.Style, roster []rooms.Member) string {
+	stamp := time.Unix(int64(ev.CreatedAt), 0).Format("15:04:05")
+	switch ev.Kind {
+	case "message.user":
+		return fmt.Sprintf("%s  %s %s", stamp, userPrefixStyle.Render("you →"), body)
+	case "message.member":
+		return fmt.Sprintf("%s  %s %s", stamp, memberStyle.Render("@"+ev.Speaker()+":"), body)
+	case "turn.cancelled":
+		return cancelledTurnRow(ev, roster)
+	case "turn.started":
+		return fmt.Sprintf("%s  %s", stamp, toolRunningStyle.Render(turnSpeaker(ev, roster)+" is thinking…"))
+	case "turn.settled":
+		if passed, _ := ev.Payload["passed"].(bool); passed {
+			return fmt.Sprintf("%s  %s", stamp, toolSuccessStyle.Render(turnSpeaker(ev, roster)+" passed"))
+		}
+		return fmt.Sprintf("%s  %s", stamp, toolSuccessStyle.Render(turnSpeaker(ev, roster)+" finished"))
+	case "turn.failed":
+		return fmt.Sprintf("%s  %s", stamp, errorStyle.Render(fmt.Sprintf("%s failed: %v", turnSpeaker(ev, roster), ev.Payload["error"])))
+	case "turn.deferred":
+		return fmt.Sprintf("%s  %s", stamp, toolRunningStyle.Render(fmt.Sprintf("%s deferred: %v", turnSpeaker(ev, roster), ev.Payload["reason"])))
+	case "room.activity":
+		return fmt.Sprintf("%s  %s", stamp, statusStyle.Render(fmt.Sprintf("activity: %v", ev.Payload["status"])))
+	case "member.unavailable":
+		return fmt.Sprintf("%s  %s", stamp, errorStyle.Render(ev.Speaker()+" unavailable"))
+	}
+	// A control or unknown kind has no member behind it: rooms.EventLabel gives
+	// it wording and keeps the gateway's installation id off the screen.
+	return fmt.Sprintf("%s  %s", stamp, statusStyle.Render(rooms.EventLabel(ev)))
+}
+
+// turnSpeaker labels a turn row: the member the payload names, resolved on the
+// roster, else the actor's own label when the roster cannot place it. A
+// resolved member is addressed as @handle, matching the message rows.
+func turnSpeaker(ev rooms.Event, roster []rooms.Member) string {
+	if h := rooms.MemberHandle(ev, roster); h != "" {
+		return "@" + h
+	}
+	return ev.Speaker()
+}
+
+// cancelledTurnRow renders a turn the gateway cancelled. A superseded turn is
+// the common case: a newer user message replaced the one in flight, which
+// otherwise looks like a member that silently stopped. It sits in the same
+// dim gutter as the evidence row so it reads as an annotation, not a reply.
+func cancelledTurnRow(ev rooms.Event, roster []rooms.Member) string {
+	reason, _ := ev.Payload["reason"].(string)
+	if reason == "superseded_by_newer_user_event" {
+		reason = "nowsza wiadomość"
+	}
+	handle := eventHandle(ev, roster)
+	if reason == "" {
+		return statusStyle.Render(fmt.Sprintf("  @%s — przerwano", handle))
+	}
+	return statusStyle.Render(fmt.Sprintf("  @%s — przerwano: %s", handle, reason))
+}

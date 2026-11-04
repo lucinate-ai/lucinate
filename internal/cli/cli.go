@@ -1,6 +1,7 @@
 // Package cli implements the lucinate command-line entry point: argument
-// parsing, subcommand dispatch (`send`, `ask`, `chat`, `help`), and the
-// bare flag set (`--version`) that falls through to the interactive TUI.
+// parsing, subcommand dispatch (`send`, `ask`, `chat`, `rooms`, `help`),
+// and the bare flag set (`--version`) that falls through to the
+// interactive TUI.
 package cli
 
 import (
@@ -59,6 +60,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return finish(runAsk(ctx, args[1:], stdout), stderr)
 		case "chat":
 			return finish(runChat(ctx, args[1:]), stderr)
+		case "rooms":
+			return finish(runRooms(ctx, args[1:], stdout), stderr)
 		}
 		// Unknown subcommand: fall through to flag parsing so a
 		// mistyped subcommand surfaces a clear flag-package error

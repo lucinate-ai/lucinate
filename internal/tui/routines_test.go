@@ -7,6 +7,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lucinate-ai/lucinate/internal/config"
 	"github.com/lucinate-ai/lucinate/internal/routines"
@@ -411,7 +412,7 @@ func TestRoutineForm_EnsureFocusVisible_ScrollsDownToReachLaterField(t *testing.
 func TestRoutineForm_EnsureFocusVisible_ScrollsUpToReachEarlierField(t *testing.T) {
 	starts := []int{0, 5, 10, 15, 21, 27, 33, 39, 45, 51, 57}
 	form := makeFormWithLayout(t, 10, 63, starts)
-	form.focused = 1 // field at line 5..9
+	form.focused = 1         // field at line 5..9
 	form.body.SetYOffset(40) // start scrolled past it
 
 	form.ensureFocusVisible()
@@ -500,6 +501,30 @@ func TestRoutinesForm_RejectsEmptyAndPunctuationOnly(t *testing.T) {
 		}
 		if m.form.err == nil {
 			t.Errorf("%q: expected form err", in)
+		}
+	}
+}
+
+// The routine form's help line is 94 columns; on an 80-column terminal it
+// must wrap to the view width rather than run off the edge, with the body
+// budget accounting for the extra row.
+func TestRoutinesForm_HelpLineWrapsToWidth(t *testing.T) {
+	withTempRoutinesDir(t)
+	m := newRoutinesModel(false, true)
+	m.setSize(80, 24)
+	m.openCreateFormWithSteps([]string{"step"})
+
+	out := m.viewForm()
+	plain := ansi.Strip(out)
+	for _, line := range strings.Split(plain, "\n") {
+		if w := ansi.StringWidth(line); w > 80 {
+			t.Errorf("form line is %d columns wide: %q", w, line)
+		}
+	}
+	joined := strings.Join(strings.Fields(plain), " ")
+	for _, want := range []string{"ctrl+s: save", "esc: cancel"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("footer lost %q after wrapping:\n%s", want, plain)
 		}
 	}
 }

@@ -25,13 +25,19 @@ type sessionItem struct {
 	lastMessage string
 	updatedAt   int64 // Unix millis
 	group       string
+	source      string
 }
 
+// FilterValue is the haystack the bubbles list filter runs against. The
+// preview is included so `/` can find a session by something it said, not
+// only by its title, and the source so `/bot_room` or `/cron` narrows the
+// list to one kind of session. A title-less session falls back to its key.
 func (i sessionItem) FilterValue() string {
-	if i.title != "" {
-		return i.title
+	parts := []string{i.title, i.lastMessage, i.source}
+	if i.title == "" {
+		parts[0] = i.key
 	}
-	return i.key
+	return strings.Join(parts, " ")
 }
 
 // sessionGroupHeader is a non-selectable list item used as a group separator.
@@ -41,11 +47,14 @@ type sessionGroupHeader struct {
 
 func (h sessionGroupHeader) FilterValue() string { return "" }
 
-// sessionDelegate renders each item in the session list.
+// sessionDelegate renders each item in the session list: a primary row
+// with the title and how long ago the session moved, then a dim preview
+// row. The raw session key is machine data, so it rides on the selected
+// row only — everywhere else it would crowd out the preview.
 type sessionDelegate struct{}
 
 func (d sessionDelegate) Height() int                             { return 2 }
-func (d sessionDelegate) Spacing() int                            { return 1 }
+func (d sessionDelegate) Spacing() int                            { return 0 }
 func (d sessionDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
@@ -62,32 +71,85 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		if title == "" {
 			title = i.key
 		}
-
-		subtitle := i.key
-		if i.lastMessage != "" {
-			preview := i.lastMessage
-			if len(preview) > 60 {
-				preview = preview[:57] + "..."
+		width := m.Width() - 2
+		if width < 1 {
+			width = 1
+		}
+		primary := truncateToWidth(title, width)
+		// The metadata suffix is the session's source (a dim tag) followed
+		// by the relative age. An empty source leaves the suffix exactly the
+		// age, so a row without a reported source looks as it always did.
+		age := relativeAge(i.updatedAt, time.Now())
+		plainSuffix := i.source
+		switch {
+		case plainSuffix != "" && age != "":
+			plainSuffix += " · " + age
+		case plainSuffix == "":
+			plainSuffix = age
+		}
+		if plainSuffix != "" && displayWidth(primary)+3+displayWidth(plainSuffix) <= width {
+			// Keep the metadata on the primary row; if the title alone fills
+			// the row it is dropped rather than wrapped.
+			suffix := plainSuffix
+			if i.source != "" {
+				suffix = lipgloss.NewStyle().Foreground(subtle).Render(i.source)
+				if age != "" {
+					suffix += " · " + age
+				}
 			}
-			subtitle = i.key + " · " + preview
+			primary += " · " + suffix
+		}
+
+		preview := i.lastMessage
+		if index == m.Index() {
+			// Selected: the key is context for this row only.
+			if preview == "" {
+				preview = i.key
+			} else {
+				preview = i.key + " · " + preview
+			}
+		}
+		subtitle := ""
+		if strings.TrimSpace(preview) != "" {
+			subtitle = "\n" + lipgloss.NewStyle().
+				Foreground(subtle).
+				Render("  "+truncateToWidth(preview, width))
 		}
 
 		if index == m.Index() {
 			str := lipgloss.NewStyle().
 				Foreground(accent).
 				Bold(true).
-				Render(fmt.Sprintf("> %s", title))
-			str += "\n" + lipgloss.NewStyle().
-				Foreground(subtle).
-				Render(fmt.Sprintf("  %s", subtitle))
-			fmt.Fprint(w, str)
+				Render(fmt.Sprintf("> %s", primary))
+			fmt.Fprint(w, str+subtitle)
 		} else {
-			str := fmt.Sprintf("  %s", title)
-			str += "\n" + lipgloss.NewStyle().
-				Foreground(subtle).
-				Render(fmt.Sprintf("  %s", subtitle))
-			fmt.Fprint(w, str)
+			fmt.Fprint(w, fmt.Sprintf("  %s", primary)+subtitle)
 		}
+	}
+}
+
+// relativeAge renders a session's last-updated stamp as an age a reader
+// can act on ("2h ago") rather than a machine timestamp. Missing or
+// future stamps render empty.
+func relativeAge(updatedAtMillis int64, now time.Time) string {
+	if updatedAtMillis <= 0 {
+		return ""
+	}
+	t := time.UnixMilli(updatedAtMillis)
+	d := now.Sub(t)
+	switch {
+	case d < 0:
+		return ""
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		return t.Format("2006-01-02")
 	}
 }
 
@@ -114,21 +176,27 @@ type sessionsModel struct {
 	// in the loading view so the user can confirm what they picked.
 	selectingTitle string
 	activeConn     *config.Connection // rendered above the session list — see renderConnectionBanner.
+	// width and height mirror setSize so the view can reserve exactly the
+	// rows its banner and wrapped hint block occupy.
+	width  int
+	height int
 }
 
 func newSessionsModel(b backend.Backend, agentID, agentName, modelID, mainKey string, hideHints bool, activeConn *config.Connection, disableExitKeys bool) sessionsModel {
 	l := list.New(nil, sessionDelegate{}, 0, 0)
 	l.Title = "Sessions"
 	l.SetShowStatusBar(false)
-	// Same rationale as selectModel: hide the list widget's keyboard
-	// footer when the embedder is rendering its own action surface.
-	l.SetShowHelp(!hideHints)
+	// The widget's own footer advertised `v select` (its Quit binding) —
+	// pressing it quit the app. The view renders its own hint line from
+	// Actions() instead, so the footer stays off in every host.
+	l.SetShowHelp(false)
 	l.Styles.Title = headerStyle
-	l.SetFilteringEnabled(false)
-	if disableExitKeys {
-		l.KeyMap.Quit.Unbind()
-		l.KeyMap.ForceQuit.Unbind()
-	}
+	// `/` filters by title and preview, matching the vocabulary the rest
+	// of the app advertises for list screens.
+	l.SetFilteringEnabled(true)
+	l.Filter = fuzzyFilter
+	l.KeyMap.Quit.Unbind()
+	l.KeyMap.ForceQuit.Unbind()
 
 	return sessionsModel{
 		list:       l,
@@ -156,6 +224,7 @@ type sessionListEntry struct {
 	LastMessagePreview string `json:"lastMessagePreview"`
 	UpdatedAt          int64  `json:"updatedAt"`
 	Model              string `json:"model"`
+	Source             string `json:"source"`
 }
 
 // cleanDerivedTitle strips gateway metadata prefixes from the derived title.
@@ -204,15 +273,14 @@ func (m sessionsModel) loadSessions() tea.Cmd {
 				continue
 			}
 			title := cleanDerivedTitle(entry.DerivedTitle)
-			if len(title) > 80 {
-				title = title[:77] + "..."
-			}
+			title = truncateToWidth(title, 80)
 			items = append(items, sessionItem{
 				key:         entry.Key,
 				title:       title,
 				lastMessage: entry.LastMessagePreview,
 				updatedAt:   entry.UpdatedAt,
 				group:       sessionGroup(entry.Key),
+				source:      entry.Source,
 			})
 		}
 		// Sort by updatedAt descending within each group.
@@ -294,23 +362,10 @@ func (m *sessionsModel) skipHeaders(dir int) {
 }
 
 func (m sessionsModel) handleKey(msg tea.KeyPressMsg) (sessionsModel, tea.Cmd) {
-	// Cursor navigation stays inline — these are intrinsic list controls,
-	// not discoverable view-level commands.
-	switch msg.String() {
-	case "up", "k":
-		m.list, _ = m.list.Update(msg)
-		m.skipHeaders(-1)
-		return m, nil
-
-	case "down", "j":
-		m.list, _ = m.list.Update(msg)
-		m.skipHeaders(1)
-		return m, nil
-
-	case "enter":
-		if m.loading || m.err != nil {
-			return m, nil
-		}
+	// Enter picks the highlighted session from any filter state, so a
+	// typed query can be confirmed in one keystroke (the bubbles default
+	// while filtering is to apply the filter, forcing a second enter).
+	if msg.String() == "enter" && !m.loading && m.err == nil {
 		if item, ok := m.list.SelectedItem().(sessionItem); ok {
 			m.selecting = true
 			m.selectingTitle = item.title
@@ -325,6 +380,28 @@ func (m sessionsModel) handleKey(msg tea.KeyPressMsg) (sessionsModel, tea.Cmd) {
 				}
 			}
 		}
+	}
+
+	// While the filter input is focused every other key belongs to the
+	// list — typing narrows the result set, esc clears it.
+	if m.list.FilterState() == list.Filtering {
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
+	}
+
+	// Cursor navigation stays inline — these are intrinsic list controls,
+	// not discoverable view-level commands.
+	switch msg.String() {
+	case "up", "k":
+		m.list, _ = m.list.Update(msg)
+		m.skipHeaders(-1)
+		return m, nil
+
+	case "down", "j":
+		m.list, _ = m.list.Update(msg)
+		m.skipHeaders(1)
+		return m, nil
 	}
 
 	// Discoverable shortcuts route through TriggerAction so the help
@@ -347,6 +424,11 @@ func (m sessionsModel) Actions() []Action {
 	if m.selecting {
 		// Mirror the loading view: no actionable surface while we
 		// wait for the chat view to take over.
+		return nil
+	}
+	if m.filtering() {
+		// The filter input owns the keys (esc clears the query, enter
+		// picks); advertising the view shortcuts here would mislead.
 		return nil
 	}
 	var actions []Action
@@ -411,10 +493,7 @@ func (m sessionsModel) View() string {
 		}
 		return banner + fmt.Sprintf("\n  Loading %s...\n", title)
 	}
-	hints := ""
-	if !m.hideHints {
-		hints = helpStyle.Render(renderActionHints(m.Actions()))
-	}
+	hints := m.renderHints()
 	banner := renderConnectionBanner(m.activeConn)
 	if m.err != nil {
 		var b strings.Builder
@@ -437,9 +516,49 @@ func (m sessionsModel) View() string {
 		b.WriteString("\n")
 		return b.String()
 	}
-	return banner + m.list.View() + "\n" + hints
+	return banner + m.sizedListView(banner, hints) + "\n" + hints
+}
+
+// sizedListView renders the list at the height this frame's chrome leaves,
+// so a hint block that wraps (or one that appears after the list was sized
+// while loading) cannot push the last row off the screen.
+func (m sessionsModel) sizedListView(banner, hints string) string {
+	lm := m.list
+	if m.height > 0 {
+		lm.SetSize(m.width, maxInt(1, m.height-blockRows(banner)-blockRows(hints)))
+	}
+	return lm.View()
 }
 
 func (m *sessionsModel) setSize(w, h int) {
-	m.list.SetSize(w, h-2)
+	m.width = w
+	m.height = h
+	m.list.SetSize(w, m.listHeight())
+}
+
+// listHeight sizes the list to what the view leaves after the connection
+// banner and the action-hint block (which wraps on a narrow terminal).
+// The old flat h-2 pushed the hint row off a 24-row terminal.
+func (m sessionsModel) listHeight() int {
+	if m.height <= 0 {
+		return 0
+	}
+	return maxInt(1, m.height-blockRows(renderConnectionBanner(m.activeConn))-blockRows(m.renderHints()))
+}
+
+// renderHints is the app-owned hint block the view renders below the list.
+func (m sessionsModel) renderHints() string {
+	if m.hideHints {
+		return ""
+	}
+	if m.filtering() {
+		return renderFilterHint(m.width)
+	}
+	return renderHintLine(m.Actions(), m.width)
+}
+
+// filtering reports whether the session list's live filter input is
+// focused, so computeWantsInput and Actions can treat typed keys as text.
+func (m sessionsModel) filtering() bool {
+	return m.list.FilterState() == list.Filtering
 }

@@ -21,6 +21,8 @@ func runHelp(args []string, out io.Writer) error {
 		printAskUsage(out)
 	case "chat":
 		printChatUsage(out)
+	case "rooms":
+		printRoomsUsage(out)
 	case "help":
 		printTopUsage(out)
 	default:
@@ -40,6 +42,7 @@ func printTopUsage(out io.Writer) {
 	fmt.Fprintln(out, "  send    Dispatch a single message and print the reply (one-shot, no TUI)")
 	fmt.Fprintln(out, "  ask     Like send, but with connection / agent pre-filled from saved defaults")
 	fmt.Fprintln(out, "  chat    Launch the TUI pre-navigated to a connection / agent / session")
+	fmt.Fprintln(out, "  rooms   Create and drive Hermes hosted rooms (multi-profile bot group chats)")
 	fmt.Fprintln(out, "  help    Show help for lucinate or a specific command")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Flags:")

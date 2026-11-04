@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/paginator"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/a3tai/openclaw-go/protocol"
@@ -72,8 +73,8 @@ type modelDelegate struct {
 	currentModelID string
 }
 
-func (d modelDelegate) Height() int                             { return 2 }
-func (d modelDelegate) Spacing() int                            { return 1 }
+func (d modelDelegate) Height() int                             { return 1 }
+func (d modelDelegate) Spacing() int                            { return 0 }
 func (d modelDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d modelDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
@@ -87,11 +88,6 @@ func (d modelDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 		title = i.model.ID
 	}
 
-	subtitle := i.model.ID
-	if i.model.Provider != "" {
-		subtitle = i.model.Provider + " · " + i.model.ID
-	}
-
 	// The marker rides on the title line, in both style branches, so it
 	// survives the two things pre-selection does not: a typed filter (the
 	// picker opens straight into filtering) and a moved cursor.
@@ -100,24 +96,32 @@ func (d modelDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 		marker = lipgloss.NewStyle().Foreground(subtle).Render(" (current)")
 	}
 
+	var left string
 	if index == m.Index() {
-		str := lipgloss.NewStyle().
-			Foreground(accent).
-			Bold(true).
-			Render(fmt.Sprintf("> %s", title))
-		str += marker
-		str += "\n" + lipgloss.NewStyle().
-			Foreground(subtle).
-			Render(fmt.Sprintf("  %s", subtitle))
-		fmt.Fprint(w, str)
+		left = lipgloss.NewStyle().Foreground(accent).Bold(true).Render("> "+title) + marker
 	} else {
-		str := fmt.Sprintf("  %s", title)
-		str += marker
-		str += "\n" + lipgloss.NewStyle().
-			Foreground(subtle).
-			Render(fmt.Sprintf("  %s", subtitle))
-		fmt.Fprint(w, str)
+		left = "  " + title + marker
 	}
+
+	// The id (provider-qualified when the backend reports one) belongs on
+	// the right, dimmed, and only when it says something the title doesn't:
+	// a backend whose id *is* its display name would otherwise print every
+	// model twice. The column is one row per model, so the ref must never
+	// wrap.
+	ref := qualifiedModelRef(i.model)
+	if ref == title {
+		ref = ""
+	}
+	if ref != "" {
+		width := m.Width() - 2
+		ref = truncateToWidth(ref, width/2)
+		pad := width - displayWidth(left) - displayWidth(ref)
+		if pad >= 2 {
+			fmt.Fprint(w, left+strings.Repeat(" ", pad)+lipgloss.NewStyle().Foreground(subtle).Render(ref))
+			return
+		}
+	}
+	fmt.Fprint(w, left)
 }
 
 // fuzzyFilter adapts sahilm/fuzzy to the bubbles list FilterFunc
@@ -152,6 +156,10 @@ type modelPickerModel struct {
 	err            error
 	hideHints      bool
 	activeConn     *config.Connection
+	// width and height mirror setSize so the view reserves exactly the
+	// rows its banner, header and wrapped hint block occupy.
+	width  int
+	height int
 }
 
 func newModelPickerModel(b backend.Backend, sessionKey, currentModelID string, hideHints bool, activeConn *config.Connection, disableExitKeys bool) modelPickerModel {
@@ -162,16 +170,20 @@ func newModelPickerModel(b backend.Backend, sessionKey, currentModelID string, h
 	// the very interaction this view exists for.
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
-	l.SetShowHelp(!hideHints)
+	// The widget footer advertised `v select` (bubbles' Quit key, which
+	// quit the app) and a second `esc` next to the app's own. The view
+	// renders the hint line from Actions() instead.
+	l.SetShowHelp(false)
 	l.Styles.Title = headerStyle
+	// Arabic pagination (`3/40`) so a 400-model catalogue keeps its
+	// position in NO_COLOR, where the default colour-only dots vanish.
+	l.Paginator.Type = paginator.Arabic
 	// Live filtering is the whole point of this view — unlike the
 	// other pickers in the codebase, which keep filtering off.
 	l.SetFilteringEnabled(true)
 	l.Filter = fuzzyFilter
-	if disableExitKeys {
-		l.KeyMap.Quit.Unbind()
-		l.KeyMap.ForceQuit.Unbind()
-	}
+	l.KeyMap.Quit.Unbind()
+	l.KeyMap.ForceQuit.Unbind()
 
 	return modelPickerModel{
 		list:           l,
@@ -207,17 +219,38 @@ func (m modelPickerModel) Update(msg tea.Msg) (modelPickerModel, tea.Cmd) {
 			m.err = msg.err
 			return m, nil
 		}
-		items := make([]list.Item, len(msg.models))
-		for i, mc := range msg.models {
+		// Dedupe by the qualified ref the switch will send: gateways list
+		// the same model under more than one id (aliases, a local and a
+		// routed name), and two rows that switch to the same model is a
+		// picker that looks broken.
+		seen := make(map[string]bool, len(msg.models))
+		models := make([]protocol.ModelChoice, 0, len(msg.models))
+		for _, mc := range msg.models {
+			ref := qualifiedModelRef(mc)
+			if seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			models = append(models, mc)
+		}
+		items := make([]list.Item, len(models))
+		for i, mc := range models {
 			items[i] = modelItem{model: mc}
 		}
 		m.list.SetItems(items)
+		// bubbles builds the visible set from the *filter*, not from the
+		// item list: SetFilterState alone only flips the mode, so the
+		// picker rendered an empty body (just the pagination dots) until
+		// the user typed a character. Apply the empty query first — that
+		// populates filteredItems and resets the cursor — and pre-select
+		// the active model afterwards so the reset doesn't undo it.
+		m.list.SetFilterText("")
 		// Pre-select the active model so Enter on an empty filter
 		// picks "the one you already have" rather than a surprising
 		// jump to the top of the list. The row is also marked
 		// "(current)" by modelDelegate — same predicate, so the two
 		// always agree.
-		for idx, mc := range msg.models {
+		for idx, mc := range models {
 			if isCurrentModel(mc, m.currentModelID) {
 				m.list.Select(idx)
 				break
@@ -314,10 +347,7 @@ func (m modelPickerModel) View() string {
 	if m.loading {
 		return "\n  Loading models...\n"
 	}
-	hints := ""
-	if !m.hideHints {
-		hints = helpStyle.Render(renderActionHints(m.Actions()))
-	}
+	hints := m.renderHints()
 	banner := renderConnectionBanner(m.activeConn)
 	if m.err != nil {
 		var b strings.Builder
@@ -341,11 +371,56 @@ func (m modelPickerModel) View() string {
 		b.WriteString("\n")
 		return b.String()
 	}
-	return banner + "\n" + header + m.list.View() + "\n" + hints
+	return banner + "\n" + header + m.sizedListView(banner, hints) + "\n" + hints
+}
+
+// sizedListView renders the list at the height this frame's chrome leaves,
+// so the hint block always fits even when it wraps on a narrow terminal.
+func (m modelPickerModel) sizedListView(banner, hints string) string {
+	lm := m.list
+	if m.height > 0 {
+		lm.SetSize(m.width, maxInt(1, m.height-blockRows(banner)-2-blockRows(hints)))
+	}
+	return lm.View()
 }
 
 func (m *modelPickerModel) setSize(w, h int) {
-	// Reserve rows for the explicit header + spacer (see View) on top
-	// of the hint line the other pickers already account for.
-	m.list.SetSize(w, h-4)
+	m.width = w
+	m.height = h
+	m.list.SetSize(w, m.listHeight())
+}
+
+// listHeight sizes the list to what View leaves after the connection
+// banner, the blank row and explicit header, and the hint block: a flat
+// h-4 dropped the hint row on a 24-row terminal with a banner present.
+func (m modelPickerModel) listHeight() int {
+	if m.height <= 0 {
+		return 0
+	}
+	rows := m.height -
+		blockRows(renderConnectionBanner(m.activeConn)) -
+		1 - // the blank between banner and header (View)
+		1 - // the explicit " Select a model " header
+		blockRows(m.renderHints())
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// renderHints is the app-owned hint block the view renders below the list.
+func (m modelPickerModel) renderHints() string {
+	if m.hideHints {
+		return ""
+	}
+	if m.filtering() {
+		return renderFilterHint(m.width)
+	}
+	return renderHintLine(m.Actions(), m.width)
+}
+
+// filtering reports whether the model filter input is focused, so
+// computeWantsInput treats a typed key as text rather than a shortcut.
+func (m modelPickerModel) filtering() bool {
+	return m.list.FilterState() == list.Filtering
 }

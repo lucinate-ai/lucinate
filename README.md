@@ -112,6 +112,11 @@ Press Enter in the lucinate prompt to retry — the connection completes in plac
 
 Select an agent from the list to start chatting.
 
+On a Hermes connection the picker lists the gateway's **profiles** — one agent
+per profile the machine serves, each with its model. Selecting one runs every
+session you open under that profile; the profile's SOUL, skills, memory and
+model come with it.
+
 | Key | Action |
 |-----|--------|
 | `Enter` | Select agent |
@@ -137,8 +142,36 @@ The mouse works too: **wheel scrolls the history**, and **click-drag selects
 text** — it lands on your clipboard the moment you let go. Prefer your
 terminal's native selection? `/mouse off` hands the mouse back.
 
-### Settings
+### 5. Rooms (Hermes)
 
+On a Hermes connection `/rooms` opens the hosted group chats: a durable
+transcript on the gateway and a frozen roster of 2–6 profiles that answer your
+messages. Seating a room needs no gateway CLI — pick the profiles, name it, and
+type.
+
+```
+/rooms            # room list · n seat a new room · enter open · p save as preset
+@kowal status?    # address one member; @all (or no mention) addresses everyone
+/mode moderator   # or round-robin — /mode, /moderator
+```
+
+While a member answers, its row shows a spinner fed by the gateway's live
+`member_activity` (rooms do not stream partial text — the gateway keeps deltas
+out of the durable log). If a member blocks on an approval, the transcript says
+so: `/approve @kowal once|deny`, `/retry`, `/stop`. Each member runs the model
+its profile is configured with; `/model` reports that instead of offering a
+per-member seat the gateway cannot honour.
+
+The same surface is scriptable: `lucinate rooms list|create|send|log|state|
+approve|retry|rename|stop|disband`. See [docs/rooms.md](docs/rooms.md).
+
+A room is a bounded discussion: round 0 answers your mentions (no mention means
+everyone), later rounds exist only when a member cites a peer, and the room stops
+at 3 rounds or 10 member messages. `/rules` shows that constitution, the header
+shows `round 2/3 · 7/10 messages`, and `m` cycles the routing mode. The policy
+itself — quoted from the gateway — is in [docs/room-rules.md](docs/room-rules.md).
+
+### Settings
 Use `/settings` to open the settings view (also reachable as `/config`). Your settings are persisted to `~/.lucinate/config.json`.
 
 | Setting | Default | Description |
@@ -173,6 +206,7 @@ Type these in the chat input. As soon as you type `/`, a menu shows every matchi
 | `/models` | Alias for `/model` |
 | `/mouse on\|off` | Mouse capture (on by default: wheel scrolls, drag copies; off: your terminal's native selection) |
 | `/reset` | Delete session and start fresh (with confirmation) |
+| `/rooms` | Open rooms — Hermes hosted group chats with 2–6 Hermes profiles — Hermes only |
 | `/routine <name>` | Activate a stored multi-step routine in the current session |
 | `/routines` | List, view, edit, or delete routines |
 | `/sessions` | Browse and restore previous sessions |
