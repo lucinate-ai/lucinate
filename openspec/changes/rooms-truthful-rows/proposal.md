@@ -32,6 +32,10 @@ transcript: who spoke, who stopped, and whether a file was really delivered.
   `gotow…`) **and** a deliverable path in the same reply; a bare path mention is discussion, not a
   claim. A negated marker (`nie zapisałem`, `bez zapisu`, `nic nie zapisałem`) is not a claim
   either. The evidence row stays `none` (no row) for a read-only reply.
+- **Control rows name the action.** A gateway-owned receipt (`room.stop_requested`, `room.created`,
+  `room.members_changed`) reads as what happened — `stop requested` — and never appends the
+  installation id. Any other unknown kind keeps its own name and still drops an installation-id
+  speaker.
 
 ## Out of scope
 

@@ -2331,7 +2331,9 @@ func formatRoomsEventStyled(ev rooms.Event, body string, memberStyle lipgloss.St
 	case "member.unavailable":
 		return fmt.Sprintf("%s  %s", stamp, errorStyle.Render(ev.Speaker()+" unavailable"))
 	}
-	return fmt.Sprintf("%s  %s", stamp, statusStyle.Render(ev.Kind+" "+ev.Speaker()))
+	// A control or unknown kind has no member behind it: rooms.EventLabel gives
+	// it wording and keeps the gateway's installation id off the screen.
+	return fmt.Sprintf("%s  %s", stamp, statusStyle.Render(rooms.EventLabel(ev)))
 }
 
 // turnSpeaker labels a turn row: the member the payload names, resolved on the

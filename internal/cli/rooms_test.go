@@ -108,3 +108,19 @@ func TestFormatRoomEvent_NamesTurnMember(t *testing.T) {
 		t.Errorf("formatRoomEvent(nil roster) = %q, want the actor fallback", fallback)
 	}
 }
+
+// A gateway control receipt reads as what happened; the installation id that
+// owns the gateway never reaches the transcript.
+func TestFormatRoomEvent_ControlRowHasNoInstallationID(t *testing.T) {
+	ev := rooms.Event{
+		Kind:  "room.stop_requested",
+		Actor: rooms.Actor{Kind: "gateway", ID: "install:6361e5ff"},
+	}
+	got := formatRoomEvent(ev, nil)
+	if !strings.Contains(got, "stop requested") {
+		t.Errorf("formatRoomEvent = %q, want stop requested", got)
+	}
+	if strings.Contains(got, "install:") {
+		t.Errorf("formatRoomEvent named the gateway: %q", got)
+	}
+}

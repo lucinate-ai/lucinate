@@ -1093,7 +1093,12 @@ func formatRoomEvent(ev rooms.Event, roster []rooms.Member) string {
 	case "member.unavailable":
 		return fmt.Sprintf("%s  ! %s unavailable", stamp, speaker)
 	}
-	return fmt.Sprintf("%s  %s %s %s", stamp, ev.Kind, speaker, compactPayload(ev.Payload))
+	// A control or unknown kind has no member behind it: rooms.EventLabel gives
+	// it wording and keeps the gateway's installation id off the screen.
+	if extra := compactPayload(ev.Payload); extra != "" {
+		return fmt.Sprintf("%s  %s · %s", stamp, rooms.EventLabel(ev), extra)
+	}
+	return fmt.Sprintf("%s  %s", stamp, rooms.EventLabel(ev))
 }
 
 func compactPayload(p map[string]any) string {

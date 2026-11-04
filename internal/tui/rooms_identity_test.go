@@ -52,3 +52,39 @@ func TestTurnRowUnknownMemberFallsBackToActor(t *testing.T) {
 		t.Errorf("row = %q, want the actor fallback", got)
 	}
 }
+
+// A gateway control receipt reads as what happened, and the installation id
+// that owns the gateway is not a member name — the last place it survived.
+func TestControlRowSaysWhatHappenedNotWhoOwnsIt(t *testing.T) {
+	ev := rooms.Event{
+		Kind:  "room.stop_requested",
+		Actor: rooms.Actor{Kind: "gateway", ID: "install:6361e5ff"},
+	}
+	got := ansi.Strip(formatRoomsEventStyled(ev, ev.Text(), assistantPrefixStyle, alojzRoster()))
+	if !strings.Contains(got, "stop requested") {
+		t.Errorf("row = %q, want stop requested", got)
+	}
+	if strings.Contains(got, "install:") {
+		t.Errorf("row named the gateway: %q", got)
+	}
+}
+
+// The stop receipt is the control row a user actually meets after /stop, so it
+// is pinned on the rendered transcript, not just on the formatter.
+func TestTranscriptViewStopsReceiptHasNoInstallationID(t *testing.T) {
+	m := v2Model(t)
+	m.page.Events = []rooms.Event{{
+		RoomID: "sztab", Seq: 1, EventID: "e1", Kind: "room.stop_requested",
+		Actor:     rooms.Actor{Kind: "gateway", ID: "install:6361e5ff"},
+		Payload:   map[string]any{"cancelled": float64(1)},
+		CreatedAt: 1700000001,
+	}}
+
+	out := ansi.Strip(m.View())
+	if !strings.Contains(out, "stop requested") {
+		t.Errorf("transcript view is missing the stop receipt:\n%s", out)
+	}
+	if strings.Contains(out, "install:") {
+		t.Errorf("transcript view shows the gateway installation id:\n%s", out)
+	}
+}

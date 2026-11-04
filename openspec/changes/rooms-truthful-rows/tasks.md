@@ -10,6 +10,10 @@
       fallback stays for unplaceable members. Render test: gateway-actor `turn.settled` →
       `@alojz finished`; `turn.cancelled` → `@alojz — przerwano: …`.
 - [x] 1.3 The CLI transcript (`lucinate rooms log`) renders the same handle for those rows.
+- [x] 1.4 Control rows name the action, not the gateway: `rooms.ControlLabel(kind)` +
+      `rooms.EventLabel(ev)` (installation ids dropped), used by the TUI default branch and by
+      `formatRoomEvent`. Tests: `room.stop_requested` → `stop requested` with no `install:` on both
+      surfaces; an unknown kind keeps its name and drops an installation-id speaker.
 
 ## 2. Evidence only when a write was claimed
 
@@ -31,7 +35,6 @@
       `@default passed` and `@alojz — przerwano: member turn cancelled` where the same log
       previously rendered `install:6361e5ff…`; `lucinate rooms log` agrees (`alojz finished`,
       `@alojz — przerwano: …`); the `⚠ deklaracja zapisu bez potwierdzenia` row under `@Default`'s
-      read-only reply that mentioned `docs/rooms-live-check.md` is gone. One housekeeping row
-      still prints the gateway id (`room.stop_requested install:…`) — it is the gateway's own
-      receipt, not a member row, and stays out of scope per the proposal.
+      read-only reply that mentioned `docs/rooms-live-check.md` is gone. The housekeeping row
+      (`room.stop_requested install:…`) now reads `stop requested` on both surfaces (task 1.4).
 - [x] 3.3 `docs/rooms.md` mentions the resolver and the evidence rule in one paragraph.

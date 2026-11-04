@@ -67,6 +67,22 @@ Consequence accepted: a bare "zapisałem" with no path and no first-person deliv
 raises the flag. That reply is unverifiable anyway — the room's contract asks for
 `HANDOFF <path> bytes=<n>`, and `VerifyReply` still verifies every receipt it is given.
 
+## Decision 3 — a control row is an action, so it gets wording rather than an actor
+
+The `room.*` control kinds have no member behind them: the actor is the gateway installation, which
+is why the default branch (`ev.Kind + " " + ev.Speaker()`) leaked `room.stop_requested install:<hash>`
+after every `/stop`. The fix is not another `case` per kind in two formatters — it is one resolver
+the TUI and the CLI both call:
+
+- `ControlLabel(kind)` maps a known control kind to its wording (`stop requested`, `room created`,
+  `roster changed`); unknown kinds keep their own name.
+- `EventLabel(ev)` appends the speaker **only** when that speaker is not an installation id, so a
+  future gateway kind with a member or person behind it still reads correctly, and one with an
+  installation id cannot regress into the same defect.
+
+`Event.Speaker()` keeps its meaning (it describes an actor, and export/CLI still use it), so the
+unplaceable-member fallback documented under Decision 1 is untouched.
+
 ## Tests that must exist afterwards
 
 - Resolver: `member_id` hit; `member_index` fallback when `member_id` is absent; unknown member

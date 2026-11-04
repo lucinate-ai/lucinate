@@ -27,6 +27,25 @@ own installation identifier as if it were a member.
   contain
 - **THEN** the row falls back to the actor's own label rather than inventing a handle
 
+### Requirement: A gateway control row says what happened, not who owns the installation
+
+Every transcript row for a gateway-owned control event SHALL read as what happened, in the
+client's own wording for that kind. A control row SHALL NOT append the gateway's installation
+identifier, because that row reports an action, not a member.
+
+#### Scenario: A stop receipt
+
+- **WHEN** the user runs `/stop` and the gateway records `room.stop_requested` with
+  `actor {kind: gateway, id: "install:<hash>"}`
+- **THEN** the transcript row reads `stop requested`
+- **AND** the row contains no `install:` identifier
+
+#### Scenario: A control kind the client has no wording for
+
+- **WHEN** a control event arrives whose kind the client does not know
+- **THEN** the row shows that kind's own name
+- **AND** an installation-id speaker is still omitted, while a member or person speaker is kept
+
 ### Requirement: The evidence row appears only when a write was claimed
 
 The client SHALL mark a member reply as a write claim without a receipt only when that reply both
