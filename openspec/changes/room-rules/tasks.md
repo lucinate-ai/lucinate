@@ -25,6 +25,14 @@
 - [x] 3.3 Mode line explains effect: broadcast = everyone on round 0, moderator = one member,
       round-robin = next member; states that later rounds follow peer mentions and the gateway's
       rotation.
+- [x] 3.4 The header keeps its budget when the roster is long: with six members the roster line
+      drops the models (`@handle` only) before the budget leaves the row, and a title that must
+      wrap has its rows counted, so the composer stays on screen. Found by the 2026-11-04 18:35
+      six-bot run (`docs/rooms-live-check.md`, first item of "what to fix, in order").
+      `headerLayout`/`headerTitles` (`internal/tui/rooms.go`), `rosterHandles`
+      (`internal/tui/rooms_model.go`), and `HeaderText`'s three-width contract
+      (`internal/rooms/discussion.go`); tests in `internal/tui/rooms_header_budget_test.go` and
+      `internal/rooms/discussion_test.go` (`TestHeaderTextWidthContract`).
 
 ## 4. Talk contract (replaces the per-preset peer-discussion flag)
 

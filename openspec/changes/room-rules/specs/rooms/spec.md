@@ -33,6 +33,16 @@ coordinates, and the reason a discussion ended.
 - **THEN** the header shows `round 2/3 · 7/10 messages`
 - **AND** the text degrades to `2/3 · 7/10` rather than overflowing at 80 columns
 
+#### Scenario: A long roster yields to the budget
+
+- **WHEN** a six-member room is open in a 100-column pane and the discussion holds one round and
+  two member messages
+- **THEN** the roster line drops each member's model and keeps the handles
+- **AND** the header still shows the round and message position (`1/3 · 2/10`) on that row
+- **AND** when the handles plus the budget still do not fit, the budget takes a row of its own
+  instead of being clipped, the title wraps rather than overflowing, and the composer stays on
+  screen
+
 #### Scenario: A discussion that ended without a new round
 
 - **WHEN** the gateway settles the discussion because no member had anything new to say

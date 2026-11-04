@@ -103,6 +103,17 @@ func (m roomsModel) memberModel(handle string) string {
 // rosterLine renders a member with the model it answers with, so the room's
 // header answers "which model is @matt on?" without a command.
 func (m roomsModel) rosterLine() string {
+	return m.rosterLabels(true)
+}
+
+// rosterHandles renders only the member handles. It is the header's fallback
+// when the per-member model labels would push the discussion budget off the
+// row: the handles still identify everyone, and the budget stays visible.
+func (m roomsModel) rosterHandles() string {
+	return m.rosterLabels(false)
+}
+
+func (m roomsModel) rosterLabels(withModel bool) string {
 	members := m.roster()
 	if len(members) == 0 {
 		return "no members"
@@ -110,6 +121,10 @@ func (m roomsModel) rosterLine() string {
 	parts := make([]string, 0, len(members))
 	for _, member := range members {
 		handle := rooms.HandleFor(member.Profile)
+		if !withModel {
+			parts = append(parts, "@"+handle)
+			continue
+		}
 		model := m.memberModel(handle)
 		if model == "" {
 			parts = append(parts, "@"+handle+" (profile default)")

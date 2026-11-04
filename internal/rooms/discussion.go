@@ -209,12 +209,15 @@ func (b DiscussionBudget) EndText() string {
 //	round 2/3 · 7/10 messages
 //
 // It degrades to `2/3 · 7/10` when the full label does not fit the width it
-// is handed, appends the end reason when the discussion is over, and returns
-// "" when nothing fits — the caller can never be handed a label wider than
-// the pane. A width of 0 or less means "unmeasured": the full label is
-// returned, which is what the pure callers and tests want.
+// is handed, appends the end reason when the discussion is over, and never
+// returns a label wider than a positive width. Three widths mean three
+// different things: a negative width is "no room left" and yields "", zero is
+// "unmeasured" and yields the full label (what the pure callers and tests
+// want), and a positive width must contain the label. A caller passes the
+// columns left on the row, so a negative budget must not fall back to the
+// full label and overflow an already-full header.
 func (b DiscussionBudget) HeaderText(width int) string {
-	if !b.HasDiscussion {
+	if !b.HasDiscussion || width < 0 {
 		return ""
 	}
 	round := strconv.Itoa(b.CurrentRound)
@@ -233,7 +236,7 @@ func (b DiscussionBudget) HeaderText(width int) string {
 		candidates = []string{full, short}
 	}
 	for _, c := range candidates {
-		if width <= 0 || displayCols(c) <= width {
+		if width == 0 || displayCols(c) <= width {
 			return c
 		}
 	}

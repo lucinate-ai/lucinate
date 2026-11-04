@@ -189,6 +189,24 @@ func TestDiscussionBudgetHeaderDegradesAndNeverOverflows(t *testing.T) {
 	}
 }
 
+// The three width meanings are a contract: negative is "no room", zero is
+// "unmeasured", positive must contain the label. A negative width used to
+// return the full label, which overflowed an already-full header row.
+func TestHeaderTextWidthContract(t *testing.T) {
+	b := DiscussionBudget{HasDiscussion: true, CurrentRound: 2, RoundsUsed: 2, MessagesUsed: 7}
+	full := "round 2/3 · 7/10 messages"
+
+	if got := b.HeaderText(-1); got != "" {
+		t.Errorf("HeaderText(-1) = %q, want empty (no room)", got)
+	}
+	if got := b.HeaderText(0); got != full {
+		t.Errorf("HeaderText(0) = %q, want the full label %q", got, full)
+	}
+	if got := b.HeaderText(80); got != full {
+		t.Errorf("HeaderText(80) = %q, want %q", got, full)
+	}
+}
+
 // ── peer pulls ───────────────────────────────────────────────────────────────
 
 func pullRoster() []Member { return RosterFor([]string{"matt", "kowal", "olesno"}) }

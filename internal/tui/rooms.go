@@ -1986,9 +1986,10 @@ func (m roomsModel) viewTranscript() string {
 	// The room's header line carries the roster, the budget the gateway
 	// enforces and (below) what the routing mode does to the gateway's turn
 	// selection. The budget is derived from the log, never counted locally.
-	title := m.transcriptTitle()
-	inline, budgetBelow := m.transcriptBudget()
-	titleLine := headerStyle.Render(title)
+	// headerLayout picks the title form and the budget placement together, so
+	// the width used to place a label is the width it is rendered in.
+	title, inline, budgetBelow := m.headerLayout()
+	titleLine := headerStyle.Render(wordWrap(title, m.viewWrapWidth()))
 	if inline != "" {
 		titleLine += " " + statusStyle.Render("· "+inline)
 	}
@@ -2083,30 +2084,45 @@ func (m roomsModel) viewTranscript() string {
 	return b.String()
 }
 
-// transcriptTitle is the room's header line minus the budget: the id and the
-// roster with each member's model, so the room answers "who is on what"
-// without a command.
-func (m roomsModel) transcriptTitle() string {
-	if m.openRoom != nil {
-		return fmt.Sprintf("%s — %s", m.openRoom.RoomID, m.rosterLine())
+// headerLayout chooses the room header's title form together with the budget
+// placement. It tries the richest title (each member with their model) with
+// the budget on the same row, then the bare handles, and only then moves the
+// budget to a row of its own. The budget is measured against the columns left
+// on that same row, so a negative width can never leak a full label into an
+// already-full header.
+func (m roomsModel) headerLayout() (title, inline, below string) {
+	titles := m.headerTitles()
+	budget := rooms.DiscussionBudgetFor(m.page.Events)
+	width := m.viewWrapWidth()
+	if !budget.HasDiscussion {
+		return titles[0], "", ""
 	}
-	return m.openRoomID
+	for _, candidate := range titles {
+		avail := width - displayWidth(candidate) - displayWidth(" · ")
+		if label := budget.HeaderText(avail); label != "" {
+			return candidate, label, ""
+		}
+	}
+	// Even the bare handles cannot share the row: the budget gets its own
+	// line, and the title wraps to the pane.
+	return titles[len(titles)-1], "", budget.HeaderText(width)
 }
 
-// transcriptBudget places the discussion budget on the header line. It
-// degrades to `2/3 · 7/10` when the title leaves no room for the words, and
-// falls back to a line of its own when even the short form cannot share the
-// title's row — the budget is never silently dropped.
-func (m roomsModel) transcriptBudget() (inline, below string) {
-	budget := rooms.DiscussionBudgetFor(m.page.Events)
-	if !budget.HasDiscussion {
-		return "", ""
+// headerTitles is the title's richest-to-plainest order: the room id with
+// each member and the model it answers with, then the same roster as bare
+// handles. The bare form keeps the discussion budget on the header row in a
+// room whose full roster is wider than the pane.
+func (m roomsModel) headerTitles() []string {
+	if m.openRoom == nil {
+		return []string{m.openRoomID}
 	}
-	avail := m.viewWrapWidth() - displayWidth(m.transcriptTitle()) - displayWidth(" · ")
-	if label := budget.HeaderText(avail); label != "" {
-		return label, ""
+	id := m.openRoom.RoomID
+	full := fmt.Sprintf("%s — %s", id, m.rosterLine())
+	handles := fmt.Sprintf("%s — %s", id, m.rosterHandles())
+	if handles == full {
+		return []string{full}
 	}
-	return "", budget.HeaderText(m.viewWrapWidth())
+	return []string{full, handles}
 }
 
 // showRoutingNote keeps the mode explanation off a terminal too short to
@@ -2121,10 +2137,13 @@ func (m roomsModel) showRoutingNote() bool {
 }
 
 // headerRows is the transcript header's real height, so the transcript window
-// can account for a wrapped mode line or a budget on its own row.
+// can account for a wrapped title, a budget on its own row or a wrapped mode
+// line. The inline budget shares the title's row by construction, so only the
+// wrapped title rows count.
 func (m roomsModel) headerRows() int {
-	rows := 1
-	if _, below := m.transcriptBudget(); below != "" {
+	title, _, below := m.headerLayout()
+	rows := lipgloss.Height(wordWrap(title, m.viewWrapWidth()))
+	if below != "" {
 		rows++
 	}
 	if m.showRoutingNote() {
