@@ -23,6 +23,10 @@
       opinion with no marker, and the two existing receipt cases (verified / wrong bytes).
 - [x] 2.2 Re-run the existing evidence suite unchanged — `HANDOFF` receipts, duplicates and byte
       mismatches keep their current verdicts.
+- [x] 2.3 The marker list holds verbs of writing only. The adjective stem `gotow…` is removed, because
+      next to a `.md` path it accused a reply that wrote nothing (`… jedna edycja na gotowym materiale
+      docs/rooms-live-check.md`, the live sentence of the 2026-11-04 18:38 six-bot run, now a table
+      case expecting `none`).
 
 ## 3. Verification
 

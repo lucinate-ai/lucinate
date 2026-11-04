@@ -69,6 +69,12 @@ evidence row. A reply that denies writing SHALL NOT be marked.
 - **WHEN** a member writes `nie zapisałem pliku report.md` and provides no receipt
 - **THEN** the reply carries no evidence row
 
+#### Scenario: A readiness adjective is not a write claim
+
+- **WHEN** a member writes `dokument to potem jedna edycja na gotowym materiale
+  docs/rooms-live-check.md` and provides no receipt
+- **THEN** the reply carries no evidence row
+
 #### Scenario: Receipts keep their verdicts
 
 - **WHEN** a reply carries `HANDOFF <path> bytes=<n>` and the file on disk matches

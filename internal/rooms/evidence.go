@@ -23,8 +23,10 @@ const (
 // reply matching one without a HANDOFF receipt is "claimed": the room is
 // discussing, not delivering, and painting every opinion with a red cross
 // taught readers to ignore the column entirely.
+// The readiness adjective ("gotowym materiale") is not a write marker: next to
+// a .md path it produced a false warning.
 var claimMarkers = []string{
-	"zapisa", "wdroż", "wdroz", "utworz", "gotow",
+	"zapisa", "wdroż", "wdroz", "utworz",
 }
 
 // claimFilePattern is the other half of a write claim: naming a file with a

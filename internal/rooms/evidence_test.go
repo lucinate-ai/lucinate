@@ -125,6 +125,7 @@ func TestVerifyReply_ClaimNeedsAMarkerAndATarget(t *testing.T) {
 		{"first-person delivery and a path", "zapisałem raport w report.md", EvidenceClaimed},
 		{"denial", "nie zapisałem pliku report.md", EvidenceNone},
 		{"opinion with no marker and no path", "uważam, że to dobry kierunek", EvidenceNone},
+		{"readiness adjective next to a path", "ale dziś najważniejsze nie jest dopisanie tej strony, tylko sam przebieg; dokument to potem jedna edycja na gotowym materiale `docs/rooms-live-check.md`.", EvidenceNone},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

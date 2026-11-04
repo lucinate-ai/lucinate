@@ -85,6 +85,8 @@ lucinate rooms log live-six-183443
 1. Let the header keep the budget when the roster is long — shorten the roster line (handles only)
    before dropping `round N/3 · M/10 messages`.
 2. Narrow the write-claim words to verbs of writing, so a readiness adjective cannot accuse a reply.
+   **Done in this pass** (`internal/rooms/evidence.go`): the marker list holds verbs only, and the
+   exact 18:38 sentence is now a regression test in `internal/rooms/evidence_test.go`.
 3. Show peer pull next to the message that did it — unchanged from the earlier list, still untested
    in a six-bot room.
 4. Keep internal work internal until you decide on sale and on code changes outside docs. Those two
