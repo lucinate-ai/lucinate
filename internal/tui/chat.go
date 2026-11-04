@@ -199,6 +199,99 @@ type chatModel struct {
 	activeRoutine      *activeRoutine
 	recorder           *transcriptRecorder // non-nil while /record on is active; closed and cleared on /record off, session switch, or quit
 	activeTools        []toolActivity      // tools invoked during the current turn, in call order; rendered in the ephemeral strip above the input and cleared at the start of the next turn
+	ask                *pendingAsk         // a gateway approval/clarify question waiting for an answer; rendered above the input
+}
+
+// pendingAsk is one approval/clarify question the gateway is blocked on.
+// answer holds the free-text clarify buffer — deliberately separate from
+// the composer so nothing typed here can land in the user's draft.
+type pendingAsk struct {
+	sessionKey  string
+	requestID   string
+	rpcID       string // raw JSON id of the server→client request (string "srq-…" or a number)
+	kind        string // "approval" | "clarify"
+	question    string
+	choices     []string
+	command     string
+	description string
+	cwd         string
+	answer      string
+}
+
+// offersAlways reports whether an approval payload advertises an
+// "allow always" option. Absent choices means only once/deny are offered.
+func (a *pendingAsk) offersAlways() bool {
+	for _, c := range a.choices {
+		if strings.Contains(strings.ToLower(c), "always") {
+			return true
+		}
+	}
+	return false
+}
+
+// offersSession reports whether an approval payload advertises an
+// "allow for the session" option.
+func (a *pendingAsk) offersSession() bool {
+	for _, c := range a.choices {
+		if strings.Contains(strings.ToLower(c), "session") {
+			return true
+		}
+	}
+	return false
+}
+
+// choiceFor maps the panel's intent (once/always/deny) onto one of the
+// gateway's offered choice strings. The gateway forces a deny when the
+// answer is not one of its choices, so an unknown intent falls back to the
+// first non-deny choice (a consent), and ultimately to deny.
+func (a *pendingAsk) choiceFor(intent string) string {
+	if len(a.choices) == 0 {
+		// Older payloads carry no choices; keep the legacy literals.
+		switch intent {
+		case "once":
+			return "allow-once"
+		case "always":
+			return "allow-always"
+		case "session":
+			return "allow-session"
+		default:
+			return "deny"
+		}
+	}
+	var wanted []string
+	switch intent {
+	case "once":
+		wanted = []string{"once", "allow-once", "approve"}
+	case "always":
+		wanted = []string{"always", "allow-always"}
+	case "session":
+		wanted = []string{"session", "allow-session"}
+	default:
+		wanted = []string{"deny"}
+	}
+	for _, w := range wanted {
+		for _, c := range a.choices {
+			if strings.EqualFold(c, w) {
+				return c
+			}
+		}
+	}
+	if intent == "deny" {
+		// Deny must never fall through to a consent.
+		return "deny"
+	}
+	for _, c := range a.choices {
+		if !strings.EqualFold(c, "deny") {
+			return c
+		}
+	}
+	return "deny"
+}
+
+// askAnsweredMsg carries the outcome of the respond RPC so a failure is
+// visible in the transcript instead of vanishing.
+type askAnsweredMsg struct {
+	err error
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -949,8 +1042,25 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		// session's current context size.
 		return m, tea.Batch(m.loadStats(), m.loadContextUsage())
 
+	case askAnsweredMsg:
+		if msg.err != nil {
+			m.appendMessage(chatMessage{
+				role:   "system",
+				errMsg: fmt.Sprintf("could not answer the ask: %v", msg.err),
+			})
+			m.updateViewport()
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		slog.Debug("key", "code", msg.Code, "mod", msg.Mod, "string", msg.String())
+		// A pending ask owns its keys first, so 'y' answers the approval
+		// instead of becoming the first letter of the next message. It is
+		// gated on an empty composer: a typed draft is the user's work and
+		// answer keys are swallowed rather than allowed to edit it.
+		if handled, cmd := m.handleAskKey(msg); handled {
+			return m, cmd
+		}
 		switch msg.String() {
 		case "esc":
 			if m.pendingNavConfirm != nil {
@@ -1352,6 +1462,200 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// handleAskKey routes a keystroke to the pending ask. It returns
+// handled=true when the key belonged to the ask (and the caller must not
+// pass it to the textarea). A non-empty composer wins: every key goes to
+// the textarea as normal, so a typed draft is never consumed by an answer.
+func (m *chatModel) handleAskKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.ask == nil {
+		return false, nil
+	}
+	if strings.TrimSpace(m.textarea.Value()) != "" {
+		return false, nil
+	}
+	ask := m.ask
+	key := msg.String()
+
+	switch ask.kind {
+	case "approval":
+		var choice, label string
+		switch key {
+		case "y":
+			choice, label = ask.choiceFor("once"), "allow once"
+		case "a":
+			if !ask.offersAlways() {
+				return false, nil
+			}
+			choice, label = ask.choiceFor("always"), "allow always"
+		case "s":
+			if !ask.offersSession() {
+				return false, nil
+			}
+			choice, label = ask.choiceFor("session"), "allow for session"
+		case "n", "esc":
+			choice, label = ask.choiceFor("deny"), "deny"
+		default:
+			return false, nil
+		}
+		return true, m.answerAsk(choice, label)
+
+	case "clarify":
+		if len(ask.choices) > 0 {
+			if key == "esc" {
+				return true, m.answerAsk("", "")
+			}
+			if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+				idx := int(key[0] - '1')
+				if idx >= len(ask.choices) {
+					return false, nil
+				}
+				choice := ask.choices[idx]
+				return true, m.answerAsk(choice, choice)
+			}
+			return false, nil
+		}
+
+		// Free text: the buffer lives on the ask, never in the composer.
+		switch key {
+		case "esc":
+			return true, m.answerAsk("", "")
+		case "enter":
+			return true, m.answerAsk(ask.answer, ask.answer)
+		case "backspace":
+			if ask.answer != "" {
+				_, size := utf8.DecodeLastRuneInString(ask.answer)
+				ask.answer = ask.answer[:len(ask.answer)-size]
+				m.updateViewport()
+			}
+			return true, nil
+		}
+		if t := msg.Text; t != "" && !strings.HasPrefix(key, "ctrl+") && !strings.HasPrefix(key, "alt+") {
+			ask.answer += t
+			m.updateViewport()
+			return true, nil
+		}
+		return false, nil
+	}
+	return false, nil
+}
+
+// answerAsk closes the panel, records what was answered, and sends the
+// answer through the backend's optional AskBackend capability.
+func (m *chatModel) answerAsk(answer, label string) tea.Cmd {
+	ask := m.ask
+	m.ask = nil
+
+	b, ok := m.backend.(backend.AskBackend)
+	if !ok {
+		m.appendMessage(chatMessage{
+			role:    "system",
+			content: "This connection cannot answer the ask; it will be denied when it times out.",
+		})
+		m.applyLayout()
+		m.updateViewport()
+		return nil
+	}
+
+	m.appendMessage(chatMessage{role: "system", content: "answered: " + label})
+	m.applyLayout()
+	m.updateViewport()
+
+	resp := backend.AskResponse{
+		SessionKey: ask.sessionKey,
+		RequestID:  ask.requestID,
+		RPCID:      ask.rpcID,
+		Kind:       ask.kind,
+	}
+	if ask.kind == "approval" {
+		resp.Choice = answer
+	} else {
+		resp.Answer = answer
+	}
+	return func() tea.Msg {
+		return askAnsweredMsg{err: b.RespondAsk(context.Background(), resp)}
+	}
+}
+
+// renderAskPanel draws the pending ask directly above the composer: the
+// question (and command/cwd for an approval), then its choices or the key
+// line that answers it.
+func (m *chatModel) renderAskPanel() string {
+	if m.ask == nil {
+		return ""
+	}
+	var lines []string
+	if m.ask.kind == "approval" {
+		what := "a command"
+		switch {
+		case m.ask.command != "":
+			what = "run " + m.ask.command
+		case m.ask.question != "":
+			what = m.ask.question
+		}
+		if m.ask.cwd != "" {
+			what += " in " + m.ask.cwd
+		}
+		lines = append(lines, m.wrapAskLine("Hermes asks: "+what+"?"))
+		if m.ask.description != "" {
+			lines = append(lines, m.wrapAskLine(m.ask.description))
+		}
+		keys := []string{"y allow once"}
+		if m.ask.offersSession() {
+			keys = append(keys, "s allow for session")
+		}
+		if m.ask.offersAlways() {
+			keys = append(keys, "a allow always")
+		}
+		keys = append(keys, "n deny")
+		lines = append(lines, helpStyle.Render(strings.Join(keys, " · ")))
+	} else {
+		question := m.ask.question
+		if question == "" {
+			question = "Hermes asks a question."
+		}
+		lines = append(lines, m.wrapAskLine(question))
+		if len(m.ask.choices) > 0 {
+			var b strings.Builder
+			for i, choice := range m.ask.choices {
+				if i > 0 {
+					b.WriteString("  ")
+				}
+				fmt.Fprintf(&b, "%d) %s", i+1, choice)
+			}
+			lines = append(lines, m.wrapAskLine(b.String()))
+		} else {
+			if m.ask.answer != "" {
+				lines = append(lines, "› "+m.ask.answer)
+			}
+			lines = append(lines, helpStyle.Render("type your answer, enter to send · esc to skip"))
+		}
+	}
+	panel := strings.Join(lines, "\n")
+	if m.width > 0 {
+		panel = navConfirmStyle.Width(m.width).Render(panel)
+	}
+	return panel
+}
+
+// wrapAskLine wraps one panel line to the chat width.
+func (m *chatModel) wrapAskLine(s string) string {
+	width := m.width
+	if width <= 0 {
+		return s
+	}
+	return wordWrap(s, width)
+}
+
+// askPanelHeight reports the rendered row count of the ask panel so
+// applyLayout can reserve space for it. 0 when no ask is pending.
+func (m *chatModel) askPanelHeight() int {
+	s := m.renderAskPanel()
+	if s == "" {
+		return 0
+	}
+	return lipgloss.Height(s)
 }
 
 func (m *chatModel) sendMessage(text string) tea.Cmd {
@@ -1775,6 +2079,7 @@ func (m chatModel) View() string {
 	toolStrip := m.renderToolActivity()
 	pending := m.renderPendingMessages()
 	navConfirm := m.renderNavConfirm()
+	askPanel := m.renderAskPanel()
 
 	// The View is assembled top→bottom in this region order:
 	//   header
@@ -1809,6 +2114,9 @@ func (m chatModel) View() string {
 		if navConfirm != "" {
 			parts = append(parts, navConfirm)
 		}
+		if askPanel != "" {
+			parts = append(parts, askPanel)
+		}
 		parts = append(parts, help)
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
@@ -1839,6 +2147,9 @@ func (m chatModel) View() string {
 	}
 	if navConfirm != "" {
 		parts = append(parts, navConfirm)
+	}
+	if askPanel != "" {
+		parts = append(parts, askPanel)
 	}
 	parts = append(parts, input, help)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)

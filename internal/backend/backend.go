@@ -347,6 +347,26 @@ type ExecBackend interface {
 	ExecResolve(ctx context.Context, id, decision string) (*protocol.ExecApprovalResolveResult, error)
 }
 
+// AskBackend exposes the gateway's questions to the client so the user can
+// answer them instead of the backend declining on their behalf.
+type AskBackend interface {
+	RespondAsk(ctx context.Context, resp AskResponse) error
+}
+
+// AskResponse is the user's answer to one gateway ask.
+type AskResponse struct {
+	SessionKey string
+	RequestID  string
+	// RPCID is the JSON-RPC id of the server→client request the ask came
+	// from, in its raw JSON form (the gateway uses strings like
+	// "srq-1a2b3c"; our own ids are numbers). The answer is written back
+	// with this id verbatim.
+	RPCID  string
+	Kind   string // "approval" | "clarify"
+	Choice string // approval: one of the payload's offered choices
+	Answer string // clarify: the user's answer ("" is a valid skip)
+}
+
 // CompactBackend exposes server-side context compaction behind
 // /compact. Local-agent backends without server-side compaction omit
 // this and the TUI shows a "not available" hint.

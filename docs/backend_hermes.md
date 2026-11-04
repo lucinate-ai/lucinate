@@ -68,12 +68,67 @@ captured from the live gateway (`testdata/events/`). The quirks worth knowing:
   translator derives one for the TUI's tool cards.
 - **`thinking.delta` is decorative** ("٩(๑❛ᴗ❛๑)۶ analyzing…"); real reasoning text arrives
   as `reasoning.available` (whole, not a delta) on non-reasoning models.
-- **Interactive asks** (`approval.request`, `clarify.request`, `sudo.request`,
-  `secret.request`) each carry a `request_id` and block the turn until answered via the
-  paired `<type>.respond` RPC. Phase 1 auto-declines (`approval.respond {choice:"deny"}` et
-  al) and splices a `System:` line into the streaming text — a chat *error* event would
-  finalise the run in the TUI while the server keeps streaming, which is why the notice rides
-  the assistant row instead (history rendering already strips `System:` lines).
+- **Asks are not events.** `approval`/`clarify`/`sudo`/`secret` arrive as server→client
+  JSON-RPC requests, not notifications, and only after the client advertises
+  `server_requests` — see the next section. An ask *timeout* notice still rides the
+  streaming text as a `System:` line, because a chat *error* event would finalise the run
+  in the TUI while the server keeps streaming (history rendering strips `System:` lines).
+
+## Interactive asks are server→client JSON-RPC requests
+
+A live run corrected the first cut of this section twice over. The gateway does **not**
+send `approval.request`/`clarify.request` notifications, and there is no
+`approval.respond` RPC. It sends JSON-RPC **requests** to the client —
+`{"jsonrpc":"2.0","id":7,"method":"approval","params":{…}}` — and only to a client that
+first advertised the capability:
+
+```
+→ client.capabilities {"server_requests": true}
+← {"server_requests": ["approval","clarify","sudo","secret", …]}
+```
+
+Without the advertisement the gateway withdraws the request immediately and tells the
+agent nobody could answer — the live symptom was a command refused with no question ever
+reaching the screen. The backend therefore calls `client.capabilities` once per
+connection, right after the handshake.
+
+The RPC layer (`internal/backend/hermes/rpc`) routes frames by shape: a frame with **both**
+an id and a method is an inbound request on `Requests()`; an id without a method is a
+response to one of our calls. The two id-spaces are independent, so the old code that
+treated every id as a response silently dropped every ask. Answers go back as the JSON-RPC
+**response frame** for that id (`Respond`/`RespondError`), not as a separate RPC call.
+
+Ids are kept as **raw JSON**, not `uint64`: the gateway ids its server→client requests with
+strings (`"srq-1a2b3c4d5e6f"`, `tui_gateway/server_requests.py`) while our own call ids are
+numbers. A numeric-only decoder makes `json.Unmarshal` fail on the whole frame, and the
+read loop used to skip it silently — which is exactly why the panel never appeared live.
+The raw id travels unchanged into the ask event (`rpcId`) and back out in the response; a
+non-numeric, non-string id on a response is logged and ignored.
+
+`approval` params carry `prompt_id` (older casts used `request_id`; both accepted,
+`prompt_id` wins), `command`, `description`, `choices` and sometimes `cwd`. The backend
+turns them into an `ask` agent event carrying `rpcId`, `requestId`, `kind`, `command`,
+`description`, `choices`; the TUI answers with the choice the user picked and the backend
+writes `{"choice": …}` for that rpc id. The gateway **forces a deny when the choice is not
+one of the offered `choices`**, so the panel maps its keys onto the payload's vocabulary —
+`y` → `once`/`allow-once`/`approve`, `s` → `session`, `a` → `always`, `n`/`esc` → `deny` —
+and the backend replaces anything outside the list with `deny`.
+
+`clarify` params carry `questions[]` (each `qid`, `question`, `choices`, `multi_select`).
+This client renders a single-question panel (the first question) and answers the rest
+`null`: the result is `{"answers": {qid: text|null}, "outcome": "submitted"|"cancelled"}`.
+
+`sudo` and `secret` are answered **`-32601` at once** (the documented fast-fail for a
+client without that handler), so the gateway settles them instead of waiting. They need
+masked input this client does not own.
+
+A `request.cancel` notification withdraws an open ask: the backend drops its pending entry
+(no late answer) and emits an `ask` event of kind `cancel`, which closes the panel.
+
+Every pending ask has an **`askTimeout`** (default 10 minutes, `Options.AskTimeout`). If
+nobody answers, the backend responds deny (approval) or cancelled (clarify) for the same
+rpc id and shows a timeout line in the transcript, so a turn can never hang unnoticed.
+Answering stops the timer; an answer that arrives after expiry is logged and dropped.
 
 ## Integration harness
 
