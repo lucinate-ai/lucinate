@@ -980,8 +980,12 @@ func (m roomsModel) transcriptLines() []string {
 		}
 		lines = append(lines, "")
 	}
+	pulls := m.peerPullAnnotations()
 	for _, ev := range m.compactedEvents() {
 		lines = append(lines, m.transcriptEventLines(ev, width)...)
+		if ann := pulls[roomEventKey(ev)]; ann != "" {
+			lines = append(lines, statusStyle.Render("  "+ann))
+		}
 	}
 	return lines
 }
@@ -1451,6 +1455,7 @@ func (m roomsModel) handleTranscriptCommand(text string) (roomsModel, tea.Cmd) {
 	case "/help", "/?":
 		m.notice = "room commands\n" +
 			"  /rooms, /back, /list — back to the room list\n" +
+			"  /rules — the discussion rules and budgets the gateway enforces\n" +
 			"  /mode [broadcast|moderator|round-robin] — who answers (m cycles them)\n" +
 			"  /moderator [@handle] — the member moderator mode sends to\n" +
 			"  /export [md|json|both] — write the transcript to the lucinate data dir\n" +
@@ -1468,6 +1473,12 @@ func (m roomsModel) handleTranscriptCommand(text string) (roomsModel, tea.Cmd) {
 			"typed text goes to the room; prefix \\\\ to send a line that starts with /\n" +
 			"an @handle in the message addresses that member and outranks the mode\n" +
 			"↑↓/PgUp/PgDn/wheel scroll · End jumps to the live tail · ctrl+u clears the draft"
+		return m, nil
+	case "/rules":
+		// The constitution and the budgets, quoted rather than paraphrased:
+		// the member prompt is the room's actual law (D3). The notice path
+		// caps it to the pane, so esc closes it before it means "back".
+		m.notice = roomRulesNotice()
 		return m, nil
 	case "/quit", "/exit":
 		return m, func() tea.Msg { return goBackFromRoomsMsg{} }
@@ -1687,16 +1698,22 @@ func (m roomsModel) inviteVisibleRows() int {
 
 func (m roomsModel) viewTranscript() string {
 	var b strings.Builder
-	title := m.openRoomID
-	if m.openRoom != nil {
-		// The roster line carries each member's model, so the room's header
-		// answers "who is on what" without a command.
-		title = fmt.Sprintf("%s — %s", m.openRoom.RoomID, m.rosterLine())
+	// The room's header line carries the roster, the budget the gateway
+	// enforces and (below) what the routing mode does to the gateway's turn
+	// selection. The budget is derived from the log, never counted locally.
+	title := m.transcriptTitle()
+	inline, budgetBelow := m.transcriptBudget()
+	titleLine := headerStyle.Render(title)
+	if inline != "" {
+		titleLine += " " + statusStyle.Render("· "+inline)
 	}
-	// The routing mode shares the title line: it is context for the
-	// transcript below, not another block of chrome, and a transcript pane
-	// has no rows to spare.
-	b.WriteString(headerStyle.Render(title) + " " + statusStyle.Render("· "+m.routingNote()) + "\n")
+	b.WriteString(titleLine + "\n")
+	if budgetBelow != "" {
+		b.WriteString(statusStyle.Render(budgetBelow) + "\n")
+	}
+	if m.showRoutingNote() {
+		b.WriteString(statusStyle.Render(wordWrap(m.routingNote(), m.viewWrapWidth())) + "\n")
+	}
 	if banner := m.blockedRow(); banner != "" {
 		b.WriteString(banner + "\n")
 	}
@@ -1781,6 +1798,56 @@ func (m roomsModel) viewTranscript() string {
 	return b.String()
 }
 
+// transcriptTitle is the room's header line minus the budget: the id and the
+// roster with each member's model, so the room answers "who is on what"
+// without a command.
+func (m roomsModel) transcriptTitle() string {
+	if m.openRoom != nil {
+		return fmt.Sprintf("%s — %s", m.openRoom.RoomID, m.rosterLine())
+	}
+	return m.openRoomID
+}
+
+// transcriptBudget places the discussion budget on the header line. It
+// degrades to `2/3 · 7/10` when the title leaves no room for the words, and
+// falls back to a line of its own when even the short form cannot share the
+// title's row — the budget is never silently dropped.
+func (m roomsModel) transcriptBudget() (inline, below string) {
+	budget := rooms.DiscussionBudgetFor(m.page.Events)
+	if !budget.HasDiscussion {
+		return "", ""
+	}
+	avail := m.viewWrapWidth() - displayWidth(m.transcriptTitle()) - displayWidth(" · ")
+	if label := budget.HeaderText(avail); label != "" {
+		return label, ""
+	}
+	return "", budget.HeaderText(m.viewWrapWidth())
+}
+
+// showRoutingNote keeps the mode explanation off a terminal too short to
+// afford it: the transcript, composer and hint are the room's working
+// surface, and at 24 rows the header has room for all three.
+func (m roomsModel) showRoutingNote() bool {
+	h := m.height
+	if h <= 0 {
+		h = 24
+	}
+	return h >= 24
+}
+
+// headerRows is the transcript header's real height, so the transcript window
+// can account for a wrapped mode line or a budget on its own row.
+func (m roomsModel) headerRows() int {
+	rows := 1
+	if _, below := m.transcriptBudget(); below != "" {
+		rows++
+	}
+	if m.showRoutingNote() {
+		rows += lipgloss.Height(wordWrap(m.routingNote(), m.viewWrapWidth()))
+	}
+	return rows
+}
+
 // transcriptRows is how many transcript lines fit above the composer.
 // The fixed chrome is: header (1), connection banner (1), blank (1), the
 // hidden-lines notice (1), the composer block (3) and the hint block (2)
@@ -1791,7 +1858,7 @@ func (m roomsModel) transcriptRows() int {
 	if h <= 0 {
 		h = 24
 	}
-	chrome := 10
+	chrome := 9 + m.headerRows()
 	// The hint is wrapped to the view width, so a narrow terminal needs
 	// more rows for it than the single-line budget assumed.
 	if n := len(strings.Split(wordWrap(m.hint(), m.viewWrapWidth()), "\n")); n > 1 {

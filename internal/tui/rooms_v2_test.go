@@ -153,7 +153,7 @@ func TestRoomsV2_TranscriptHeaderNamesTheRouting(t *testing.T) {
 	m := v2Model(t)
 	m.prefs.Set("sztab", rooms.RoomPrefs{Mode: string(rooms.RouteModerator), Moderator: "kowal"})
 	out := ansi.Strip(m.View())
-	if !strings.Contains(out, "moderator: @kowal") {
+	if !strings.Contains(out, "un-mentioned messages go to @kowal") {
 		t.Errorf("transcript header should name the moderator:\n%s", out)
 	}
 	m.prefs.Set("sztab", rooms.RoomPrefs{Mode: string(rooms.RouteRoundRobin)})

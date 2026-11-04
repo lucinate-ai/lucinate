@@ -402,6 +402,11 @@ func (m roomsModel) modelPickerView() string {
 	// narrow terminal, so its real height is part of the budget.
 	hint := wordWrap(modelPickerHint, m.viewWrapWidth())
 	budget := m.height - 14 - lipgloss.Height(hint)
+	// The transcript header grew with the discussion budget and the mode
+	// line; the picker replaces the transcript but not the chrome above it.
+	if extra := m.headerRows() - 1; extra > 0 {
+		budget -= extra
+	}
 	if budget < 3 {
 		budget = 3
 	}

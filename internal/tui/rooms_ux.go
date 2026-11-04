@@ -538,20 +538,26 @@ func (m roomsModel) loadPrefs() tea.Cmd {
 
 // routingNote is what the transcript header says about routing, so a room in
 // round-robin never looks like a room where everyone is ignoring you.
+//
+// The wording describes the effect on the gateway's turn selection (D5), not
+// an intention: broadcast leaves the text untouched, moderator adds one
+// mention, round-robin adds the next member's mention. None of them can stop
+// the server from running the rounds a member's own mentions request, so the
+// later-round sentence is part of every mode.
 func (m roomsModel) routingNote() string {
 	p := m.roomPrefs()
 	note := ""
 	switch p.RoutingMode() {
 	case rooms.RouteModerator:
 		if strings.TrimSpace(p.Moderator) == "" {
-			note = "moderator: first member (set one with /moderator <handle>)"
+			note = "moderator: un-mentioned messages go to the first member (set one with /moderator <handle>); later rounds follow peer mentions"
 		} else {
-			note = "moderator: @" + p.Moderator
+			note = "moderator: un-mentioned messages go to @" + p.Moderator + "; later rounds follow peer mentions"
 		}
 	case rooms.RouteRoundRobin:
-		note = fmt.Sprintf("round-robin: next member #%d", p.RoundRobinIndex%max(1, len(m.roster()))+1)
+		note = "round-robin: the client addresses the next member; later rounds still follow peer mentions and the gateway's rotation"
 	default:
-		note = "broadcast: the whole roster answers"
+		note = "broadcast: everyone on the roster answers your message; later rounds happen only when a member cites a peer"
 	}
 	if c := p.Compaction; c != nil {
 		note += fmt.Sprintf(" · brief covers seq 1-%d (source: %s)", c.ThroughSeq, compactionSource(c))
@@ -587,6 +593,27 @@ func (m roomsModel) noticeBlock() string {
 // full text, so a taller terminal (or a test) still sees every line.
 func (m roomsModel) cappedNotice() string {
 	return m.fitNotice(m.notice)
+}
+
+// roomRulesNotice is `/rules`: the constitution every member receives and
+// the budgets the gateway enforces around it. It quotes docs/room-rules.md
+// rather than paraphrasing, because the member prompt is the room's actual
+// law and two wordings would drift.
+func roomRulesNotice() string {
+	// Compact on purpose: at 24 rows the room chrome leaves ~7 notice rows,
+	// so each rule must fit one row and the budget must stay visible. The
+	// full member prompt (with its connectives) is quoted in docs/room-rules.md;
+	// the operative words here are the same ones the members receive.
+	return "room rules — what the gateway enforces\n" +
+		"  1. one message per turn, only when you have something new\n" +
+		"  2. nothing new to add? reply exactly \"(pass)\"\n" +
+		"  3. mention a teammate by handle to pull them into the next round\n" +
+		"  4. never reveal private conversations — replies are published verbatim\n" +
+		"budget: 2–6 members · 3 rounds · 10 member messages\n" +
+		"  round 0 is your message: @mention picks who answers; no mention means everyone\n" +
+		"  rounds 1 and 2 are opt-in: only a peer's citation pulls a member in\n" +
+		"  a round where nobody speaks ends the discussion — settled, silent round\n" +
+		"  the gateway stops at 3 rounds or 10 member messages and says which"
 }
 
 // noticeLineCount is what the transcript layout reserves for the notice.
@@ -798,7 +825,7 @@ func (m roomsModel) cmdRouting(args []string) (roomsModel, tea.Cmd, bool) {
 	m.composer = ""
 	m.err = nil
 	if len(args) == 0 {
-		m.notice = fmt.Sprintf("routing: %s\nrooms, in order:\n- /mode broadcast — every member answers (default)\n- /mode moderator [@handle] — one member answers\n- /mode round-robin — members take turns\nan explicit @handle in a message always wins over the mode",
+		m.notice = fmt.Sprintf("routing: %s\nrooms, in order:\n- /mode broadcast — the text goes in untouched; everyone on the roster answers\n- /mode moderator [@handle] — the client adds one member's mention to an un-addressed message\n- /mode round-robin — the client addresses the next member\nan explicit @handle in a message always wins over the mode\nlater rounds still follow peer mentions and the gateway's rotation, whatever the mode",
 			m.routingNote())
 		return m, nil, true
 	}
@@ -1117,6 +1144,24 @@ func (m roomsModel) formatEvent(ev rooms.Event) string {
 		body = highlightQuery(body, m.findQuery, roomsMatchStyle)
 	}
 	return formatRoomsEventStyled(ev, body, m.memberStyle(eventHandle(ev)))
+}
+
+// peerPullAnnotations maps the citing event's key to the line the transcript
+// shows under it: `@a pulled @b into round 2`. The pull is derived from the
+// room log (D1) — the gateway's own scheduling is the authority — and a
+// citation that pulls nobody produces no entry, so no annotation is rendered.
+func (m roomsModel) peerPullAnnotations() map[string]string {
+	pulls := rooms.PeerPulls(m.page.Events, m.roster())
+	if len(pulls) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(pulls))
+	for _, p := range pulls {
+		if label := p.Label(); label != "" {
+			out[roomEventKey(p.Event)] = label
+		}
+	}
+	return out
 }
 
 // routeOutgoing applies the room's routing mode to a message the user typed,
