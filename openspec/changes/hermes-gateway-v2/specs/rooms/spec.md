@@ -116,6 +116,23 @@ hung room.
 - **THEN** the finished text is rendered in the transcript
 - **AND** the missing deltas are not reported as an error
 
+#### Scenario: A reply is rendered as it is written
+- **GIVEN** a member whose turn has started and whose first delta is `Pracuje nad tym`
+- **WHEN** the transcript is rendered
+- **THEN** the row shows `@matt` and `Pracuje nad tym`
+- **AND** it carries a braille spinner glyph
+
+#### Scenario: An empty answer removes the placeholder
+- **GIVEN** a member whose `turn.started` was followed by `turn.settled` with no text
+- **WHEN** the transcript is rendered
+- **THEN** no row for that member is shown
+
+#### Scenario: The finished message replaces the live row
+- **GIVEN** a member whose reply was streaming
+- **WHEN** the final `message.member` event arrives
+- **THEN** the streaming row disappears
+- **AND** the finished text is rendered in the transcript
+
 ### Requirement: Member model follows the profile
 
 A room member SHALL run the model its Hermes profile is configured with. The system SHALL NOT
@@ -137,6 +154,45 @@ profile.
 - **GIVEN** a room whose member `@matt` runs the profile model `deepseek/deepseek-v4.1-flash`
 - **WHEN** the roster line renders
 - **THEN** it shows that model
+
+#### Scenario: A member's model is switched for the session
+- **GIVEN** a gateway that advertises the member-model method
+- **WHEN** the user runs `/model @matt gpt-5-mini`
+- **THEN** the gateway is asked to run that member's turns with `gpt-5-mini`
+- **AND** the seat it reports is recorded: which session the pick landed on, and whether that
+  session was minted for the pick
+
+#### Scenario: Nothing about the model is persisted
+- **GIVEN** a successful model switch
+- **WHEN** lucinate's stored room preferences are read
+- **THEN** they contain no model
+
+#### Scenario: A gateway without the method is told so
+- **GIVEN** a gateway whose capabilities do not list the member-model method
+- **WHEN** the user confirms a model in the picker
+- **THEN** no request is sent
+- **AND** the view states that the gateway cannot switch a member's model
+- **AND** it names the missing method and the alternative
+
+#### Scenario: A rejected model rolls back
+- **GIVEN** a gateway that refuses the requested model
+- **WHEN** the switch is attempted
+- **THEN** the gateway's message is shown
+- **AND** the member's previous model stays in place
+- **AND** the roster does not display the refused model
+
+#### Scenario: A reconnect drops the local overlay
+- **GIVEN** a switch recorded for the session
+- **WHEN** the socket is re-established
+- **THEN** the local overlay is discarded
+- **AND** what the view shows next is the gateway's roster
+- **AND** the seat itself is unaffected, because it lives on the member's room
+
+#### Scenario: The picker stays inside the terminal
+- **GIVEN** a catalogue longer than the terminal
+- **WHEN** the picker is open
+- **THEN** the list is windowed with the hidden rows counted
+- **AND** the filter line and the key hints stay on screen
 
 ### Requirement: Room transcript command surface
 

@@ -90,3 +90,13 @@ sub-interfaces. It SHALL NOT implement `ExecBackend`, `ThinkingBackend`, or `Cro
 #### Scenario: Out-of-phase commands are rejected with a message
 - **WHEN** the user invokes `/think`, `/crons`, or `!!` on a Hermes connection
 - **THEN** a "not available on this connection" system message is rendered
+
+#### Scenario: Agent management is disabled
+- **GIVEN** a connected Hermes backend
+- **WHEN** the TUI reads `Backend.Capabilities()`
+- **THEN** `AgentManagement` is `false` and the "new agent" and "delete agent" affordances are hidden
+- **AND** `CreateAgent` and `DeleteAgent` return clear errors if called regardless
+
+#### Scenario: Auth recovery uses the API-key modal for the gateway token
+- **WHEN** capabilities are reported
+- **THEN** `AuthRecovery` is `AuthRecoveryAPIKey`, driving the auth-recovery modal relabelled as the "gateway token" prompt
