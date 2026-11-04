@@ -32,6 +32,20 @@ var claimMarkers = []string{
 // one, but "plik X.md" in the same breath as a marker is the claim shape.
 var claimFilePattern = regexp.MustCompile(`(?i)\.(md|go|json|html)\b`)
 
+// claimNegations are the phrases a reply uses to deny writing. They are
+// checked first: "nie zapisałem pliku report.md" mentions a marker and a path,
+// but it is a denial, not a claim.
+var claimNegations = []string{
+	"nie zapisa", "nie utworz", "nie wdroż", "bez zapisu", "nic nie zapisa",
+	"not saved", "no file written", "didn't write",
+}
+
+// claimDeliveries are the first-person verbs that name a delivery even
+// without a file extension ("zapisałem raport").
+var claimDeliveries = []string{
+	"zapisałem", "utworzyłem", "wdrożyłem", "wygenerowałem",
+}
+
 // ReplyEvidence is the verdict on one member reply, plus the one-line reason
 // the transcript shows next to it.
 type ReplyEvidence struct {
@@ -87,12 +101,36 @@ func VerifyReply(dir, owner, text string) ReplyEvidence {
 }
 
 // claimsWrite reports whether a receipt-less reply says it wrote something.
+//
+// A claim needs both halves: a write marker AND a target — a deliverable file
+// extension or an explicit first-person delivery. A bare path is a reference
+// ("the branch is at docs/x.md"), and a denial ("nie zapisałem") is not a
+// claim at all. Keeping the row off for those is the point: an evidence column
+// that accuses every mention of a file teaches readers to ignore it.
 func claimsWrite(text string) bool {
 	lower := strings.ToLower(text)
+	for _, neg := range claimNegations {
+		if strings.Contains(lower, neg) {
+			return false
+		}
+	}
+	marked := false
 	for _, marker := range claimMarkers {
 		if strings.Contains(lower, marker) {
+			marked = true
+			break
+		}
+	}
+	if !marked {
+		return false
+	}
+	if claimFilePattern.MatchString(text) {
+		return true
+	}
+	for _, verb := range claimDeliveries {
+		if strings.Contains(lower, verb) {
 			return true
 		}
 	}
-	return claimFilePattern.MatchString(text)
+	return false
 }

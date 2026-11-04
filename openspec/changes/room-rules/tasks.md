@@ -45,6 +45,12 @@
 ## 5. Verification
 
 - [x] 5.1 `go vet ./...`, `gofmt -l .`, `go test ./...`.
-- [ ] 5.2 Live pass against `hermes dashboard` v0.22.5: two profiles, broadcast round, one peer
+- [x] 5.2 Live pass against `hermes dashboard` v0.22.5: two profiles, broadcast round, one peer
       mention, one stop; header shows rounds/messages and the gateway's end reason.
+      Run 2026-11-04 08:27–08:35, room `alojz-default-082746` (alojz + default): broadcast round
+      `round 1/3 · 2/10 messages` with both members answering; `@alojz` cited `@default` and the
+      transcript annotated `@alojz pulled @default into the next round` with `@default` answering
+      next; `/stop` reported `cancelled 1 turn(s)` and `przerwano: member turn cancelled`; a
+      pass-only round ended the discussion and the header read `1/3 · 0/10 · settled — waiting for
+      you`. Full transcript: `docs/handoff/ROOMS-HANDOFF.md`, section "Live pass 5.2".
 - [x] 5.3 `docs/rooms.md` and `README.md` point at `docs/room-rules.md`.

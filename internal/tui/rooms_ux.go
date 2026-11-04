@@ -1127,10 +1127,12 @@ var (
 			Italic(true)
 )
 
-// eventHandle is the handle a transcript row's colour is keyed by.
-func eventHandle(ev rooms.Event) string {
-	if ev.Actor.Profile != "" {
-		return rooms.HandleFor(ev.Actor.Profile)
+// eventHandle is the handle a transcript row's colour is keyed by. A turn row
+// names its member from the payload resolved against the open room's roster;
+// a row the roster cannot place keeps the actor's label.
+func eventHandle(ev rooms.Event, roster []rooms.Member) string {
+	if h := rooms.MemberHandle(ev, roster); h != "" {
+		return h
 	}
 	return rooms.HandleFor(ev.Speaker())
 }
@@ -1155,7 +1157,7 @@ func (m roomsModel) formatEventRow(ev rooms.Event) string {
 	if m.findQuery != "" && body != "" {
 		body = highlightQuery(body, m.findQuery, roomsMatchStyle)
 	}
-	return formatRoomsEventStyled(ev, body, m.memberStyle(eventHandle(ev)))
+	return formatRoomsEventStyled(ev, body, m.memberStyle(eventHandle(ev, m.roster())), m.roster())
 }
 
 // evidenceLine is the one dim line a checked member reply gets: ✓ when a

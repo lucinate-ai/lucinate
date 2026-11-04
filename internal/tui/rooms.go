@@ -787,7 +787,7 @@ func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
 					if ev.Kind != "message.member" {
 						continue
 					}
-					m.evidence[roomEventKey(ev)] = rooms.VerifyReply(dir, eventHandle(ev), ev.Text())
+					m.evidence[roomEventKey(ev)] = rooms.VerifyReply(dir, eventHandle(ev, m.roster()), ev.Text())
 				}
 			}
 			if m.scroll > 0 {
@@ -2293,15 +2293,20 @@ func rosterLabel(room rooms.Room) string {
 }
 
 // formatRoomsEvent renders one transcript row the same way the CLI does,
-// so the two surfaces read identically.
+// so the two surfaces read identically. With no roster it falls back to the
+// actor label, which is what the plain formatting tests rely on.
 func formatRoomsEvent(ev rooms.Event) string {
-	return formatRoomsEventStyled(ev, ev.Text(), assistantPrefixStyle)
+	return formatRoomsEventStyled(ev, ev.Text(), assistantPrefixStyle, nil)
 }
 
 // formatRoomsEventStyled renders one transcript row with a caller-supplied
 // body (so /find can highlight inside the text) and the member's colour on
 // the label. formatRoomsEvent is the plain wrapper the CLI-matching tests use.
-func formatRoomsEventStyled(ev rooms.Event, body string, memberStyle lipgloss.Style) string {
+//
+// roster is the open room's roster: the turn.* cases name the member from the
+// payload rather than the gateway actor, and fall back to the actor when the
+// roster cannot place it.
+func formatRoomsEventStyled(ev rooms.Event, body string, memberStyle lipgloss.Style, roster []rooms.Member) string {
 	stamp := time.Unix(int64(ev.CreatedAt), 0).Format("15:04:05")
 	switch ev.Kind {
 	case "message.user":
@@ -2309,18 +2314,18 @@ func formatRoomsEventStyled(ev rooms.Event, body string, memberStyle lipgloss.St
 	case "message.member":
 		return fmt.Sprintf("%s  %s %s", stamp, memberStyle.Render("@"+ev.Speaker()+":"), body)
 	case "turn.cancelled":
-		return cancelledTurnRow(ev)
+		return cancelledTurnRow(ev, roster)
 	case "turn.started":
-		return fmt.Sprintf("%s  %s", stamp, toolRunningStyle.Render(ev.Speaker()+" is thinking…"))
+		return fmt.Sprintf("%s  %s", stamp, toolRunningStyle.Render(turnSpeaker(ev, roster)+" is thinking…"))
 	case "turn.settled":
 		if passed, _ := ev.Payload["passed"].(bool); passed {
-			return fmt.Sprintf("%s  %s", stamp, toolSuccessStyle.Render(ev.Speaker()+" passed"))
+			return fmt.Sprintf("%s  %s", stamp, toolSuccessStyle.Render(turnSpeaker(ev, roster)+" passed"))
 		}
-		return fmt.Sprintf("%s  %s", stamp, toolSuccessStyle.Render(ev.Speaker()+" finished"))
+		return fmt.Sprintf("%s  %s", stamp, toolSuccessStyle.Render(turnSpeaker(ev, roster)+" finished"))
 	case "turn.failed":
-		return fmt.Sprintf("%s  %s", stamp, errorStyle.Render(fmt.Sprintf("%s failed: %v", ev.Speaker(), ev.Payload["error"])))
+		return fmt.Sprintf("%s  %s", stamp, errorStyle.Render(fmt.Sprintf("%s failed: %v", turnSpeaker(ev, roster), ev.Payload["error"])))
 	case "turn.deferred":
-		return fmt.Sprintf("%s  %s", stamp, toolRunningStyle.Render(fmt.Sprintf("%s deferred: %v", ev.Speaker(), ev.Payload["reason"])))
+		return fmt.Sprintf("%s  %s", stamp, toolRunningStyle.Render(fmt.Sprintf("%s deferred: %v", turnSpeaker(ev, roster), ev.Payload["reason"])))
 	case "room.activity":
 		return fmt.Sprintf("%s  %s", stamp, statusStyle.Render(fmt.Sprintf("activity: %v", ev.Payload["status"])))
 	case "member.unavailable":
@@ -2329,16 +2334,26 @@ func formatRoomsEventStyled(ev rooms.Event, body string, memberStyle lipgloss.St
 	return fmt.Sprintf("%s  %s", stamp, statusStyle.Render(ev.Kind+" "+ev.Speaker()))
 }
 
+// turnSpeaker labels a turn row: the member the payload names, resolved on the
+// roster, else the actor's own label when the roster cannot place it. A
+// resolved member is addressed as @handle, matching the message rows.
+func turnSpeaker(ev rooms.Event, roster []rooms.Member) string {
+	if h := rooms.MemberHandle(ev, roster); h != "" {
+		return "@" + h
+	}
+	return ev.Speaker()
+}
+
 // cancelledTurnRow renders a turn the gateway cancelled. A superseded turn is
 // the common case: a newer user message replaced the one in flight, which
 // otherwise looks like a member that silently stopped. It sits in the same
 // dim gutter as the evidence row so it reads as an annotation, not a reply.
-func cancelledTurnRow(ev rooms.Event) string {
+func cancelledTurnRow(ev rooms.Event, roster []rooms.Member) string {
 	reason, _ := ev.Payload["reason"].(string)
 	if reason == "superseded_by_newer_user_event" {
 		reason = "nowsza wiadomość"
 	}
-	handle := eventHandle(ev)
+	handle := eventHandle(ev, roster)
 	if reason == "" {
 		return statusStyle.Render(fmt.Sprintf("  @%s — przerwano", handle))
 	}

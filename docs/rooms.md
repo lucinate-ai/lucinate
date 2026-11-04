@@ -115,6 +115,10 @@ gateway reports usage on member replies as well. `session.usage` still reports z
 credit lines) on v0.22.5, so `/cost` reads the events, not the RPC. A gateway that reports no
 tokens produces a "nothing reported yet" notice rather than a table of zeroes.
 
+## Who a row names, and when a claim is a claim
+
+The actor on a `turn.*` event is the gateway, so the transcript resolves the member from the payload instead: `rooms.MemberHandle(event, roster)` matches `member_id` against the roster first, falls back to `member_index`, and returns `""` when the roster cannot place it — in which case the row keeps the actor's own label rather than inventing a handle. A cancelled turn therefore reads `@alojz — przerwano: member turn cancelled`, not `@install:<hash>`. The CLI's `formatRoomEvent` takes the same roster (fetched once from `groups.list`), so `lucinate rooms log` and the TUI agree. Separately, a receipt-less reply is marked as a write claim only when it both uses a write marker and names a deliverable (a `.md/.go/.json/.html` path or an explicit `zapisałem`/`utworzyłem`/`wdrożyłem`/`wygenerowałem`); a denial (`nie zapisałem`) or a path quoted in passing is discussion, and gets no evidence row. `HANDOFF` receipts keep their verified/failed/duplicate verdicts unchanged.
+
 ## Testing
 
 `internal/testgateway` speaks protocol 2 over a real WebSocket (approvals, retries, activity,

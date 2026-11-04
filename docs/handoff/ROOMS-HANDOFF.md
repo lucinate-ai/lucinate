@@ -124,18 +124,45 @@ Run against `hermes dashboard` v0.22.5 on `http://127.0.0.1:9119`, Hermes connec
 
 ## Open work (in priority order)
 
-**Blocking on the owner: the four slices above are uncommitted.** Nothing is staged; the tree also
-carries a `.gitignore` line for `.commandcode/`. Decide commit-or-not before touching 4.x.
+**The four slices are committed and pushed** (`c2c91c6`, `9e534c8` on
+`feat/rooms-bot-mode`, tree clean but for one untracked file). The earlier note that they
+were uncommitted is stale.
 
-1. `openspec/changes/room-rules/tasks.md` 4.1–4.2 — the `peer discussion` preset flag, injected
-   into the room's first message as an *instruction* (never a client-side block), shown by
-   `lucinate rooms presets`.
-2. 5.1–5.3 — re-run the suite, repeat the live pass after 4.x, and point `docs/rooms.md` +
-   `README.md` at `docs/room-rules.md`.
+1. `openspec/changes/room-rules/tasks.md` — every task is done, including the live pass (see
+   "Live pass 5.2" below).
+2. `openspec/changes/rooms-truthful-rows/` — the two defects the live pass found (below). Proposed,
+   not implemented.
 3. `openspec/changes/hermes-gateway-v2/tasks.md` 6.5 — archive that change once #205 merges
    (`openspec archive hermes-gateway-v2`; the CLI is not installed on this box, `openspec: command
    not found` — install it or run it where it exists).
 4. Upstream: a maintainer of `lucinate-ai/lucinate` must approve the CI run, then merge #205.
+
+## Live pass 5.2 (2026-11-04 08:27–08:35)
+
+Room `alojz-default-082746` (alojz + default), built binary `v1.25.0-25-g9e534c8`, gateway
+`hermes dashboard` v0.22.5 on 127.0.0.1:9119. What the screen showed, quoted:
+
+- First message carried the orientation, the handoff contract, the talk contract and
+  `brief: …/.rooms/alojz-default-082746/brief.md sha=45ff980fc96c` — the brief file was 5938 B on
+  disk, the digest matched (slices 1 and 4 are working live).
+- Broadcast round: `round 1/3 · 2/10 messages`, `@Alojz` and `@Default` both answered, then
+  `all members settled · 08:28`.
+- Mention + peer pull: `you → @alojz zapytaj @default …` produced one answer (mention routing),
+  `@alojz` cited `@default`, the transcript annotated `@alojz pulled @default into the next round`
+  and `@default` answered.
+- Stop: `/stop` → `room.stop_requested`, `cancelled 1 turn(s)`, `przerwano: member turn cancelled`.
+- End reason: a pass-only round produced `1/3 · 0/10 · settled — waiting for you` in the header —
+  the gateway's own end reason, in the degraded short form because of the pane width.
+
+Two defects the pass exposed (now `openspec/changes/rooms-truthful-rows/`):
+
+1. Gateway-owned rows name the gateway: `install:6361e5ff3c924dcd8c742d702c4921da finished` after
+   every reply, and `@install:6361e5ff… — przerwano: …` for the cancelled turn. The payload carries
+   `member_id: "m1"` / `member_index: 0` and the roster knows `m1 = alojz`, so the name was
+   available and dropped.
+2. `⚠ deklaracja zapisu bez potwierdzenia — brak HANDOFF` appeared under a reply that only quoted
+   `docs/rooms-live-check.md`. `claimsWrite` ORs a file extension into the claim test, so any
+   mention of a path is read as a write claim.
 
 ## Environment, if you want to reproduce in five minutes
 

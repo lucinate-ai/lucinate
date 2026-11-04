@@ -610,6 +610,18 @@ func roomsLog(ctx context.Context, args []string, out io.Writer) error {
 	if follow && timeout > 0 {
 		deadline = time.Now().Add(timeout)
 	}
+	// The roster resolves a turn event's member id into the handle the room
+	// shows. It is fetched once — the roster is frozen for a room's lifetime —
+	// and a failure only loses the label, never the transcript.
+	var roster []rooms.Member
+	if list, err := client.List(ctx, true); err == nil {
+		for _, r := range list {
+			if r.RoomID == roomID {
+				roster = r.Members
+				break
+			}
+		}
+	}
 	render := func(page rooms.LogPage) error {
 		for _, ev := range page.Events {
 			if asJSON {
@@ -618,7 +630,7 @@ func roomsLog(ctx context.Context, args []string, out io.Writer) error {
 				}
 				continue
 			}
-			fmt.Fprintln(out, formatRoomEvent(ev))
+			fmt.Fprintln(out, formatRoomEvent(ev, roster))
 		}
 		return nil
 	}
@@ -1042,10 +1054,17 @@ func savePreset(p rooms.Preset) error {
 	return rooms.SavePresets(path, store)
 }
 
-// formatRoomEvent renders one transcript row for the terminal.
-func formatRoomEvent(ev rooms.Event) string {
+// formatRoomEvent renders one transcript row for the terminal. roster is the
+// room's roster, used to name the member a turn event refers to instead of the
+// gateway actor; nil keeps the actor's own label.
+func formatRoomEvent(ev rooms.Event, roster []rooms.Member) string {
 	stamp := time.Unix(int64(ev.CreatedAt), 0).Format("15:04:05")
 	speaker := ev.Speaker()
+	if strings.HasPrefix(ev.Kind, "turn.") {
+		if h := rooms.MemberHandle(ev, roster); h != "" {
+			speaker = h
+		}
+	}
 	switch ev.Kind {
 	case "message.user":
 		return fmt.Sprintf("%s  you → %s", stamp, ev.Text())
@@ -1063,6 +1082,12 @@ func formatRoomEvent(ev rooms.Event) string {
 		return fmt.Sprintf("%s  ! %s failed: %v", stamp, speaker, ev.Payload["error"])
 	case "turn.deferred":
 		return fmt.Sprintf("%s  · %s deferred: %v", stamp, speaker, ev.Payload["reason"])
+	case "turn.cancelled":
+		reason, _ := ev.Payload["reason"].(string)
+		if reason == "" {
+			return fmt.Sprintf("%s  · @%s — przerwano", stamp, speaker)
+		}
+		return fmt.Sprintf("%s  · @%s — przerwano: %s", stamp, speaker, reason)
 	case "room.activity":
 		return fmt.Sprintf("%s  · activity: %v", stamp, ev.Payload["status"])
 	case "member.unavailable":

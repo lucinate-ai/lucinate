@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/lucinate-ai/lucinate/internal/rooms"
 )
 
 // Go's flag package stops parsing at the first non-flag argument, so
@@ -80,5 +82,29 @@ func TestReorderFlagsFirst(t *testing.T) {
 				t.Errorf("positionals = %v, want %v", got, tc.wantPos)
 			}
 		})
+	}
+}
+
+// A turn row names the roster member the payload refers to, and falls back to
+// the actor only when there is no roster to place it.
+func TestFormatRoomEvent_NamesTurnMember(t *testing.T) {
+	ev := rooms.Event{
+		Kind:    "turn.settled",
+		Actor:   rooms.Actor{Kind: "gateway", ID: "install:abc"},
+		Payload: map[string]any{"member_id": "m1", "member_index": float64(0)},
+	}
+	roster := rooms.RosterFor([]string{"alojz"})
+
+	got := formatRoomEvent(ev, roster)
+	if !strings.Contains(got, "alojz finished") {
+		t.Errorf("formatRoomEvent = %q, want alojz finished", got)
+	}
+	if strings.Contains(got, "install:") {
+		t.Errorf("formatRoomEvent named the gateway: %q", got)
+	}
+
+	fallback := formatRoomEvent(ev, nil)
+	if !strings.Contains(fallback, "install:abc finished") {
+		t.Errorf("formatRoomEvent(nil roster) = %q, want the actor fallback", fallback)
 	}
 }

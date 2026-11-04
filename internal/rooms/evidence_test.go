@@ -108,3 +108,30 @@ func TestVerifyReply_DuplicateOfAnotherOwnersDoneArtifact(t *testing.T) {
 		t.Errorf("Detail = %q", ev.Detail)
 	}
 }
+
+// A claim needs a marker AND a target. A path quoted in passing is a
+// reference, a denial is not a claim, and an opinion names neither.
+func TestVerifyReply_ClaimNeedsAMarkerAndATarget(t *testing.T) {
+	// The exact reply from the live pass: it names a path but says nothing
+	// about writing it, and it must not raise the ⚠ row.
+	const readOnly = "… widzę ją na head 9e534c81ba1a z jednym nieśledzonym plikiem docs/rooms-live-check.md."
+
+	cases := []struct {
+		name string
+		text string
+		want EvidenceStatus
+	}{
+		{"path quoted in passing", readOnly, EvidenceNone},
+		{"first-person delivery and a path", "zapisałem raport w report.md", EvidenceClaimed},
+		{"denial", "nie zapisałem pliku report.md", EvidenceNone},
+		{"opinion with no marker and no path", "uważam, że to dobry kierunek", EvidenceNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev := VerifyReply(t.TempDir(), "a", tc.text)
+			if ev.Status != tc.want {
+				t.Fatalf("Status = %q, want %q (%s)", ev.Status, tc.want, ev.Detail)
+			}
+		})
+	}
+}
