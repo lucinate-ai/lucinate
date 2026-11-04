@@ -302,7 +302,31 @@ func (c *Client) SendOpening(ctx context.Context, roomID, text, threadID string,
 			return c.Send(ctx, roomID, text, threadID)
 		}
 	}
-	return c.Send(ctx, roomID, orient.Block()+"\n"+text, threadID)
+	block := orient.Block()
+	block += briefPointer(orient)
+	return c.Send(ctx, roomID, block+"\n"+text, threadID)
+}
+
+// briefPointer writes the project brief into the room's shared directory and
+// returns the one-line pointer the members get in the first message. Both
+// halves are silent on failure: a brief that could not be produced must not
+// block the room's first turn.
+func briefPointer(orient Orientation) string {
+	if strings.TrimSpace(orient.Path) == "" || strings.TrimSpace(orient.RoomDir) == "" {
+		return ""
+	}
+	brief, err := BuildBrief(orient.Path)
+	if err != nil {
+		return ""
+	}
+	path, digest, err := WriteBrief(orient.RoomDir, brief)
+	if err != nil {
+		return ""
+	}
+	// The brief tells members to check work.jsonl before working; make the
+	// file real. A failure here must not block the room's first turn.
+	_ = EnsureLedger(orient.RoomDir)
+	return fmt.Sprintf("brief: %s sha=%s\nPrzeczytaj brief przed odpowiedzią; nie odkrywaj projektu od zera.\n", path, digest)
 }
 
 // Log returns the room transcript delta after sinceSeq. Pass 0 to read

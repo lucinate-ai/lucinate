@@ -183,6 +183,11 @@ type roomsModel struct {
 	profiles []string
 	page     rooms.LogPage
 
+	// evidence is the verdict on each member reply, keyed by event key. A map
+	// is shared through roomsModel's value copies, so writing it from Update
+	// survives the copy the next message runs against.
+	evidence map[string]rooms.ReplyEvidence
+
 	cursor       int
 	inviteCursor int
 	selected     map[string]bool
@@ -199,6 +204,11 @@ type roomsModel struct {
 	// view does for the same reason.
 	working bool
 	queue   []string
+
+	// lastPulseSeq is the seq of the last moderator pulse this view posted.
+	// rooms.ShouldPulse compares it with the newest seq so a silent room is
+	// not pulsed over and over.
+	lastPulseSeq int
 
 	// scroll is how many lines back from the live tail the transcript
 	// window sits; 0 is pinned to the newest line. Without it the window
@@ -755,12 +765,32 @@ func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
 			// genuinely new events may advance the scroll offset or enter
 			// the transcript — otherwise /find reports every match twice.
 			fresh := newRoomEvents(m.page.Events, msg.page.Events)
+			// Every member reply is checked against the room directory once,
+			// when it first arrives: the ledger and the file are on disk, and
+			// the verdict is stored by event key so scrolling never re-reads
+			// them. The row the renderer adds is counted below and in
+			// transcriptEventLines, so the pager stays honest.
+			if len(fresh) > 0 {
+				dir := ""
+				if m.openRoomID != "" {
+					dir = m.roomDirIfExists(m.orientationFor(m.openRoomID), m.openRoomID)
+				}
+				if m.evidence == nil {
+					m.evidence = make(map[string]rooms.ReplyEvidence)
+				}
+				for _, ev := range fresh {
+					if ev.Kind != "message.member" {
+						continue
+					}
+					m.evidence[roomEventKey(ev)] = rooms.VerifyReply(dir, eventHandle(ev), ev.Text())
+				}
+			}
 			if m.scroll > 0 {
 				// The user is reading history. New arrivals must not push
 				// the text they are looking at down the screen, so advance
 				// the offset by exactly what was appended.
 				for _, ev := range fresh {
-					m.scroll += len(strings.Split(formatRoomsEvent(ev), "\n"))
+					m.scroll += len(strings.Split(m.formatEvent(ev), "\n"))
 				}
 			}
 			m.page.Events = append(m.page.Events, fresh...)
@@ -795,6 +825,11 @@ func (m roomsModel) Update(msg tea.Msg) (roomsModel, tea.Cmd) {
 		// is the first member reply posted after it.
 		if m.pendingCompact != nil && msg.seq > 0 {
 			m.pendingCompact.promptSeq = msg.seq
+		}
+		// A pulse is the moderator's own message: its seq is where the new
+		// discussion starts, and ShouldPulse measures the next one from here.
+		if strings.HasPrefix(msg.text, "[Puls pokoju]") {
+			m.lastPulseSeq = msg.seq
 		}
 		if m.openRoomID != "" {
 			return m, tea.Batch(m.loadLog(m.openRoomID, m.since), m.ensureRoomsSpinner())
@@ -996,7 +1031,19 @@ func (m roomsModel) transcriptLines() []string {
 // at column 0 and read as a new event (and the pager counted one row where
 // the terminal drew three).
 func (m roomsModel) transcriptEventLines(ev rooms.Event, width int) []string {
-	row := m.formatEvent(ev)
+	out := m.transcriptBodyLines(ev, width)
+	// The evidence row is added after the message body, as its own wrapped
+	// row, so it enters the same line list the pager counts.
+	if line := m.evidenceLine(ev); line != "" {
+		out = append(out, wrapTranscriptRow(line, width)...)
+	}
+	return out
+}
+
+// transcriptBodyLines renders the message itself; the caller adds the
+// evidence row on top.
+func (m roomsModel) transcriptBodyLines(ev rooms.Event, width int) []string {
+	row := m.formatEventRow(ev)
 	// The body as formatEvent rendered it (highlighting included), so the
 	// prefix/body split works while /find is active too.
 	body := ev.Text()
@@ -1322,6 +1369,13 @@ func (m roomsModel) handleTranscriptKey(msg tea.KeyPressMsg, key string) (roomsM
 				return m.approveShortcut(handle, "deny")
 			}
 		}
+	case "p":
+		// Pulse is the client moderating: it publishes the board and an
+		// opinion prompt as a normal user message, which opens a new
+		// discussion. Like m/x it is a letter in a draft first.
+		if strings.TrimSpace(m.composer) == "" && m.openRoomID != "" {
+			return m.pulseRoom()
+		}
 	case "up":
 		return m.scrollTranscript(1)
 	case "down":
@@ -1416,6 +1470,24 @@ func (m roomsModel) post(text string) (roomsModel, tea.Cmd) {
 	m.working = true
 	m.lastProgress = time.Now()
 	return m, tea.Batch(m.sendText(routed), routeCmd, m.ensureRoomsSpinner())
+}
+
+// pulseRoom posts the moderator pulse: the room's board plus the three
+// opinion questions, as an ordinary user message. Members only ever see each
+// other inside one discussion, so the pulse starts a fresh one.
+//
+// A working room is not pulsed: a second user event cancels the turns in
+// flight, which is exactly the silence the pulse is meant to break. The
+// notice says so instead, and the key works once the room settles.
+func (m roomsModel) pulseRoom() (roomsModel, tea.Cmd) {
+	if m.working || len(m.activeStreams()) > 0 {
+		m.notice = "pokoj pracuje — puls po settle"
+		return m, nil
+	}
+	dir := m.roomDirIfExists(m.orientationFor(m.openRoomID), m.openRoomID)
+	claims, _ := rooms.ReadLedger(dir)
+	m.notice = "puls wyslany"
+	return m, m.sendText(rooms.PulseText("", rooms.Board(claims)))
 }
 
 // handleTranscriptCommand runs a slash command typed in the transcript.
@@ -1961,9 +2033,24 @@ func (m roomsModel) hint() string {
 		} else if len(m.pending) > 1 {
 			head = "enter send · several blocked — /approve @handle once|deny"
 		}
-		return head + " · m: mode · ↑↓/PgUp/PgDn/wheel scroll · End live · /help · /model · /export · /compact · /find · /cost · /rooms back"
+		line := head + " · m: mode"
+		// The pulse key is advertised only where it acts: idle room, empty
+		// draft. Otherwise it would promise an action the key refuses.
+		if m.pulseReady() {
+			line += " · p puls"
+		}
+		return line + " · ↑↓/PgUp/PgDn/wheel scroll · End live · /help · /model · /export · /compact · /find · /cost · /rooms back"
 	}
 	return "↑/↓ move · enter open · n new room · p save as predefined · x disband · r refresh · esc back"
+}
+
+// pulseReady is the state the `p` key acts in: an open room, nothing being
+// typed, and the roster settled.
+func (m roomsModel) pulseReady() bool {
+	return m.openRoomID != "" &&
+		strings.TrimSpace(m.composer) == "" &&
+		!m.working &&
+		len(m.activeStreams()) == 0
 }
 
 // ── rendering helpers (pure; unit-tested) ────────────────────────────────────

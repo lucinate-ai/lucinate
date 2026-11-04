@@ -1138,12 +1138,42 @@ func eventHandle(ev rooms.Event) string {
 // formatEvent renders one transcript row with the member's colour applied and
 // the live /find query highlighted inside the body text. Highlighting is done
 // on the raw text, before styling, so a query can never match an ANSI escape.
+// A member message whose reply was checked carries one dim evidence line
+// underneath it; transcriptEventLines adds that line as its own wrapped row.
 func (m roomsModel) formatEvent(ev rooms.Event) string {
+	row := m.formatEventRow(ev)
+	if line := m.evidenceLine(ev); line != "" {
+		return row + "\n" + line
+	}
+	return row
+}
+
+// formatEventRow is the message row alone, without the evidence line, so the
+// transcript can wrap the two independently.
+func (m roomsModel) formatEventRow(ev rooms.Event) string {
 	body := ev.Text()
 	if m.findQuery != "" && body != "" {
 		body = highlightQuery(body, m.findQuery, roomsMatchStyle)
 	}
 	return formatRoomsEventStyled(ev, body, m.memberStyle(eventHandle(ev)))
+}
+
+// evidenceLine is the one dim line a checked member reply gets: ✓ when a
+// HANDOFF receipt was read back and matched, ✗ for a declaration without one,
+// a failed read-back or a duplicate.
+func (m roomsModel) evidenceLine(ev rooms.Event) string {
+	if ev.Kind != "message.member" {
+		return ""
+	}
+	ev2, ok := m.evidence[roomEventKey(ev)]
+	if !ok {
+		return ""
+	}
+	glyph := "✗"
+	if ev2.Status == rooms.EvidenceVerified {
+		glyph = "✓"
+	}
+	return statusStyle.Render("  " + glyph + " " + ev2.Detail)
 }
 
 // peerPullAnnotations maps the citing event's key to the line the transcript

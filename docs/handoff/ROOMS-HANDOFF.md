@@ -15,6 +15,9 @@ that room surface.
 - Branch `feat/rooms-bot-mode`; last code commit `0a472af` (`feat(rooms): show the discussion
   rules…`), with this handoff as a docs-only commit on top. Tree clean, pushed to `origin`
   (fork `kamilarndt/lucinate`).
+- **A later session (2026-11-04, 03:30–04:20) added four uncommitted slices** — brief, ledger,
+  evidence, pulse — see "Room shared state" below. `gofmt -l .` empty, `go vet ./...` clean,
+  `go test -count=1 ./...` green (all packages; tui ~55 s), `go test -race ./internal/rooms/` green.
 - PR **#205** in `lucinate-ai/lucinate`: ready for review, 13 commits, last code commit `0a472af`,
   `mergeable_state: blocked` — only because the CI workflows wait for a maintainer to approve the
   run on a fork PR. We have READ on the upstream repo; nobody here can approve or merge it.
@@ -46,6 +49,46 @@ that room surface.
 6. `0a472af` — the rules on screen: `/rules` (the member constitution + budgets), header budget
    `round 2/3 · 4/10 messages` with the gateway's end reason, `@a pulled @b into the next round`
    annotation, mode wording that matches the engine.
+
+## Room shared state (uncommitted, 2026-11-04)
+
+A room member gets only a bounded delta of the transcript plus a fixed rule
+frame, so every member rediscovered the repo and a room spent its first round
+establishing where it stood. Four slices close that, all client-side:
+
+1. **Brief** — `internal/rooms/brief.go`. `BuildBrief(repoPath)` reads branch,
+   HEAD, dirty count, AGENTS.md bullets, README, unchecked `openspec` tasks and
+   the newest `docs/handoff` file; `Markdown()` is deterministic (no timestamps,
+   ≤6000 B) and `Digest()` is the first 12 hex of its sha256. `WriteBrief` writes
+   `<roomdir>/brief.md` atomically. `client.go:305` prepends
+   `brief: <path> sha=<digest>` to the room's first message; a brief error never
+   blocks the send. Members read the file instead of exploring.
+2. **Ledger** — `internal/rooms/ledger.go`. Append-only `<roomdir>/work.jsonl`
+   (`Claim{Task,Owner,Status,Artifact,Bytes,Note,At}`), `Board()` for a ≤12-line
+   table, `DuplicateOf()` for an artifact already done by another owner,
+   `EnsureLedger()` so the file the brief points at really exists.
+3. **Evidence** — `internal/rooms/evidence.go`. `VerifyReply(dir, owner, text)`
+   re-reads every `HANDOFF <path> bytes=<n>` receipt (`sharedir.go` already had
+   the verifier, nothing called it) and returns `none | verified | failed |
+   duplicate`. The TUI computes it once per arriving member message
+   (`rooms.go:760-790`), caches it by event key and renders one dim `✓`/`✗` row
+   under the message (`rooms_ux.go:1141-1175`), counted in the pager's rows.
+4. **Pulse** — `internal/rooms/pulse.go` + `p` key. When the room is idle and
+   the composer is empty, `p` posts the board plus "120 words: stance, what you
+   don't know, what you take; do not work this round". A new user message opens
+   a NEW discussion, so the gateway's 3-round / 10-message budget restarts —
+   that is what makes a long discussion possible. While the room works, `p`
+   refuses and says so.
+
+Live evidence against `hermes dashboard` on :9119, room `pm-live-check`
+(alojz + default): `brief.md` 5928 B with the pointer
+`sha=f09ca9fee042`; `@alojz` replied
+`HANDOFF …/live.txt bytes=8`, the file is exactly 8 bytes, and the transcript
+shows `✓ zapis potwierdzony: …/live.txt (8 B)`. Pressing `p` produced
+`you → [Puls pokoju] co dalej`, the header reset to `round 1/3 · 0/10 messages`,
+and a member's opinion without a receipt was marked `✗ brak potwierdzenia
+zapisu`. The live run also found `work.jsonl` never existed; `EnsureLedger`
+fixes that.
 
 ## What the room actually enforces (don't re-derive it)
 
@@ -80,6 +123,9 @@ Run against `hermes dashboard` v0.22.5 on `http://127.0.0.1:9119`, Hermes connec
   `… N more — esc closes this` and the composer still on screen.
 
 ## Open work (in priority order)
+
+**Blocking on the owner: the four slices above are uncommitted.** Nothing is staged; the tree also
+carries a `.gitignore` line for `.commandcode/`. Decide commit-or-not before touching 4.x.
 
 1. `openspec/changes/room-rules/tasks.md` 4.1–4.2 — the `peer discussion` preset flag, injected
    into the room's first message as an *instruction* (never a client-side block), shown by

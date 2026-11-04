@@ -37,3 +37,6 @@ test/integration/echomodel.pid
 
 # Room shared directories (created when a room starts; see internal/rooms/sharedir.go)
 .rooms/
+
+# Command Code local state (taste learning, session artifacts) — never committed
+.commandcode/

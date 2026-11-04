@@ -12,6 +12,7 @@ import (
 
 	"github.com/lucinate-ai/lucinate/internal/config"
 	"github.com/lucinate-ai/lucinate/internal/rooms"
+	tg "github.com/lucinate-ai/lucinate/internal/testgateway"
 )
 
 func keyRune(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
@@ -1187,5 +1188,115 @@ func TestRoomsModel_SettledRoomDoesNotClaimToBeAnswering(t *testing.T) {
 	want := "all members settled · " + time.Unix(stamp.Unix(), 0).Format("15:04")
 	if !strings.Contains(out, want) {
 		t.Fatalf("expected %q, got:\n%s", want, out)
+	}
+}
+
+// A member reply carries one dim evidence row: ✓ for a verified HANDOFF
+// read-back, ✗ for a declaration without one. The row must be part of the
+// transcript line list, or the pager's notion of the window is a lie.
+func TestRoomsModel_MemberEvidenceRowIsRenderedAndCounted(t *testing.T) {
+	ev := rooms.Event{EventID: "ev-1", Kind: "message.member",
+		Actor:   rooms.Actor{DisplayName: "Matt"},
+		Payload: map[string]any{"text": "gotowe"}}
+	m := transcriptWith(0)
+	m.page.Events = []rooms.Event{ev}
+
+	without := len(m.transcriptLines())
+
+	m.evidence = map[string]rooms.ReplyEvidence{
+		roomEventKey(ev): {Status: rooms.EvidenceNone, Detail: "brak potwierdzenia zapisu"},
+	}
+	none := m.transcriptLines()
+	if len(none) != without+1 {
+		t.Fatalf("transcript has %d rows with evidence, want %d (the message plus one)", len(none), without+1)
+	}
+	text := ansi.Strip(strings.Join(none, "\n"))
+	if n := strings.Count(text, "✗"); n != 1 {
+		t.Fatalf("rendered %d ✗ rows, want exactly 1:\n%s", n, text)
+	}
+	if !strings.Contains(text, "brak potwierdzenia zapisu") {
+		t.Fatalf("the evidence detail is missing:\n%s", text)
+	}
+
+	m.evidence[roomEventKey(ev)] = rooms.ReplyEvidence{
+		Status: rooms.EvidenceVerified, Detail: "zapis potwierdzony: out.md (5 B)"}
+	verified := ansi.Strip(strings.Join(m.transcriptLines(), "\n"))
+	if !strings.Contains(verified, "✓ zapis potwierdzony: out.md (5 B)") {
+		t.Fatalf("verified evidence did not render a ✓ row:\n%s", verified)
+	}
+	if strings.Contains(verified, "✗") {
+		t.Fatalf("verified evidence still renders ✗:\n%s", verified)
+	}
+}
+
+// ── moderator pulse ──────────────────────────────────────────────────────────
+
+// A working room must not be pulsed: a second user event cancels the turns in
+// flight, so the key explains itself and sends nothing.
+func TestRoomsTranscript_PulseRefusedWhileTheRoomWorks(t *testing.T) {
+	m := v2Model(t)
+	m.working = true
+
+	next, cmd := m.handleTranscriptKey(tea.KeyPressMsg{}, "p")
+	if cmd != nil {
+		t.Fatal("p in a working room must not dispatch a send")
+	}
+	if !strings.Contains(next.notice, "pokoj pracuje — puls po settle") {
+		t.Errorf("notice = %q, want the settle hint", next.notice)
+	}
+}
+
+// In an idle room `p` posts the moderator message through the normal send
+// path, so the gateway sees a user turn and opens a new discussion.
+func TestRoomsTranscript_PulseSendsTheModeratorMessage(t *testing.T) {
+	s := tg.New(t, tg.DefaultOptions())
+	m := w1GatewayModel(t, s)
+	m.sub = roomsTranscript
+	m.openRoomID = "sztab"
+	room := liveRoom("sztab", "Sztab", "matt", "kowal")
+	m.openRoom = &room
+
+	next, cmd := m.handleTranscriptKey(tea.KeyPressMsg{}, "p")
+	if cmd == nil {
+		t.Fatal("p in an idle room should dispatch a send")
+	}
+	if next.notice != "puls wyslany" {
+		t.Errorf("notice = %q, want the pulse confirmation", next.notice)
+	}
+
+	res, ok := cmd().(roomsSentMsg)
+	if !ok {
+		t.Fatalf("pulse command produced %T, want roomsSentMsg", res)
+	}
+	if res.err != nil {
+		t.Fatalf("pulse send: %v", res.err)
+	}
+	if !strings.HasPrefix(res.text, "[Puls pokoju]") {
+		t.Fatalf("pulse text = %q, want it to start with the pulse marker", res.text)
+	}
+
+	after, _ := next.Update(res)
+	if after.lastPulseSeq != res.seq || after.lastPulseSeq == 0 {
+		t.Fatalf("lastPulseSeq = %d, want the pulse's seq %d", after.lastPulseSeq, res.seq)
+	}
+}
+
+// The hint advertises the pulse key only where it acts: idle and undrafted.
+func TestRoomsTranscript_HintShowsPulseOnlyWhenIdle(t *testing.T) {
+	m := v2Model(t)
+	if !strings.Contains(m.hint(), "p puls") {
+		t.Fatalf("idle hint does not offer the pulse: %q", m.hint())
+	}
+
+	working := m
+	working.working = true
+	if strings.Contains(working.hint(), "p puls") {
+		t.Errorf("working room advertises the pulse: %q", working.hint())
+	}
+
+	drafted := m
+	drafted.composer = "co dalej?"
+	if strings.Contains(drafted.hint(), "p puls") {
+		t.Errorf("a draft advertises the pulse: %q", drafted.hint())
 	}
 }
