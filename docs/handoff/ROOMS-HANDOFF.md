@@ -139,6 +139,12 @@ carries a `.gitignore` line for `.commandcode/`. Decide commit-or-not before tou
 
 ## Environment, if you want to reproduce in five minutes
 
+**Run it from any project:** `lucinate` on PATH (`/home/hermes/.local/bin/lucinate`) execs this
+checkout's binary and rebuilds it when any `.go` file is newer, so the alias never runs a stale
+build (`LUCINATE_NO_BUILD=1` skips the check). The working directory is the project: a room seated
+from an Orca terminal inherits `ORCA_WORKTREE_ID`, so its brief and orientation point at that repo,
+not at the lucinate checkout.
+
 The app needs a real gateway the client can dial as `http://localhost:9119/api/ws?token=…`.
 
 ```sh
