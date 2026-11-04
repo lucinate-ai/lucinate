@@ -45,9 +45,12 @@
       `y allow once · s allow for session · a allow always · n deny`; `y` wrote `answered: allow
       once`, the tool ran and the agent reported `RM-OK — polecenie przeszło, exit 0`; `n` on the
       next request (`echo "ENV_WT=[$ORCA_WORKTREE_ID]" …`, `shell command via -c/-lc flag`) denied it
-      — the member's next tool call shows as failed. Clarify, `s` (allow for session) and
-      `request.cancel` were **not** exercised live; they are covered by fixtures and unit tests, and
-      this line says so rather than implying otherwise.
+      — the member's next tool call shows as failed. Clarify was verified live the same day on an
+      isolated dashboard (:9120, `--isolated`, token `lucinate-live`, connection URL restored
+      afterwards): the agent called `clarify` with `Którą opcję wybierasz?` and choices
+      `1) A (Recommended)  2) B`, pressing `2` answered it and the agent replied `Wybrałeś B.`
+      (`✓ called clarify`). `s` (allow for session) and `request.cancel` remain covered by fixtures
+      and unit tests only — not exercised live; this line says so rather than implying otherwise.
 - [x] 4.3 `docs/backend_hermes.md` gains a short section: which asks are interactive, which stay
       declined, and the timeout.
 
