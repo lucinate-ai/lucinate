@@ -331,6 +331,7 @@ func TestSessions_CreateAndList(t *testing.T) {
 			DerivedTitle       string `json:"derivedTitle"`
 			LastMessagePreview string `json:"lastMessagePreview"`
 			UpdatedAt          int64  `json:"updatedAt"`
+			Source             string `json:"source"`
 		} `json:"sessions"`
 	}
 	if err := json.Unmarshal(raw, &list); err != nil {
@@ -342,6 +343,9 @@ func TestSessions_CreateAndList(t *testing.T) {
 	s := list.Sessions[0]
 	if s.Key != "20260719_000000_stored" || s.DerivedTitle != "Greetings" || s.LastMessagePreview != "hello" || s.UpdatedAt == 0 {
 		t.Fatalf("mapped entry = %+v", s)
+	}
+	if s.Source != "tui" {
+		t.Fatalf("source = %q, want the gateway's tui", s.Source)
 	}
 }
 

@@ -82,6 +82,17 @@ handler *after* the scrollback has rendered, so the launch message appears after
 history — matching what a human typing the same message would see, rather than jumping ahead of
 it.
 
+## The source tag names where a session came from
+
+Hermes's `session.list` rows carry a `source` (for example `bot_room`, `cron`, `cli`, `tui`), and
+the browser renders it as a dim tag before the relative age on the primary row — `bot_room ·
+2h ago`. The value is passed through unchanged from the gateway; when a row reports no source the
+tag is simply omitted and the row keeps its unadorned `2h ago` shape, because a wrong label is
+worse than none and deriving one from the session key would be a guess. The tag is not a filter
+of its own: the existing `/` filter matches it alongside the title and preview, so `/bot_room` or
+`/cron` surfaces that kind of session at the top of the list (the match is fuzzy, the same one the
+title uses — it ranks, it does not exclude).
+
 ## Scheduled sessions sort separately
 
 Sessions whose key contains `:cron:` are split into their own **Scheduled** list in the session

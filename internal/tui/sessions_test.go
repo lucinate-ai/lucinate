@@ -455,6 +455,73 @@ func TestSessionDelegate_RendersAgeAndKeyOnSelectedOnly(t *testing.T) {
 	}
 }
 
+// renderSessionRow renders one unselected row through the delegate so the
+// source tag can be asserted without driving the whole list view.
+func renderSessionRow(it sessionItem, width int) string {
+	l := list.New([]list.Item{it}, sessionDelegate{}, width, 2)
+	var b strings.Builder
+	sessionDelegate{}.Render(&b, l, -1, it)
+	return ansi.Strip(b.String())
+}
+
+// TestSessionDelegate_RendersSourceTag pins the dim source tag on the
+// primary row, ahead of the relative age.
+func TestSessionDelegate_RendersSourceTag(t *testing.T) {
+	updated := time.Now().Add(-2 * time.Hour).UnixMilli()
+	row := renderSessionRow(sessionItem{key: "k", title: "Release notes", updatedAt: updated, source: "bot_room"}, 80)
+	if !strings.Contains(row, "bot_room · 2h ago") {
+		t.Errorf("row = %q, want the source tag before the relative age", row)
+	}
+}
+
+// TestSessionDelegate_OmitsSourceTagWhenEmpty keeps a source-less row in its
+// old shape: title and age, no placeholder tag or extra separator.
+func TestSessionDelegate_OmitsSourceTagWhenEmpty(t *testing.T) {
+	updated := time.Now().Add(-2 * time.Hour).UnixMilli()
+	row := renderSessionRow(sessionItem{key: "k", title: "Release notes", updatedAt: updated}, 80)
+	if !strings.Contains(row, "Release notes · 2h ago") {
+		t.Fatalf("row = %q, want the unchanged title and age shape", row)
+	}
+	if n := strings.Count(row, " · "); n != 1 {
+		t.Errorf("row = %q, want a single separator (no source tag)", row)
+	}
+}
+
+// TestSessionItem_FilterValueIncludesSource lets `/bot_room` find a room
+// session without a new key binding.
+func TestSessionItem_FilterValueIncludesSource(t *testing.T) {
+	it := sessionItem{key: "s1", title: "Release notes", lastMessage: "wrapped it", source: "bot_room"}
+	for _, want := range []string{"Release notes", "wrapped it", "bot_room"} {
+		if !strings.Contains(it.FilterValue(), want) {
+			t.Errorf("FilterValue = %q, missing %q", it.FilterValue(), want)
+		}
+	}
+}
+
+// TestSessionsModel_FilterMatchesSourceAndTitle proves the live `/` filter
+// narrows on the source and still matches a title-only query.
+func TestSessionsModel_FilterMatchesSourceAndTitle(t *testing.T) {
+	m := newTestSessionsModel()
+	m, _ = m.Update(sessionsLoadedMsg{sessions: []sessionItem{
+		{key: "s1", title: "Release notes", source: "bot_room", group: "Conversations"},
+		{key: "s2", title: "Bug triage", source: "cron", group: "Conversations"},
+	}})
+	m, _ = m.handleKey(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if m.list.FilterState() != list.Filtering {
+		t.Fatalf("expected filtering state after '/', got %v", m.list.FilterState())
+	}
+
+	m.list.SetFilterText("bot_room")
+	if n := len(m.list.VisibleItems()); n != 1 {
+		t.Fatalf("source filter narrowed to %d sessions, want 1", n)
+	}
+
+	m.list.SetFilterText("triage")
+	if n := len(m.list.VisibleItems()); n != 1 {
+		t.Fatalf("title-only filter narrowed to %d sessions, want 1", n)
+	}
+}
+
 // TestSessionsModel_FilterNarrowsList proves `/` filtering is live.
 func TestSessionsModel_FilterNarrowsList(t *testing.T) {
 	m := newTestSessionsModel()

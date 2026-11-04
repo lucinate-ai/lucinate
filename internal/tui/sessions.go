@@ -25,13 +25,15 @@ type sessionItem struct {
 	lastMessage string
 	updatedAt   int64 // Unix millis
 	group       string
+	source      string
 }
 
 // FilterValue is the haystack the bubbles list filter runs against. The
 // preview is included so `/` can find a session by something it said, not
-// only by its title. A title-less session falls back to its key.
+// only by its title, and the source so `/bot_room` or `/cron` narrows the
+// list to one kind of session. A title-less session falls back to its key.
 func (i sessionItem) FilterValue() string {
-	parts := []string{i.title, i.lastMessage}
+	parts := []string{i.title, i.lastMessage, i.source}
 	if i.title == "" {
 		parts[0] = i.key
 	}
@@ -74,12 +76,28 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 			width = 1
 		}
 		primary := truncateToWidth(title, width)
-		if age := relativeAge(i.updatedAt, time.Now()); age != "" {
-			// Keep the age on the primary row; if the title alone fills the
-			// row the age is dropped rather than wrapped.
-			if displayWidth(primary)+3+displayWidth(age) <= width {
-				primary += " · " + age
+		// The metadata suffix is the session's source (a dim tag) followed
+		// by the relative age. An empty source leaves the suffix exactly the
+		// age, so a row without a reported source looks as it always did.
+		age := relativeAge(i.updatedAt, time.Now())
+		plainSuffix := i.source
+		switch {
+		case plainSuffix != "" && age != "":
+			plainSuffix += " · " + age
+		case plainSuffix == "":
+			plainSuffix = age
+		}
+		if plainSuffix != "" && displayWidth(primary)+3+displayWidth(plainSuffix) <= width {
+			// Keep the metadata on the primary row; if the title alone fills
+			// the row it is dropped rather than wrapped.
+			suffix := plainSuffix
+			if i.source != "" {
+				suffix = lipgloss.NewStyle().Foreground(subtle).Render(i.source)
+				if age != "" {
+					suffix += " · " + age
+				}
 			}
+			primary += " · " + suffix
 		}
 
 		preview := i.lastMessage
@@ -206,6 +224,7 @@ type sessionListEntry struct {
 	LastMessagePreview string `json:"lastMessagePreview"`
 	UpdatedAt          int64  `json:"updatedAt"`
 	Model              string `json:"model"`
+	Source             string `json:"source"`
 }
 
 // cleanDerivedTitle strips gateway metadata prefixes from the derived title.
@@ -261,6 +280,7 @@ func (m sessionsModel) loadSessions() tea.Cmd {
 				lastMessage: entry.LastMessagePreview,
 				updatedAt:   entry.UpdatedAt,
 				group:       sessionGroup(entry.Key),
+				source:      entry.Source,
 			})
 		}
 		// Sort by updatedAt descending within each group.

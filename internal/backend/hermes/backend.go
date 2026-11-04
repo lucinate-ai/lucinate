@@ -524,6 +524,7 @@ type sessionListEntry struct {
 	Preview      string  `json:"preview"`
 	StartedAt    float64 `json:"started_at"`
 	MessageCount int     `json:"message_count"`
+	Source       string  `json:"source"`
 }
 
 // SessionsList maps session.list into the TUI's session-browser shape.
@@ -562,6 +563,7 @@ func (b *Backend) SessionsList(ctx context.Context, agentID string) (json.RawMes
 			"derivedTitle":       title,
 			"lastMessagePreview": s.Preview,
 			"updatedAt":          int64(s.StartedAt * 1000),
+			"source":             s.Source,
 		})
 	}
 	return json.Marshal(out)
