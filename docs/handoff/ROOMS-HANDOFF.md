@@ -12,13 +12,15 @@ that room surface.
 
 ## State
 
-- Branch `feat/rooms-bot-mode` (fork `kamilarndt/lucinate`), pushed. Tree clean except one
-  untracked page that is not ours (`docs/rooms-live-check.md`, see the traps). Take the HEAD from
-  `git log -1` rather than from this file: the last code commit of the tidy pass is `3d0dc77`.
+- Branch `feat/rooms-bot-mode` (fork `kamilarndt/lucinate`), pushed. Tree clean. Take the HEAD from
+  `git log -1` rather than from this file: the last code commit of this evening's pass is `4b2dd65`.
 - **Everything below the "Room shared state" heading is committed and pushed** (four code commits on
   2026-11-04: `c2c91c6`, `9e534c8`, `b16fc78`, `c3ba2fb`, `1df484c`), plus two docs commits
   (`1a51cdb`, `e81f80e`). `gofmt -l .` empty, `go vet ./...` clean, `go test -count=1 ./...` green
   (tui ~55 s), `go test -race ./internal/rooms/` green.
+- Late-evening fixes found by the six-bot run: `0fc383f` (a readiness adjective is not a write
+  claim) and `4b2dd65` (the header keeps its budget when the roster is wide). Both proven live in
+  room `live-six-three` — see "Live pass 6" below.
 - `openspec validate --changes` → 5 passed, 0 failed; `openspec validate --specs` → 20 passed,
   0 failed (warnings only: long requirement prose, all older than this work). The CLI is **not**
   installed on this box — run it as `npx --yes @fission-ai/openspec@latest …` (v1.16.0 works).

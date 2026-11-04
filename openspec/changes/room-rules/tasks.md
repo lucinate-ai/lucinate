@@ -62,3 +62,10 @@
       pass-only round ended the discussion and the header read `1/3 · 0/10 · settled — waiting for
       you`. Full transcript: `docs/handoff/ROOMS-HANDOFF.md`, section "Live pass 5.2".
 - [x] 5.3 `docs/rooms.md` and `README.md` point at `docs/room-rules.md`.
+- [x] 5.4 Live proof for 3.4 (2026-11-04, 19:31–19:40, room `live-six-three`, six members,
+      isolated gateway on 9120, HEAD `4b2dd65`): the header read
+      `live-six-three — @alojz @default @budy @tester @webdev @librarian  · round 2/3 · 4/10
+      messages` — all six handles, no models, budget on the same row; the stale binary on the same
+      room showed four members and no budget. Peer pull rendered under the citing message
+      (`@alojz pulled @tester and @webdev into the next round`), and no `⚠` evidence row appeared.
+      Record: `docs/rooms-live-check.md`, section "Second run, after the fixes".

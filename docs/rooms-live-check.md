@@ -71,6 +71,38 @@ lucinate rooms log live-six-183443
    list of words that count as a write claim contained the bare stem `gotow…`, which matches the
    adjective "gotowym". A location, not a guess: `internal/rooms/evidence.go`, the claim markers.
 
+## Second run, after the fixes (19:31–19:40)
+
+Same shape, new code: HEAD `4b2dd65`, rebuilt binary, an isolated gateway of its own on 9120, and a
+fresh six-bot room `live-six-three` (`alojz`, `default`, `budy`, `tester`, `webdev`, `librarian`)
+with the project context of this checkout. One order sentence, then one follow-up asking `@alojz` to
+take `@tester`'s sentence and cite him by handle.
+
+The header, quoted from the screen:
+
+```
+live-six-three — @alojz @default @budy @tester @webdev @librarian  · round 2/3 · 4/10 messages
+```
+
+All six handles are named, the models are gone from the line, and the budget is on the same row —
+that is fix 1. For comparison, the same room opened with the stale 17:48 binary printed
+`live-six-three — @alojz (profile default) @default (profile default) @budy (profile default)
+@tester (profile default)` and cut the rest off, which is exactly what this page complained about.
+
+The peer pull, quoted from under `@alojz`'s message:
+
+```
+  @alojz pulled @tester and @webdev into the next round
+19:38:23  @alojz finished
+```
+
+and under `@tester`'s: `@tester pulled @webdev into the next round` — both cited peers answered in
+the next round. That is fix 3: the annotation sits under the message that did it.
+
+No `⚠ deklaracja zapisu bez potwierdzenia` row appeared anywhere, although the replies quote
+`docs/handoff/ROOMS-HANDOFF.md`, `openspec/changes/…` and other paths the whole time and none of them
+came with a `HANDOFF` receipt. That is fix 2 holding in a six-bot room, not just in the test.
+
 ## What held
 
 - Modes are named by what they do: `broadcast: everyone on the roster answers your message; later
@@ -84,11 +116,16 @@ lucinate rooms log live-six-183443
 
 1. Let the header keep the budget when the roster is long — shorten the roster line (handles only)
    before dropping `round N/3 · M/10 messages`.
+   **Done and proven live** (`headerLayout` in `internal/tui/rooms.go`): six handles plus
+   `round 2/3 · 4/10 messages` on one row in `live-six-three`.
 2. Narrow the write-claim words to verbs of writing, so a readiness adjective cannot accuse a reply.
-   **Done in this pass** (`internal/rooms/evidence.go`): the marker list holds verbs only, and the
-   exact 18:38 sentence is now a regression test in `internal/rooms/evidence_test.go`.
+   **Done in this pass** (`internal/rooms/evidence.go`): the marker list holds verbs only, the
+   exact 18:38 sentence is a regression test in `internal/rooms/evidence_test.go`, and no `⚠` row
+   appeared in the second six-bot run.
 3. Show peer pull next to the message that did it — unchanged from the earlier list, still untested
    in a six-bot room.
+   **Done and proven live**: `@alojz pulled @tester and @webdev into the next round` renders under
+   `@alojz`'s message, and `@tester pulled @webdev into the next round` under `@tester`'s.
 4. Keep internal work internal until you decide on sale and on code changes outside docs. Those two
    need your explicit approval.
 
@@ -97,9 +134,10 @@ lucinate rooms log live-six-183443
 Measure: you write one order sentence and without a follow-up question you can name who spoke, who
 waits, and why it ended.
 
-Result on 2026-11-04: **who spoke — yes. Who waits — yes, with the key that resolves it. Why it
-ended — yes. The budget — only when the room has two bots.**
+Result on 2026-11-04, after the fixes: **who spoke — yes, six of six. Who waits — yes, with the key
+that resolves it. Why it ended — yes. The budget — yes, with six bots on the roster.**
 
 The earlier promise on this page was a screenshot from the room folder by 06:00 on 2026-11-04. It
 never landed; this page now carries the screen text itself, quoted above, with the room id to replay
-it. Review point: after the two fixes above, one more six-bot run, keep or rewrite this page.
+it. Review point: the six-bot run after the fixes happened on the same evening (19:31–19:40, room
+`live-six-three`) and closed all three items — the page stays as the record.
