@@ -102,7 +102,7 @@ Each substate SHALL expose its own discoverable actions through `Actions()`, and
 
 ### Requirement: List substate loads and renders jobs with local filtering
 
-The list view SHALL load on `Init()` via `loadJobs()`, which calls `CronsList(Enabled: "all", SortBy: "nextRunAtMs", SortDir: "asc")`. The full slice SHALL be cached on the model so the agent-filter toggle (`a` key) can re-apply locally without a round-trip — server-side filtering is not exposed in `CronListParams`. Each row SHALL render:
+The list view SHALL load on `Init()` via `loadJobs()`, which calls `CronsList(Enabled: "all", SortBy: "name", SortDir: "asc")`. The full slice SHALL be cached on the model so the agent-filter toggle (`a` key) can re-apply locally without a round-trip — server-side filtering is not exposed in `CronListParams`. Each row SHALL render:
 
 - **Line 1**: bold name + dim relative-time chip (`in 8h`, `due`, `—`).
 - **Line 2**: chips for session target (`main`/`isolated`), wake mode (`now`/`heartbeat`), agent ID, and a status badge (`ok`/`error`/`disabled`/`idle`).
@@ -112,7 +112,7 @@ The list substate SHALL bind: `enter` opens detail; `r` refreshes; `n` opens the
 #### Scenario: Initial load and sort
 
 - **WHEN** the list substate initialises via `Init()`
-- **THEN** `loadJobs()` calls `CronsList(Enabled: "all", SortBy: "nextRunAtMs", SortDir: "asc")` and caches the full slice on the model
+- **THEN** `loadJobs()` calls `CronsList(Enabled: "all", SortBy: "name", SortDir: "asc")` and caches the full slice on the model
 
 #### Scenario: Agent-filter toggle applies locally
 
