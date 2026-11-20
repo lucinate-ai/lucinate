@@ -190,19 +190,48 @@ func TestTranslate_ErrorEvent(t *testing.T) {
 	}
 }
 
-// Interactive asks come back as an Ask (for the backend to auto-decline
-// via the paired respond RPC), not as TUI events.
-func TestTranslate_ClarifyRequestSurfacesAsAsk(t *testing.T) {
+// decodeAskData unwraps an agent event and returns the ask-stream data
+// map through the same JSON round-trip the TUI performs.
+func decodeAskData(t *testing.T, ev protocol.Event) map[string]any {
+	t.Helper()
+	if ev.EventName != protocol.EventAgent {
+		t.Fatalf("EventName = %s, want agent", ev.EventName)
+	}
+	var ae protocol.AgentEvent
+	if err := json.Unmarshal(ev.Payload, &ae); err != nil {
+		t.Fatalf("agent payload: %v", err)
+	}
+	if ae.Stream != "ask" {
+		t.Fatalf("stream = %s, want ask", ae.Stream)
+	}
+	return ae.Data
+}
+
+// request.cancel turns into an ask-cancel event and an AskCancel the pump
+// uses to drop the pending entry.
+func TestTranslate_RequestCancelClosesAsk(t *testing.T) {
 	tr := newTranslator()
-	events, ask := tr.Translate(fixtureNotification(t, "clarify_request"))
-	if len(events) != 0 {
-		t.Fatalf("asks must not emit TUI events, got %d", len(events))
+	params := json.RawMessage(`{"type":"request.cancel","session_id":"s1","payload":{"prompt_id":"p1"}}`)
+	events, cancel := tr.Translate(rpc.Notification{Method: "event", Params: params})
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
 	}
-	if ask == nil {
-		t.Fatal("ask = nil")
+	if cancel == nil || cancel.RequestID != "p1" || cancel.SessionID != "s1" {
+		t.Fatalf("cancel = %+v", cancel)
 	}
-	if ask.Type != "clarify.request" || ask.RequestID != "d7987369" || ask.SessionID != "3d0df6d7" {
-		t.Fatalf("ask = %+v", ask)
+	data := decodeAskData(t, events[0])
+	if data["kind"] != "cancel" || data["requestId"] != "p1" {
+		t.Fatalf("cancel data = %+v", data)
+	}
+}
+
+// A request.cancel without an id is ignored rather than closing every panel.
+func TestTranslate_RequestCancelWithoutIDIgnored(t *testing.T) {
+	tr := newTranslator()
+	events, cancel := tr.Translate(rpc.Notification{Method: "event", Params: json.RawMessage(
+		`{"type":"request.cancel","session_id":"s1","payload":{}}`)})
+	if len(events) != 0 || cancel != nil {
+		t.Fatalf("cancel without id must be ignored: %d events, %+v", len(events), cancel)
 	}
 }
 

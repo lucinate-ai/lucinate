@@ -56,7 +56,6 @@ type Client struct {
 	// user-configured deadline. Applies to both initial Connect and
 	// each Reconnect attempt.
 	connectTimeout time.Duration
-
 }
 
 // SetConnectTimeout sets the WebSocket connect/handshake deadline used

@@ -530,22 +530,19 @@ func TestConnectionsModel_EditFlow(t *testing.T) {
 	}
 }
 
-func TestConnectionsModel_DisableExitKeysUnbindsListQuit(t *testing.T) {
-	// With DisableExitKeys=false the bubbles list still binds q/esc to
-	// Quit and ctrl+c to ForceQuit, and the help footer renders
-	// "q quit". Embedded hosts that can't be dismissed by terminating
-	// the process need both shortcuts and the hint gone.
-	on := newConnectionsModel(&config.Connections{}, false, true)
-	if on.list.KeyMap.Quit.Enabled() {
-		t.Error("DisableExitKeys=true should unbind list Quit (q/esc)")
-	}
-	if on.list.KeyMap.ForceQuit.Enabled() {
-		t.Error("DisableExitKeys=true should unbind list ForceQuit (ctrl+c)")
-	}
-
-	off := newConnectionsModel(&config.Connections{}, false, false)
-	if !off.list.KeyMap.Quit.Enabled() {
-		t.Error("DisableExitKeys=false should keep the default Quit binding for the CLI")
+func TestConnectionsModel_ListQuitIsAlwaysUnbound(t *testing.T) {
+	// The bubbles list binds `v` to Quit (help text "select") and ctrl+c
+	// to ForceQuit. `v` read as navigation and quit the whole app, so the
+	// widget binding is off on every screen and in every host; ctrl+c is
+	// handled at the AppModel level, which still honours DisableExitKeys.
+	for _, disable := range []bool{false, true} {
+		m := newConnectionsModel(&config.Connections{}, false, disable)
+		if m.list.KeyMap.Quit.Enabled() {
+			t.Errorf("DisableExitKeys=%v: list Quit should be unbound", disable)
+		}
+		if m.list.KeyMap.ForceQuit.Enabled() {
+			t.Errorf("DisableExitKeys=%v: list ForceQuit should be unbound", disable)
+		}
 	}
 }
 

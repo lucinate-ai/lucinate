@@ -165,6 +165,103 @@ func TestWordWrap_MixedTableAndText(t *testing.T) {
 	}
 }
 
+func TestWordWrap_HelpBodyKeepsLinesSeparateAndKeepsWords(t *testing.T) {
+	const width = 80
+	got := wordWrap(helpBody, width)
+
+	// (b) no words dropped or reordered.
+	gotWords := strings.Fields(got)
+	wantWords := strings.Fields(helpBody)
+	if strings.Join(gotWords, "\x00") != strings.Join(wantWords, "\x00") {
+		t.Fatalf("word sequence changed:\n got %d words\nwant %d words", len(gotWords), len(wantWords))
+	}
+
+	// (a) every original line still starts its own wrapped line: the
+	// cumulative word offsets are a subset of the output line boundaries.
+	total := len(wantWords)
+	orig := map[int]bool{}
+	n := 0
+	for _, line := range strings.Split(helpBody, "\n") {
+		n += len(strings.Fields(line))
+		orig[n] = true
+	}
+	outBounds := map[int]bool{}
+	n = 0
+	for _, line := range strings.Split(got, "\n") {
+		n += len(strings.Fields(line))
+		outBounds[n] = true
+	}
+	for off := range orig {
+		if off == 0 || off == total {
+			continue
+		}
+		if !outBounds[off] {
+			t.Errorf("original line ending at word %d was merged into the next line", off)
+		}
+	}
+
+	// Width is respected in display columns.
+	for _, line := range strings.Split(got, "\n") {
+		if w := displayWidth(line); w > width {
+			t.Errorf("wrapped line is %d columns wide, want <= %d: %q", w, width, line)
+		}
+	}
+
+	// The old bug's exact symptom: the long /export line glued onto /cron.
+	if strings.Contains(got, "confirm)/export") {
+		t.Error("/cron line was glued together with the /export line")
+	}
+}
+
+func TestWordWrap_MeasuresDisplayColumnsNotBytes(t *testing.T) {
+	// 27 display columns, but ~50 bytes: the byte-based wrapper wrapped it
+	// even though it fits.
+	line := "żółć żółć — gęślą jaźń żółć"
+	if displayWidth(line) > 30 || len(line) <= 30 {
+		t.Fatalf("test line is not the intended shape: width=%d bytes=%d", displayWidth(line), len(line))
+	}
+	if got := wordWrap(line, 30); got != line {
+		t.Errorf("wordWrap wrapped a line that fits in display columns:\n%q", got)
+	}
+
+	// When it must wrap, every line still fits in display columns and no
+	// words are lost.
+	const narrow = 20
+	got := wordWrap(line, narrow)
+	lines := strings.Split(got, "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected the line to wrap at %d columns, got %q", narrow, got)
+	}
+	for _, l := range lines {
+		if w := displayWidth(l); w > narrow {
+			t.Errorf("line is %d display columns, want <= %d: %q", w, narrow, l)
+		}
+	}
+	if strings.Join(strings.Fields(got), " ") != strings.Join(strings.Fields(line), " ") {
+		t.Errorf("words changed while wrapping: %q", got)
+	}
+}
+
+func TestWordWrap_HardBreaksAnOverlongToken(t *testing.T) {
+	token := "/home/hermes/.lucinate/transcripts/2026/11/04/session-20261103_235014_cf2e19-export.md"
+	const width = 40
+	got := wordWrap(token, width)
+	lines := strings.Split(got, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected the token to span at least 3 lines, got %q", got)
+	}
+	for _, line := range lines {
+		if w := displayWidth(line); w > width {
+			t.Errorf("hard-broken line is %d columns, want <= %d: %q", w, width, line)
+		}
+	}
+	// Nothing inserted, nothing lost: dropping the inserted newlines must
+	// reproduce the token byte for byte.
+	if reassembled := strings.ReplaceAll(got, "\n", ""); reassembled != token {
+		t.Errorf("hard break altered the token:\n got %q\nwant %q", reassembled, token)
+	}
+}
+
 func TestIndentMultiline(t *testing.T) {
 	got := indentMultiline("first\nsecond\nthird", "      ")
 	want := "first\n      second\n      third"
@@ -334,6 +431,11 @@ func TestRenderPendingMessages(t *testing.T) {
 	footer := ansi.Strip(m.renderPendingMessages())
 	if !strings.Contains(footer, "first queued") || !strings.Contains(footer, "second queued") {
 		t.Errorf("footer should list every queued message, got %q", footer)
+	}
+	// A text marker survives terminals that drop Faint/italic, where a
+	// queued message otherwise looks identical to a sent one.
+	if !strings.Contains(footer, "You (queued):") {
+		t.Errorf("queued prefix should be textual, got %q", footer)
 	}
 	if h := m.pendingHeight(); h < 2 {
 		t.Errorf("two queued messages should reserve at least 2 rows, got %d", h)
@@ -821,5 +923,52 @@ func TestNarrowLayout_Threshold(t *testing.T) {
 					tt.width, tt.agentName, got, tt.wantNarrow)
 			}
 		})
+	}
+}
+
+// The header's token block used to vanish entirely when it did not fit —
+// a byte-based padding check dropped the whole right side. It must degrade
+// (full → compact → percentage) and keep the title inside the width.
+func TestChatHeader_DegradesTokenBlockInsteadOfDroppingIt(t *testing.T) {
+	m := chatModel{
+		width:         120,
+		agentName:     "scout",
+		contextWindow: 200_000,
+		promptTokens:  12_000,
+		stats:         &sessionStats{totalCost: 0.42},
+	}
+
+	full := ansi.Strip(m.headerView())
+	if !strings.Contains(full, "tokens:") || !strings.Contains(full, "$0.42") {
+		t.Fatalf("wide header should show the full token block, got %q", full)
+	}
+
+	m.width = 40
+	compact := ansi.Strip(m.headerView())
+	if strings.Contains(compact, "tokens:") {
+		t.Errorf("narrow header should use the compact form, got %q", compact)
+	}
+	if !strings.Contains(compact, "12k/200k") || !strings.Contains(compact, "$0.42") {
+		t.Errorf("compact form lost the numbers, got %q", compact)
+	}
+
+	m.width = 30
+	pct := ansi.Strip(m.headerView())
+	if !strings.Contains(pct, "6%") {
+		t.Errorf("narrowest fitting form should keep the percentage, got %q", pct)
+	}
+	if strings.Contains(pct, "$") {
+		t.Errorf("percentage form should not keep the cost, got %q", pct)
+	}
+
+	m.width = 20
+	tiny := m.headerView()
+	for _, line := range strings.Split(tiny, "\n") {
+		if w := ansi.StringWidth(line); w > 20 {
+			t.Errorf("header line is %d columns at width 20: %q", w, ansi.Strip(line))
+		}
+	}
+	if !strings.Contains(ansi.Strip(tiny), "6%") {
+		t.Errorf("token percentage was dropped even though it fits, got %q", ansi.Strip(tiny))
 	}
 }

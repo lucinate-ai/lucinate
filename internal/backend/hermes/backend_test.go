@@ -31,8 +31,10 @@ type fakeGateway struct {
 
 	handlersMu sync.Mutex
 	handlers   map[string]func(id uint64, params json.RawMessage)
+	callCounts map[string]int
 
-	calls chan gatewayCall
+	calls     chan gatewayCall
+	responses chan gatewayResponse
 }
 
 type gatewayCall struct {
@@ -40,13 +42,35 @@ type gatewayCall struct {
 	Params json.RawMessage
 }
 
+// gatewayResponse is a JSON-RPC answer the client wrote for one of the
+// server→client requests the fake pushed.
+type gatewayResponse struct {
+	ID     json.RawMessage
+	Result json.RawMessage
+	Error  *gatewayError
+}
+
+// rawID renders an id the way it appears on the wire: a number stays a
+// number, a string keeps its quotes.
+func rawID(id any) string {
+	b, _ := json.Marshal(id)
+	return string(b)
+}
+
+type gatewayError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
 func newFakeGateway(t *testing.T, token string) *fakeGateway {
 	t.Helper()
 	g := &fakeGateway{
-		t:        t,
-		token:    token,
-		handlers: map[string]func(uint64, json.RawMessage){},
-		calls:    make(chan gatewayCall, 64),
+		t:          t,
+		token:      token,
+		handlers:   map[string]func(uint64, json.RawMessage){},
+		callCounts: map[string]int{},
+		calls:      make(chan gatewayCall, 64),
+		responses:  make(chan gatewayResponse, 64),
 	}
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	g.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,25 +100,40 @@ func (g *fakeGateway) serve(conn *websocket.Conn) {
 			return
 		}
 		var req struct {
-			ID     uint64          `json:"id"`
+			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params json.RawMessage `json:"params"`
+			Result json.RawMessage `json:"result"`
+			Error  *gatewayError   `json:"error"`
 		}
-		if json.Unmarshal(data, &req) != nil || req.Method == "" {
+		if json.Unmarshal(data, &req) != nil {
+			continue
+		}
+		if req.Method == "" {
+			// A response the client wrote for a server→client request.
+			if len(req.ID) > 0 {
+				select {
+				case g.responses <- gatewayResponse{ID: req.ID, Result: req.Result, Error: req.Error}:
+				default:
+				}
+			}
 			continue
 		}
 		select {
 		case g.calls <- gatewayCall{Method: req.Method, Params: req.Params}:
 		default:
 		}
+		var id uint64
+		_ = json.Unmarshal(req.ID, &id)
 		g.handlersMu.Lock()
+		g.callCounts[req.Method]++
 		h := g.handlers[req.Method]
 		g.handlersMu.Unlock()
 		if h != nil {
-			h(req.ID, req.Params)
+			h(id, req.Params)
 			continue
 		}
-		g.respond(req.ID, map[string]any{})
+		g.respond(id, map[string]any{})
 	}
 }
 
@@ -118,6 +157,39 @@ func (g *fakeGateway) respond(id uint64, result any) {
 
 func (g *fakeGateway) push(params any) {
 	g.write(map[string]any{"jsonrpc": "2.0", "method": "event", "params": params})
+}
+
+// request pushes a server→client JSON-RPC request, the gateway's real
+// transport for approval/clarify/sudo/secret.
+func (g *fakeGateway) request(id any, method string, params any) {
+	g.write(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+}
+
+// waitResponse blocks until the client answers the request with id. The
+// comparison is on the raw wire form, so a string id must come back as a
+// string.
+func (g *fakeGateway) waitResponse(id any) gatewayResponse {
+	g.t.Helper()
+	want := rawID(id)
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case r := <-g.responses:
+			if string(r.ID) == want {
+				return r
+			}
+		case <-deadline:
+			g.t.Fatalf("timed out waiting for a response to request %s", want)
+			return gatewayResponse{}
+		}
+	}
+}
+
+// countCall reports how many times the client called method.
+func (g *fakeGateway) countCall(method string) int {
+	g.handlersMu.Lock()
+	defer g.handlersMu.Unlock()
+	return g.callCounts[method]
 }
 
 // waitCall blocks until the gateway has observed a call to method.
@@ -217,6 +289,49 @@ func TestConnect_HandshakeAndAgentSnapshot(t *testing.T) {
 	}
 }
 
+// model.options on the live gateway sends provider models as plain
+// "provider/model" strings, not {id,name} objects. Decoding only the object
+// shape made /model fail with "cannot unmarshal string into Go struct";
+// both shapes must be accepted.
+func TestModelsList_AcceptsStringAndObjectModels(t *testing.T) {
+	g := newFakeGateway(t, "tok")
+	g.on("model.options", func(id uint64, _ json.RawMessage) {
+		g.respond(id, json.RawMessage(`{
+			"providers":[{
+				"slug":"nous","name":"Nous Portal","is_current":false,"is_user_defined":false,
+				"models":["anthropic/claude-fable-5.1","openai/gpt-6-astra"],
+				"total_models":461
+			},{
+				"slug":"legacy","name":"Legacy","models":[{"id":"legacy/model","name":"Legacy Model"}]
+			}],
+			"model":"deepseek/deepseek-v4.1-flash",
+			"provider":"commandcode"
+		}`))
+	})
+	b := newTestBackend(t, g, "tok")
+	connectBackend(t, b)
+
+	res, err := b.ModelsList(context.Background())
+	if err != nil {
+		t.Fatalf("ModelsList: %v", err)
+	}
+	got := map[string]string{}
+	for _, m := range res.Models {
+		got[m.ID] = m.Name
+	}
+	for _, id := range []string{"deepseek/deepseek-v4.1-flash", "anthropic/claude-fable-5.1", "openai/gpt-6-astra", "legacy/model"} {
+		if _, ok := got[id]; !ok {
+			t.Errorf("model %q missing from %v", id, res.Models)
+		}
+	}
+	if got["legacy/model"] != "Legacy Model" {
+		t.Errorf("object-shaped entry name = %q, want Legacy Model", got["legacy/model"])
+	}
+	if got["anthropic/claude-fable-5.1"] != "anthropic/claude-fable-5.1" {
+		t.Errorf("string-shaped entry name = %q, want the id", got["anthropic/claude-fable-5.1"])
+	}
+}
+
 // A rejected upgrade (bad token → HTTP 403) maps to the canonical
 // api-key-required error so the connecting view opens the token modal.
 func TestConnect_BadTokenRoutesToAuthModal(t *testing.T) {
@@ -284,10 +399,11 @@ func TestSessions_CreateAndList(t *testing.T) {
 	}
 	var list struct {
 		Sessions []struct {
-			Key         string `json:"key"`
-			Title       string `json:"title"`
-			LastMessage string `json:"lastMessage"`
-			UpdatedAt   int64  `json:"updatedAt"`
+			Key                string `json:"key"`
+			DerivedTitle       string `json:"derivedTitle"`
+			LastMessagePreview string `json:"lastMessagePreview"`
+			UpdatedAt          int64  `json:"updatedAt"`
+			Source             string `json:"source"`
 		} `json:"sessions"`
 	}
 	if err := json.Unmarshal(raw, &list); err != nil {
@@ -297,8 +413,11 @@ func TestSessions_CreateAndList(t *testing.T) {
 		t.Fatalf("sessions = %+v", list.Sessions)
 	}
 	s := list.Sessions[0]
-	if s.Key != "20260719_000000_stored" || s.Title != "Greetings" || s.LastMessage != "hello" || s.UpdatedAt == 0 {
+	if s.Key != "20260719_000000_stored" || s.DerivedTitle != "Greetings" || s.LastMessagePreview != "hello" || s.UpdatedAt == 0 {
 		t.Fatalf("mapped entry = %+v", s)
+	}
+	if s.Source != "tui" {
+		t.Fatalf("source = %q, want the gateway's tui", s.Source)
 	}
 }
 
@@ -416,42 +535,335 @@ func TestChatAbort_SurfacesAborted(t *testing.T) {
 	waitChatEvent(t, b, "aborted")
 }
 
-// An interactive ask is auto-declined via the paired respond RPC and a
-// visible System: notice rides the streaming text.
-func TestInteractiveAsk_AutoDeclined(t *testing.T) {
-	g := newFakeGateway(t, "tok")
-	onCreateSession(g)
-	g.on("prompt.submit", func(id uint64, params json.RawMessage) {
-		var p struct {
-			SessionID string `json:"session_id"`
+// waitAskEvent reads events until an ask-stream agent event arrives and
+// returns its data map.
+func waitAskEvent(t *testing.T, b *Backend) map[string]any {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-b.Events():
+			if ev.EventName != protocol.EventAgent {
+				continue
+			}
+			var ae protocol.AgentEvent
+			if json.Unmarshal(ev.Payload, &ae) != nil || ae.Stream != "ask" {
+				continue
+			}
+			return ae.Data
+		case <-deadline:
+			t.Fatalf("timed out waiting for an ask event")
 		}
-		_ = json.Unmarshal(params, &p)
-		g.respond(id, map[string]any{"status": "streaming"})
-		g.push(map[string]any{"type": "message.start", "session_id": p.SessionID})
-		g.push(map[string]any{"type": "clarify.request", "session_id": p.SessionID,
-			"payload": map[string]any{"question": "Which file?", "request_id": "req9"}})
+	}
+}
+
+// waitAskKind reads events until the ask event of the given kind and
+// request id arrives.
+func waitAskKind(t *testing.T, b *Backend, kind, requestID string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev := <-b.Events():
+			var ae protocol.AgentEvent
+			if ev.EventName != protocol.EventAgent || json.Unmarshal(ev.Payload, &ae) != nil || ae.Stream != "ask" {
+				continue
+			}
+			if ae.Data["kind"] == kind && ae.Data["requestId"] == requestID {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for ask %s %q", kind, requestID)
+		}
+	}
+}
+
+// assertNoResponse fails if the client answers request id within d, draining
+// any other responses it sees on the way.
+func (g *fakeGateway) assertNoResponse(t *testing.T, id any, d time.Duration) {
+	t.Helper()
+	want := rawID(id)
+	deadline := time.After(d)
+	for {
+		select {
+		case r := <-g.responses:
+			if string(r.ID) == want {
+				t.Fatalf("unexpected response for request %s: %+v", want, r)
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
+// assertNoAskEvent drains events for d and fails on any ask event.
+func assertNoAskEvent(t *testing.T, b *Backend, d time.Duration) {
+	t.Helper()
+	deadline := time.After(d)
+	for {
+		select {
+		case ev := <-b.Events():
+			var ae protocol.AgentEvent
+			if ev.EventName == protocol.EventAgent && json.Unmarshal(ev.Payload, &ae) == nil && ae.Stream == "ask" {
+				t.Fatalf("unexpected ask event: %+v", ae.Data)
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
+
+// newTestBackendWithAskTimeout is newTestBackend with a short ask wait so
+// the timeout path can be exercised without a ten-minute test.
+func newTestBackendWithAskTimeout(t *testing.T, g *fakeGateway, token string, d time.Duration) *Backend {
+	t.Helper()
+	b, err := New(Options{
+		ConnectionID:   "test-conn",
+		BaseURL:        g.srv.URL,
+		APIKey:         token,
+		ConnectTimeout: 3 * time.Second,
+		AskTimeout:     d,
 	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = b.Close() })
+	return b
+}
+
+// The backend advertises server_requests once per connection, right after
+// the handshake.
+func TestConnect_AdvertisesServerRequestsOnce(t *testing.T) {
+	g := newFakeGateway(t, "tok")
 	b := newTestBackend(t, g, "tok")
 	connectBackend(t, b)
-	key, _ := b.CreateSession(context.Background(), syntheticAgentID, "")
-	if _, err := b.ChatSend(context.Background(), key, backend.ChatSendParams{Message: "go"}); err != nil {
-		t.Fatalf("ChatSend: %v", err)
-	}
 
-	delta := waitChatEvent(t, b, "delta")
-	if got := backend.ExtractChatText(delta.Message); !strings.Contains(got, "System: ") || !strings.Contains(got, "clarify") {
-		t.Fatalf("decline notice missing: %q", got)
-	}
-
-	call := g.waitCall("clarify.respond")
+	call := g.waitCall("client.capabilities")
 	var p struct {
-		SessionID string `json:"session_id"`
-		RequestID string `json:"request_id"`
+		ServerRequests bool `json:"server_requests"`
 	}
 	_ = json.Unmarshal(call.Params, &p)
-	if p.RequestID != "req9" || p.SessionID != "live1" {
-		t.Fatalf("clarify.respond params = %s", call.Params)
+	if !p.ServerRequests {
+		t.Fatalf("client.capabilities params = %s", call.Params)
 	}
+	if n := g.countCall("client.capabilities"); n != 1 {
+		t.Fatalf("client.capabilities called %d times, want once", n)
+	}
+}
+
+// An inbound approval JSON-RPC request becomes an ask event carrying the
+// rpc id, and the user's answer is the JSON-RPC response for that id.
+func TestServerRequest_ApprovalAnswered(t *testing.T) {
+	g := newFakeGateway(t, "tok")
+	b := newTestBackend(t, g, "tok")
+	connectBackend(t, b)
+
+	g.request(7, "approval", map[string]any{
+		"session_id":  "live1",
+		"prompt_id":   "p1",
+		"command":     "rm -rf build",
+		"description": "The agent wants to remove the build directory.",
+		"choices":     []string{"deny", "once", "session", "always"},
+	})
+	data := waitAskEvent(t, b)
+	if data["kind"] != "approval" || data["rpcId"] != float64(7) {
+		t.Fatalf("ask data = %+v", data)
+	}
+	if data["command"] != "rm -rf build" || data["description"] == "" {
+		t.Fatalf("ask data = %+v", data)
+	}
+	if choices, _ := data["choices"].([]any); len(choices) != 4 {
+		t.Fatalf("choices = %+v", data["choices"])
+	}
+	g.assertNoResponse(t, 7, 100*time.Millisecond)
+
+	if err := b.RespondAsk(context.Background(), backend.AskResponse{
+		SessionKey: "live1", RequestID: "p1", RPCID: rawID(7), Kind: "approval", Choice: "once",
+	}); err != nil {
+		t.Fatalf("RespondAsk: %v", err)
+	}
+	res := g.waitResponse(7)
+	var out struct {
+		Choice string `json:"choice"`
+	}
+	_ = json.Unmarshal(res.Result, &out)
+	if res.Error != nil || out.Choice != "once" {
+		t.Fatalf("approval response = %+v (%s)", res, res.Result)
+	}
+}
+
+// The live gateway ids requests with strings ("srq-…"); the answer must
+// carry exactly that string id back, not a number.
+func TestServerRequest_StringIDAnsweredVerbatim(t *testing.T) {
+	g := newFakeGateway(t, "tok")
+	b := newTestBackend(t, g, "tok")
+	connectBackend(t, b)
+
+	g.request("srq-abc123", "approval", map[string]any{
+		"prompt_id": "p6",
+		"command":   "ls",
+		"choices":   []string{"deny", "once"},
+	})
+	data := waitAskEvent(t, b)
+	if data["rpcId"] != "srq-abc123" {
+		t.Fatalf("rpcId = %v, want the string id", data["rpcId"])
+	}
+	g.assertNoResponse(t, "srq-abc123", 100*time.Millisecond)
+
+	if err := b.RespondAsk(context.Background(), backend.AskResponse{
+		RequestID: "p6", RPCID: rawID("srq-abc123"), Kind: "approval", Choice: "once",
+	}); err != nil {
+		t.Fatalf("RespondAsk: %v", err)
+	}
+	res := g.waitResponse("srq-abc123")
+	var out struct {
+		Choice string `json:"choice"`
+	}
+	_ = json.Unmarshal(res.Result, &out)
+	if string(res.ID) != `"srq-abc123"` || out.Choice != "once" {
+		t.Fatalf("response = id %s result %s", res.ID, res.Result)
+	}
+}
+
+// A choice outside params.choices is replaced by deny before it is sent.
+func TestServerRequest_ChoiceOutsideOfferedBecomesDeny(t *testing.T) {
+	g := newFakeGateway(t, "tok")
+	b := newTestBackend(t, g, "tok")
+	connectBackend(t, b)
+
+	g.request(8, "approval", map[string]any{
+		"prompt_id": "p2",
+		"command":   "ls",
+		"choices":   []string{"deny", "once", "always"},
+	})
+	waitAskEvent(t, b)
+	if err := b.RespondAsk(context.Background(), backend.AskResponse{
+		RequestID: "p2", RPCID: rawID(8), Kind: "approval", Choice: "allow-once",
+	}); err != nil {
+		t.Fatalf("RespondAsk: %v", err)
+	}
+	res := g.waitResponse(8)
+	var out struct {
+		Choice string `json:"choice"`
+	}
+	_ = json.Unmarshal(res.Result, &out)
+	if out.Choice != "deny" {
+		t.Fatalf("choice = %q, want deny", out.Choice)
+	}
+}
+
+// clarify carries questions[]; the answer is {answers:{qid:text}, outcome}.
+func TestServerRequest_ClarifyAnswered(t *testing.T) {
+	g := newFakeGateway(t, "tok")
+	b := newTestBackend(t, g, "tok")
+	connectBackend(t, b)
+
+	g.request(9, "clarify", map[string]any{
+		"session_id": "live1",
+		"questions": []map[string]any{
+			{"qid": "q0", "question": "Which file?", "choices": []string{"main.go", "README.md"}, "multi_select": false},
+		},
+	})
+	data := waitAskEvent(t, b)
+	if data["kind"] != "clarify" || data["rpcId"] != float64(9) {
+		t.Fatalf("ask data = %+v", data)
+	}
+	if data["question"] != "Which file?" {
+		t.Fatalf("question = %v", data["question"])
+	}
+	if _, ok := data["questions"].([]any); !ok {
+		t.Fatalf("questions missing: %+v", data)
+	}
+	g.assertNoResponse(t, 9, 100*time.Millisecond)
+
+	if err := b.RespondAsk(context.Background(), backend.AskResponse{
+		SessionKey: "live1", RequestID: "rpc-9", RPCID: rawID(9), Kind: "clarify", Answer: "README.md",
+	}); err != nil {
+		t.Fatalf("RespondAsk: %v", err)
+	}
+	res := g.waitResponse(9)
+	var out struct {
+		Answers map[string]any `json:"answers"`
+		Outcome string         `json:"outcome"`
+	}
+	_ = json.Unmarshal(res.Result, &out)
+	if out.Outcome != "submitted" || out.Answers["q0"] != "README.md" {
+		t.Fatalf("clarify response = %s", res.Result)
+	}
+}
+
+// sudo/secret are answered -32601 at once so the gateway does not wait, and
+// no panel is raised.
+func TestServerRequest_SudoFastFails(t *testing.T) {
+	for _, method := range []string{"sudo", "secret"} {
+		t.Run(method, func(t *testing.T) {
+			g := newFakeGateway(t, "tok")
+			b := newTestBackend(t, g, "tok")
+			connectBackend(t, b)
+
+			g.request(10, method, map[string]any{"prompt_id": "p3"})
+			res := g.waitResponse(10)
+			if res.Error == nil || res.Error.Code != -32601 {
+				t.Fatalf("%s response = %+v", method, res)
+			}
+			assertNoAskEvent(t, b, 100*time.Millisecond)
+		})
+	}
+}
+
+// An unanswered ask is answered deny/cancelled once the shortened timeout
+// fires, and a late answer is dropped.
+func TestServerRequest_TimeoutResponds(t *testing.T) {
+	g := newFakeGateway(t, "tok")
+	b := newTestBackendWithAskTimeout(t, g, "tok", 20*time.Millisecond)
+	connectBackend(t, b)
+
+	g.request(11, "approval", map[string]any{
+		"prompt_id": "p4",
+		"command":   "ls",
+		"choices":   []string{"deny", "once"},
+	})
+	waitAskEvent(t, b)
+
+	res := g.waitResponse(11)
+	var out struct {
+		Choice string `json:"choice"`
+	}
+	_ = json.Unmarshal(res.Result, &out)
+	if out.Choice != "deny" {
+		t.Fatalf("timeout response = %+v (%s)", res, res.Result)
+	}
+
+	if err := b.RespondAsk(context.Background(), backend.AskResponse{
+		RequestID: "p4", RPCID: rawID(11), Kind: "approval", Choice: "once",
+	}); err != nil {
+		t.Fatalf("late RespondAsk should be a no-op: %v", err)
+	}
+	g.assertNoResponse(t, 11, 100*time.Millisecond)
+}
+
+// request.cancel withdraws the pending ask: a later answer is dropped.
+func TestServerRequest_CancelDropsPending(t *testing.T) {
+	g := newFakeGateway(t, "tok")
+	b := newTestBackend(t, g, "tok")
+	connectBackend(t, b)
+
+	g.request(12, "approval", map[string]any{
+		"prompt_id": "p5",
+		"command":   "ls",
+		"choices":   []string{"deny", "once"},
+	})
+	waitAskEvent(t, b)
+	g.push(map[string]any{"type": "request.cancel", "session_id": "live1",
+		"payload": map[string]any{"prompt_id": "p5"}})
+	waitAskKind(t, b, "cancel", "p5")
+
+	if err := b.RespondAsk(context.Background(), backend.AskResponse{
+		RequestID: "p5", RPCID: rawID(12), Kind: "approval", Choice: "once",
+	}); err != nil {
+		t.Fatalf("RespondAsk: %v", err)
+	}
+	g.assertNoResponse(t, 12, 100*time.Millisecond)
 }
 
 // ChatHistory maps the gateway transcript into the TUI shape,

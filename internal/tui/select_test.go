@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // loadAgents seeds the picker with a set of agents via agentsLoadedMsg,
@@ -1266,5 +1267,53 @@ func TestSelectModel_AutoPickName_OneShot(t *testing.T) {
 	// nor the (now-cleared) override should fire.
 	if m.selected {
 		t.Error("autoPickName should be one-shot; second load must not re-pick")
+	}
+}
+
+// TestSelectModel_QuitKeysUnbound pins the fix for `v` quitting the whole
+// app from the picker: bubbles' list Quit binding is `v` (help text
+// "select"), so it must be unbound whatever the host, and the rendered
+// footer must not advertise it.
+func TestSelectModel_QuitKeysUnbound(t *testing.T) {
+	for _, disable := range []bool{false, true} {
+		m := newSelectModel(nil, false, false, nil, disable, "")
+		if keys := m.list.KeyMap.Quit.Keys(); len(keys) != 0 {
+			t.Errorf("disableExitKeys=%v: Quit still bound to %v", disable, keys)
+		}
+		if keys := m.list.KeyMap.ForceQuit.Keys(); len(keys) != 0 {
+			t.Errorf("disableExitKeys=%v: ForceQuit still bound to %v", disable, keys)
+		}
+		m.loading = false
+		m.allowAgentManagement = true
+		_, cmd := m.Update(tea.KeyPressMsg{Code: 'v'})
+		if cmd != nil {
+			if _, quit := cmd().(tea.QuitMsg); quit {
+				t.Fatalf("disableExitKeys=%v: pressing v emitted tea.Quit", disable)
+			}
+		}
+	}
+}
+
+// TestSelectModel_HintVisibleAt80x24 is the layout regression: with the
+// banner, the list and a wrapped hint line the old h-2 sizing pushed the
+// hint off the bottom of a 24-row terminal.
+func TestSelectModel_HintVisibleAt80x24(t *testing.T) {
+	conn := &config.Connection{ID: "c1", Name: "local", URL: "http://localhost:9119", Type: config.ConnTypeOpenClaw}
+	m := newSelectModel(nil, false, false, conn, false, "")
+	m.allowAgentManagement = true
+	m.showConnections = true
+	m = loadAgents(m, protocol.AgentSummary{ID: "main", Name: "My Agent"}, protocol.AgentSummary{ID: "other", Name: "Other"})
+	m.setSize(80, 24)
+
+	view := m.View()
+	if strings.Contains(view, "v select") || strings.Contains(view, "? more") {
+		t.Errorf("widget footer keys must not be advertised, got:\n%s", view)
+	}
+	if !strings.Contains(view, "n: new agent") {
+		t.Errorf("expected the app-owned action hint, got:\n%s", view)
+	}
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(lines) > 24 {
+		t.Errorf("view is %d rows at 80x24; hint row is clipped", len(lines))
 	}
 }

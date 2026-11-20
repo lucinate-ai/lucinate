@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -9,16 +10,20 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/a3tai/openclaw-go/protocol"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/lucinate-ai/lucinate/internal/backend"
 )
 
 func newSlashTestModel() *chatModel {
 	vp := viewport.New()
 	return &chatModel{
-		viewport:  vp,
-		backend:   newFakeBackend(),
-		agentName: "test",
-		width:     80,
-		height:    30,
+		viewport:   vp,
+		backend:    newFakeBackend(),
+		agentName:  "test",
+		sessionKey: "default::20260101_000000_test",
+		width:      80,
+		height:     30,
 		messages: []chatMessage{
 			{role: "user", content: "hello"},
 			{role: "assistant", content: "hi there"},
@@ -73,6 +78,31 @@ func TestSlashCommand_Exit(t *testing.T) {
 	}
 	if _, ok := cmd().(requestExitMsg); !ok {
 		t.Fatalf("expected requestExitMsg, got %T", cmd())
+	}
+}
+
+// esc is "back" on every other screen; on the chat screen it used to be a
+// dead key, so leaving chat required knowing /agents — which the footer never
+// mentioned. With nothing in flight it must now land on the agent picker.
+func TestChatEsc_WithNothingInFlightGoesBackToTheAgentPicker(t *testing.T) {
+	m := newSlashTestModel()
+	next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected esc to arm a navigation")
+	}
+	if _, ok := cmd().(goBackMsg); !ok {
+		t.Fatalf("expected goBackMsg, got %T", cmd())
+	}
+	if next.pendingNavConfirm != nil {
+		t.Error("esc with nothing in flight must not ask for confirmation")
+	}
+}
+
+// The footer is the only place a first-run user reads how to leave.
+func TestChatFooter_MentionsEscBack(t *testing.T) {
+	m := newSlashTabTestModel()
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "esc: back") {
+		t.Fatalf("chat footer does not advertise esc: back:\n%s", got)
 	}
 }
 
@@ -301,7 +331,7 @@ func TestSlashCommand_Help(t *testing.T) {
 	}
 
 	// Every advertised command should appear in the help text.
-	for _, want := range []string{"/quit", "/exit", "/agents", "/clear", "/model", "/sessions", "/stats", "/skills", "/help"} {
+	for _, want := range []string{"/quit", "/exit", "/agents", "/clear", "/model", "/sessions", "/rooms", "/routines", "/routine", "/stats", "/skills", "/help"} {
 		if !strings.Contains(last.content, want) {
 			t.Errorf("/help text missing %q\ngot: %s", want, last.content)
 		}
@@ -319,8 +349,13 @@ func TestSlashCommand_Help_MentionsSkillsWhenLoaded(t *testing.T) {
 	}
 }
 
-func TestSlashCommand_Stats_NotLoaded(t *testing.T) {
+// noUsageBackend hides SessionUsage: /stats must say it is unavailable
+// instead of promising a load that can never fill m.stats.
+type noUsageBackend struct{ backend.Backend }
+
+func TestSlashCommand_Stats_LoadsAndReports(t *testing.T) {
 	m := newSlashTestModel()
+	m.backend.(*fakeBackend).usageRaw = json.RawMessage(`{"totals":{"input":100,"output":20,"totalCost":0.5},"aggregates":{"messages":{"total":3,"user":2,"assistant":1}}}`)
 	initialCount := len(m.messages)
 
 	handled, cmd := m.handleSlashCommand("/stats")
@@ -328,14 +363,86 @@ func TestSlashCommand_Stats_NotLoaded(t *testing.T) {
 		t.Fatal("expected /stats to be handled")
 	}
 	if cmd == nil {
-		t.Error("expected a loadStats cmd when stats are nil")
+		t.Fatal("expected a loadStats cmd when stats are nil")
+	}
+	if !m.statsRequested {
+		t.Error("expected the model to remember that /stats is waiting for the load")
 	}
 	if len(m.messages) != initialCount+1 {
 		t.Fatalf("expected %d messages, got %d", initialCount+1, len(m.messages))
 	}
-	last := m.messages[len(m.messages)-1]
-	if last.role != "system" || !strings.Contains(last.content, "not yet loaded") {
-		t.Errorf("unexpected system message: %+v", last)
+	if last := m.messages[len(m.messages)-1]; !strings.Contains(last.content, "Loading session stats") {
+		t.Errorf("unexpected placeholder: %+v", last)
+	}
+
+	// The load result must turn the placeholder into the real table, not
+	// leave the user to type /stats again.
+	next, _ := m.Update(cmd())
+	if next.stats == nil {
+		t.Fatal("stats were not stored from the load result")
+	}
+	if next.statsRequested {
+		t.Error("statsRequested should be cleared once the result is reported")
+	}
+	last := next.messages[len(next.messages)-1]
+	if last.role != "system" || !strings.Contains(last.content, "Input") || !strings.Contains(last.content, "Total") {
+		t.Fatalf("expected the stats table, got: %+v", last)
+	}
+}
+
+// /stats must send the chat's own session key: the backend resolves the
+// live handle from it, and an empty key made the gateway answer
+// "session_id required" on every call.
+func TestSlashCommand_Stats_SendsTheSessionKey(t *testing.T) {
+	m := newSlashTestModel()
+	m.sessionKey = "default::20261104_000647_948b23"
+	m.backend.(*fakeBackend).usageRaw = json.RawMessage(`{"totals":{"input":1,"output":2},"aggregates":{"messages":{"total":1}}}`)
+
+	handled, cmd := m.handleSlashCommand("/stats")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /stats to arm a load (handled=%v cmd=%v)", handled, cmd)
+	}
+	next, _ := m.Update(cmd())
+	keys := next.backend.(*fakeBackend).usageKeys
+	if len(keys) != 1 || keys[0] != m.sessionKey {
+		t.Fatalf("SessionUsage keys = %v, want [%q]", keys, m.sessionKey)
+	}
+}
+
+func TestSlashCommand_Stats_UnavailableBackend(t *testing.T) {
+	m := newSlashTestModel()
+	m.backend = noUsageBackend{}
+
+	for i := 0; i < 2; i++ {
+		handled, cmd := m.handleSlashCommand("/stats")
+		if !handled {
+			t.Fatal("expected /stats to be handled")
+		}
+		if cmd != nil {
+			t.Error("a backend without usage must not arm a load that cannot succeed")
+		}
+		last := m.messages[len(m.messages)-1]
+		if last.role != "system" || !strings.Contains(last.errMsg, "/stats is not available on this connection") {
+			t.Fatalf("call %d: expected an honest unavailable message, got %+v", i+1, last)
+		}
+	}
+}
+
+func TestSlashCommand_Stats_LoadFailureIsReported(t *testing.T) {
+	m := newSlashTestModel()
+	m.backend.(*fakeBackend).usageErr = errors.New("gateway exploded")
+
+	_, cmd := m.handleSlashCommand("/stats")
+	if cmd == nil {
+		t.Fatal("expected a loadStats cmd")
+	}
+	next, _ := m.Update(cmd())
+	if next.statsRequested {
+		t.Error("statsRequested should be cleared after a failed load")
+	}
+	last := next.messages[len(next.messages)-1]
+	if last.role != "system" || !strings.Contains(last.errMsg, "Stats unavailable") || !strings.Contains(last.errMsg, "gateway exploded") {
+		t.Fatalf("expected the load failure reported, got %+v", last)
 	}
 }
 
@@ -1061,15 +1168,20 @@ func TestEscKey_WhileSending_CancelsTurn(t *testing.T) {
 	}
 }
 
-func TestEscKey_WhileIdle_NoOp(t *testing.T) {
+// esc with nothing in flight used to be a no-op; it is "back" now, so the
+// chat screen finally honours the vocabulary the rest of the app uses.
+func TestEscKey_WhileIdle_GoesBack(t *testing.T) {
 	m := newSlashTestModel()
 	m.sending = false
 	initialCount := len(m.messages)
 
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
-	if cmd != nil {
-		t.Error("expected nil cmd from Escape when not sending")
+	if cmd == nil {
+		t.Fatal("expected Escape to arm the back navigation")
+	}
+	if _, ok := cmd().(goBackMsg); !ok {
+		t.Errorf("expected goBackMsg, got %T", cmd())
 	}
 	if len(updated.messages) != initialCount {
 		t.Errorf("expected no new messages, got %d (was %d)", len(updated.messages), initialCount)

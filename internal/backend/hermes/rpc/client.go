@@ -6,8 +6,9 @@
 // The wire format is the tui_gateway one: each WebSocket text frame
 // carries one JSON-RPC object (upstream describes it as newline-
 // delimited, so frames are parsed tolerantly: a frame may carry several
-// newline-separated objects). Requests carry an id; server pushes are
-// notifications (method + params, no id).
+// newline-separated objects). Our requests carry an id; server pushes
+// are notifications (method + params, no id), and the gateway also sends
+// its own requests (id + method) that the caller answers with Respond.
 package rpc
 
 import (
@@ -16,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -61,14 +63,37 @@ type Notification struct {
 	Params json.RawMessage
 }
 
+// Request is a server→client JSON-RPC request: a frame carrying both an
+// id and a method. The client owns one id-space, the server another, so
+// an inbound id must never be mistaken for a response to our call.
+//
+// ID is kept as raw JSON because the gateway's server-side ids are
+// strings ("srq-1a2b3c") while our own call ids are numbers. Respond
+// must echo the id byte-for-byte, so the raw form travels with the
+// request.
+type Request struct {
+	ID     json.RawMessage
+	Method string
+	Params json.RawMessage
+}
+
 // frame is the superset of every JSON-RPC object we read: responses
 // carry ID plus Result or Error; notifications carry Method + Params.
+// ID is raw so an id of either JSON type decodes; a *uint64 would make
+// the whole frame fail to unmarshal on a string id and the request would
+// be dropped silently.
 type frame struct {
-	ID     *uint64         `json:"id,omitempty"`
+	ID     json.RawMessage `json:"id,omitempty"`
 	Method string          `json:"method,omitempty"`
 	Params json.RawMessage `json:"params,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Error  *RPCError       `json:"error,omitempty"`
+}
+
+// hasID reports whether the frame carried a usable id (present and not
+// null).
+func (f frame) hasID() bool {
+	return len(f.ID) > 0 && string(f.ID) != "null"
 }
 
 type request struct {
@@ -94,10 +119,11 @@ type Client struct {
 
 	nextID atomic.Uint64
 
-	// notifications is deliberately buffered: the read loop blocks when
-	// it fills, which also stalls call responses. The consumer (the
-	// backend's event pump) must drain it continuously.
+	// notifications and requests are deliberately buffered: the read
+	// loop blocks when either fills, which also stalls call responses.
+	// The consumer (the backend's pump) must drain both continuously.
 	notifications chan Notification
+	requests      chan Request
 
 	// closing is closed by Close() itself (not the read loop) so a
 	// dispatch blocked on a full notifications channel still unblocks;
@@ -124,6 +150,7 @@ func Dial(ctx context.Context, wsURL string, header http.Header) (*Client, error
 		conn:          conn,
 		pending:       make(map[uint64]chan frame),
 		notifications: make(chan Notification, 256),
+		requests:      make(chan Request, 64),
 		closing:       make(chan struct{}),
 		done:          make(chan struct{}),
 	}
@@ -192,6 +219,59 @@ func (c *Client) Call(ctx context.Context, method string, params any, out any) e
 // backend's event pump uses to stop.
 func (c *Client) Notifications() <-chan Notification {
 	return c.notifications
+}
+
+// Requests returns the channel of server→client requests (frames with
+// both an id and a method). The consumer must answer each one with
+// Respond or RespondError; the channel is closed when the connection
+// terminates.
+func (c *Client) Requests() <-chan Request {
+	return c.requests
+}
+
+// responseFrame is the answer we write for a server→client request. The
+// id is raw so a string id goes back as a string and a numeric one as a
+// number — the gateway matches callbacks by exact id.
+type responseFrame struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  any             `json:"result,omitempty"`
+	Error   *responseError  `json:"error,omitempty"`
+}
+
+type responseError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// Respond writes the JSON-RPC response frame for a server-initiated
+// request. It is the counterpart of Requests and must use the raw id that
+// arrived with the request, unchanged.
+func (c *Client) Respond(id json.RawMessage, result any) error {
+	return c.writeFrame(responseFrame{JSONRPC: "2.0", ID: id, Result: result})
+}
+
+// RespondError answers a server-initiated request with a JSON-RPC error
+// frame. The gateway settles the pending callback as soon as this lands.
+func (c *Client) RespondError(id json.RawMessage, code int, msg string) error {
+	return c.writeFrame(responseFrame{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error:   &responseError{Code: code, Message: msg},
+	})
+}
+
+func (c *Client) writeFrame(v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("rpc: marshal response: %w", err)
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		return fmt.Errorf("rpc: write response: %w", err)
+	}
+	return nil
 }
 
 // Done is closed when the read loop exits — either from Close or a
@@ -263,12 +343,29 @@ func (c *Client) readLoop() {
 	// each Call unregisters its own pending entry on the way out.
 	close(c.done)
 	close(c.notifications)
+	close(c.requests)
 }
 
 func (c *Client) dispatch(f frame) {
-	if f.ID != nil {
+	// A frame with both an id and a method is a server→client request,
+	// not a response to one of our calls. The two id-spaces are
+	// independent, so routing it by id would either drop it (no pending
+	// call) or, worse, settle an unrelated call.
+	if f.hasID() && f.Method != "" {
+		select {
+		case c.requests <- Request{ID: f.ID, Method: f.Method, Params: f.Params}:
+		case <-c.closing:
+		}
+		return
+	}
+	if f.hasID() {
+		var id uint64
+		if err := json.Unmarshal(f.ID, &id); err != nil {
+			slog.Debug("rpc: ignoring response with non-numeric id", "id", string(f.ID))
+			return
+		}
 		c.mu.Lock()
-		ch, ok := c.pending[*f.ID]
+		ch, ok := c.pending[id]
 		c.mu.Unlock()
 		if ok {
 			ch <- f // buffered; the Call side owns unregistering

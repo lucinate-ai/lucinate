@@ -15,6 +15,7 @@ import (
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/a3tai/openclaw-go/protocol"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/lucinate-ai/lucinate/internal/backend"
 	"github.com/lucinate-ai/lucinate/internal/client"
@@ -161,9 +162,9 @@ type chatModel struct {
 	agentID            string
 	agentName          string
 	sending            bool
-	runID              string // active run ID for cancellation
+	runID              string          // active run ID for cancellation
 	finalisedRuns      finalisedRunSet // bounded LRU of run IDs we have already finalised; chat events still bearing one of these IDs are stale duplicates emitted by the gateway after final and must not corrupt the next run's placeholder
-	gen                uint64 // generation counter stamped onto every newly-appended chatMessage; bumped after each turn finalises so the just-finalised turn can be replaced by a server-canonical refresh while the next turn's live state survives the merge
+	gen                uint64          // generation counter stamped onto every newly-appended chatMessage; bumped after each turn finalises so the just-finalised turn can be replaced by a server-canonical refresh while the next turn's live state survives the merge
 	pendingMessages    []string
 	historyBrowseIndex int    // bash-style up-arrow recall position; -1 when not browsing, 0 = most recent user message, N = N user messages back
 	historyBrowseValue string // textarea contents last placed by history navigation; lets repeated up/down keep walking until the user edits
@@ -171,6 +172,7 @@ type chatModel struct {
 	height             int
 	renderer           *glamour.TermRenderer
 	stats              *sessionStats
+	statsRequested     bool // /stats is waiting for a loadStats result to report (success or a real failure)
 	modelID            string
 	promptTokens       int // input + cache read + cache write for the latest turn (a per-session snapshot, not cumulative); 0 until first sessions.list refresh
 	contextWindow      int // model context capacity for the active session; 0 when unknown
@@ -197,6 +199,99 @@ type chatModel struct {
 	activeRoutine      *activeRoutine
 	recorder           *transcriptRecorder // non-nil while /record on is active; closed and cleared on /record off, session switch, or quit
 	activeTools        []toolActivity      // tools invoked during the current turn, in call order; rendered in the ephemeral strip above the input and cleared at the start of the next turn
+	ask                *pendingAsk         // a gateway approval/clarify question waiting for an answer; rendered above the input
+}
+
+// pendingAsk is one approval/clarify question the gateway is blocked on.
+// answer holds the free-text clarify buffer — deliberately separate from
+// the composer so nothing typed here can land in the user's draft.
+type pendingAsk struct {
+	sessionKey  string
+	requestID   string
+	rpcID       string // raw JSON id of the server→client request (string "srq-…" or a number)
+	kind        string // "approval" | "clarify"
+	question    string
+	choices     []string
+	command     string
+	description string
+	cwd         string
+	answer      string
+}
+
+// offersAlways reports whether an approval payload advertises an
+// "allow always" option. Absent choices means only once/deny are offered.
+func (a *pendingAsk) offersAlways() bool {
+	for _, c := range a.choices {
+		if strings.Contains(strings.ToLower(c), "always") {
+			return true
+		}
+	}
+	return false
+}
+
+// offersSession reports whether an approval payload advertises an
+// "allow for the session" option.
+func (a *pendingAsk) offersSession() bool {
+	for _, c := range a.choices {
+		if strings.Contains(strings.ToLower(c), "session") {
+			return true
+		}
+	}
+	return false
+}
+
+// choiceFor maps the panel's intent (once/always/deny) onto one of the
+// gateway's offered choice strings. The gateway forces a deny when the
+// answer is not one of its choices, so an unknown intent falls back to the
+// first non-deny choice (a consent), and ultimately to deny.
+func (a *pendingAsk) choiceFor(intent string) string {
+	if len(a.choices) == 0 {
+		// Older payloads carry no choices; keep the legacy literals.
+		switch intent {
+		case "once":
+			return "allow-once"
+		case "always":
+			return "allow-always"
+		case "session":
+			return "allow-session"
+		default:
+			return "deny"
+		}
+	}
+	var wanted []string
+	switch intent {
+	case "once":
+		wanted = []string{"once", "allow-once", "approve"}
+	case "always":
+		wanted = []string{"always", "allow-always"}
+	case "session":
+		wanted = []string{"session", "allow-session"}
+	default:
+		wanted = []string{"deny"}
+	}
+	for _, w := range wanted {
+		for _, c := range a.choices {
+			if strings.EqualFold(c, w) {
+				return c
+			}
+		}
+	}
+	if intent == "deny" {
+		// Deny must never fall through to a consent.
+		return "deny"
+	}
+	for _, c := range a.choices {
+		if !strings.EqualFold(c, "deny") {
+			return c
+		}
+	}
+	return "deny"
+}
+
+// askAnsweredMsg carries the outcome of the respond RPC so a failure is
+// visible in the transcript instead of vanishing.
+type askAnsweredMsg struct {
+	err error
 }
 
 func spinnerTickCmd() tea.Cmd {
@@ -459,6 +554,11 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 	ta.SetHeight(inputHeight)
 	ta.ShowLineNumbers = false
 	ta.Prompt = ""
+	// Draw the terminal's real cursor instead of the textarea's virtual
+	// one. With the virtual cursor the app renders a block while the
+	// terminal paints its own caret, which reads as two blinking cursors
+	// side by side; chatModel.Cursor() positions the real one instead.
+	ta.SetVirtualCursor(false)
 
 	// Bubbles' default cursor renders its on-frame as
 	// `Style.Reverse(true).Render(char)`. With the library default of
@@ -504,20 +604,20 @@ func newChatModel(b backend.Backend, sessionKey, agentID, agentName, modelID str
 	}
 
 	return chatModel{
-		viewport:        vp,
-		textarea:        ta,
-		backend:         b,
-		connName:        connName,
-		sessionKey:      sessionKey,
-		agentID:         agentID,
-		agentName:       agentName,
-		renderer:        renderer,
-		modelID:         modelID,
-		prefs:           prefs,
-		historyLimit:    prefs.HistoryLimit,
-		historyLoading:  true,
-		hideInput:       hideInput,
-		terminalFocused: true,
+		viewport:           vp,
+		textarea:           ta,
+		backend:            b,
+		connName:           connName,
+		sessionKey:         sessionKey,
+		agentID:            agentID,
+		agentName:          agentName,
+		renderer:           renderer,
+		modelID:            modelID,
+		prefs:              prefs,
+		historyLimit:       prefs.HistoryLimit,
+		historyLoading:     true,
+		hideInput:          hideInput,
+		terminalFocused:    true,
 		pendingMessages:    pending,
 		historyBrowseIndex: -1,
 		// Start at gen=1 so the zero value on chatMessage.gen reads as
@@ -655,8 +755,15 @@ func (m chatModel) loadStats() tea.Cmd {
 		// load; the chat view falls back to the placeholder.
 		return func() tea.Msg { return statsLoadedMsg{} }
 	}
+	// The session key must travel with the request: it is the only way
+	// the backend can resolve a live handle, and sending "" had the
+	// gateway answer "session_id required" on every /stats.
+	key := m.sessionKey
+	if strings.TrimSpace(key) == "" {
+		return func() tea.Msg { return statsLoadedMsg{err: fmt.Errorf("no active session yet")} }
+	}
 	return func() tea.Msg {
-		raw, err := usage.SessionUsage(context.Background(), "")
+		raw, err := usage.SessionUsage(context.Background(), key)
 		if err != nil {
 			return statsLoadedMsg{err: err}
 		}
@@ -866,6 +973,27 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		if msg.err == nil && msg.stats != nil {
 			m.stats = msg.stats
 		}
+		// A /stats typed by the user must always end in an answer, never in
+		// a placeholder: report the table, the error, or (for a backend that
+		// answered with nothing) that stats are unavailable here.
+		if m.statsRequested {
+			m.statsRequested = false
+			switch {
+			case msg.err != nil:
+				m.appendMessage(chatMessage{
+					role:   "system",
+					errMsg: fmt.Sprintf("Stats unavailable: %v", msg.err),
+				})
+			case msg.stats == nil:
+				m.appendMessage(chatMessage{
+					role:   "system",
+					errMsg: "/stats is not available on this connection",
+				})
+			default:
+				m.appendMessage(chatMessage{role: "system", content: m.formatStatsTable()})
+			}
+			m.updateViewport()
+		}
 		return m, nil
 
 	case chatAgentNamesLoadedMsg:
@@ -914,8 +1042,25 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 		// session's current context size.
 		return m, tea.Batch(m.loadStats(), m.loadContextUsage())
 
+	case askAnsweredMsg:
+		if msg.err != nil {
+			m.appendMessage(chatMessage{
+				role:   "system",
+				errMsg: fmt.Sprintf("could not answer the ask: %v", msg.err),
+			})
+			m.updateViewport()
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		slog.Debug("key", "code", msg.Code, "mod", msg.Mod, "string", msg.String())
+		// A pending ask owns its keys first, so 'y' answers the approval
+		// instead of becoming the first letter of the next message. It is
+		// gated on an empty composer: a typed draft is the user's work and
+		// answer keys are swallowed rather than allowed to edit it.
+		if handled, cmd := m.handleAskKey(msg); handled {
+			return m, cmd
+		}
 		switch msg.String() {
 		case "esc":
 			if m.pendingNavConfirm != nil {
@@ -940,7 +1085,11 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 			if m.transcript {
 				return m, func() tea.Msg { return goBackFromCronTranscriptMsg{} }
 			}
-			return m, nil
+			// Nothing in flight: esc means "back", the same promise every
+			// other screen keeps (rooms, pickers, forms). Before this it
+			// was a dead key on the one screen the user lives in, and the
+			// footer never said how to leave.
+			return m, m.gateNavigation("Switching agents", true, func() tea.Msg { return goBackMsg{} })
 		case "tab":
 			if ctx, ok := m.completionAtCursor(); ok {
 				m.handleCompletionTab(ctx)
@@ -1315,6 +1464,200 @@ func (m chatModel) Update(msg tea.Msg) (chatModel, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// handleAskKey routes a keystroke to the pending ask. It returns
+// handled=true when the key belonged to the ask (and the caller must not
+// pass it to the textarea). A non-empty composer wins: every key goes to
+// the textarea as normal, so a typed draft is never consumed by an answer.
+func (m *chatModel) handleAskKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.ask == nil {
+		return false, nil
+	}
+	if strings.TrimSpace(m.textarea.Value()) != "" {
+		return false, nil
+	}
+	ask := m.ask
+	key := msg.String()
+
+	switch ask.kind {
+	case "approval":
+		var choice, label string
+		switch key {
+		case "y":
+			choice, label = ask.choiceFor("once"), "allow once"
+		case "a":
+			if !ask.offersAlways() {
+				return false, nil
+			}
+			choice, label = ask.choiceFor("always"), "allow always"
+		case "s":
+			if !ask.offersSession() {
+				return false, nil
+			}
+			choice, label = ask.choiceFor("session"), "allow for session"
+		case "n", "esc":
+			choice, label = ask.choiceFor("deny"), "deny"
+		default:
+			return false, nil
+		}
+		return true, m.answerAsk(choice, label)
+
+	case "clarify":
+		if len(ask.choices) > 0 {
+			if key == "esc" {
+				return true, m.answerAsk("", "")
+			}
+			if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+				idx := int(key[0] - '1')
+				if idx >= len(ask.choices) {
+					return false, nil
+				}
+				choice := ask.choices[idx]
+				return true, m.answerAsk(choice, choice)
+			}
+			return false, nil
+		}
+
+		// Free text: the buffer lives on the ask, never in the composer.
+		switch key {
+		case "esc":
+			return true, m.answerAsk("", "")
+		case "enter":
+			return true, m.answerAsk(ask.answer, ask.answer)
+		case "backspace":
+			if ask.answer != "" {
+				_, size := utf8.DecodeLastRuneInString(ask.answer)
+				ask.answer = ask.answer[:len(ask.answer)-size]
+				m.updateViewport()
+			}
+			return true, nil
+		}
+		if t := msg.Text; t != "" && !strings.HasPrefix(key, "ctrl+") && !strings.HasPrefix(key, "alt+") {
+			ask.answer += t
+			m.updateViewport()
+			return true, nil
+		}
+		return false, nil
+	}
+	return false, nil
+}
+
+// answerAsk closes the panel, records what was answered, and sends the
+// answer through the backend's optional AskBackend capability.
+func (m *chatModel) answerAsk(answer, label string) tea.Cmd {
+	ask := m.ask
+	m.ask = nil
+
+	b, ok := m.backend.(backend.AskBackend)
+	if !ok {
+		m.appendMessage(chatMessage{
+			role:    "system",
+			content: "This connection cannot answer the ask; it will be denied when it times out.",
+		})
+		m.applyLayout()
+		m.updateViewport()
+		return nil
+	}
+
+	m.appendMessage(chatMessage{role: "system", content: "answered: " + label})
+	m.applyLayout()
+	m.updateViewport()
+
+	resp := backend.AskResponse{
+		SessionKey: ask.sessionKey,
+		RequestID:  ask.requestID,
+		RPCID:      ask.rpcID,
+		Kind:       ask.kind,
+	}
+	if ask.kind == "approval" {
+		resp.Choice = answer
+	} else {
+		resp.Answer = answer
+	}
+	return func() tea.Msg {
+		return askAnsweredMsg{err: b.RespondAsk(context.Background(), resp)}
+	}
+}
+
+// renderAskPanel draws the pending ask directly above the composer: the
+// question (and command/cwd for an approval), then its choices or the key
+// line that answers it.
+func (m *chatModel) renderAskPanel() string {
+	if m.ask == nil {
+		return ""
+	}
+	var lines []string
+	if m.ask.kind == "approval" {
+		what := "a command"
+		switch {
+		case m.ask.command != "":
+			what = "run " + m.ask.command
+		case m.ask.question != "":
+			what = m.ask.question
+		}
+		if m.ask.cwd != "" {
+			what += " in " + m.ask.cwd
+		}
+		lines = append(lines, m.wrapAskLine("Hermes asks: "+what+"?"))
+		if m.ask.description != "" {
+			lines = append(lines, m.wrapAskLine(m.ask.description))
+		}
+		keys := []string{"y allow once"}
+		if m.ask.offersSession() {
+			keys = append(keys, "s allow for session")
+		}
+		if m.ask.offersAlways() {
+			keys = append(keys, "a allow always")
+		}
+		keys = append(keys, "n deny")
+		lines = append(lines, helpStyle.Render(strings.Join(keys, " · ")))
+	} else {
+		question := m.ask.question
+		if question == "" {
+			question = "Hermes asks a question."
+		}
+		lines = append(lines, m.wrapAskLine(question))
+		if len(m.ask.choices) > 0 {
+			var b strings.Builder
+			for i, choice := range m.ask.choices {
+				if i > 0 {
+					b.WriteString("  ")
+				}
+				fmt.Fprintf(&b, "%d) %s", i+1, choice)
+			}
+			lines = append(lines, m.wrapAskLine(b.String()))
+		} else {
+			if m.ask.answer != "" {
+				lines = append(lines, "› "+m.ask.answer)
+			}
+			lines = append(lines, helpStyle.Render("type your answer, enter to send · esc to skip"))
+		}
+	}
+	panel := strings.Join(lines, "\n")
+	if m.width > 0 {
+		panel = navConfirmStyle.Width(m.width).Render(panel)
+	}
+	return panel
+}
+
+// wrapAskLine wraps one panel line to the chat width.
+func (m *chatModel) wrapAskLine(s string) string {
+	width := m.width
+	if width <= 0 {
+		return s
+	}
+	return wordWrap(s, width)
+}
+
+// askPanelHeight reports the rendered row count of the ask panel so
+// applyLayout can reserve space for it. 0 when no ask is pending.
+func (m *chatModel) askPanelHeight() int {
+	s := m.renderAskPanel()
+	if s == "" {
+		return 0
+	}
+	return lipgloss.Height(s)
+}
+
 func (m *chatModel) sendMessage(text string) tea.Cmd {
 	sessionKey := m.sessionKey
 	b := m.backend
@@ -1501,7 +1844,37 @@ func (m *chatModel) setSize(w, h int) {
 	m.updateViewport()
 }
 
-func (m chatModel) View() string {
+// fitHeaderTitle places the token block on the right of the title bar.
+// Everything is measured in display columns (not bytes), and the right
+// block degrades through the caller's candidates — full, compact,
+// percentage — before the title itself is truncated. The token block is
+// never dropped while any of its forms fits, which is what happened when
+// the header was merely a few columns short.
+func fitHeaderTitle(left string, variants []string, width int) string {
+	if width <= 0 {
+		return left
+	}
+	for _, right := range variants {
+		if right == "" {
+			continue
+		}
+		if pad := width - displayWidth(left) - displayWidth(right); pad > 0 {
+			return left + strings.Repeat(" ", pad) + right
+		}
+	}
+	if n := len(variants); n > 0 {
+		right := variants[n-1]
+		if budget := width - displayWidth(right) - 1; budget > 4 {
+			return ansi.Truncate(left, budget, "…") +
+				strings.Repeat(" ", width-budget-displayWidth(right)) + right
+		}
+	}
+	return ansi.Truncate(left, width, "…")
+}
+
+// headerView renders the chat header bar. It is a method rather than an
+// inline block so cursorOffset() can measure the same string View() emits.
+func (m chatModel) headerView() string {
 	left := " lucinate"
 	if m.connName != "" {
 		left += " · " + m.connName
@@ -1529,6 +1902,7 @@ func (m chatModel) View() string {
 		left += " · " + warnBadgeStyle.Render("↑ "+m.updateLatest)
 	}
 	right := ""
+	var rightVariants []string
 	if m.contextWindow > 0 && m.promptTokens > 0 {
 		// Per-session prompt-token snapshot from sessions.list — the
 		// "live context" size for the latest turn. Capped at 999% so
@@ -1543,18 +1917,27 @@ func (m chatModel) View() string {
 		}
 		right = fmt.Sprintf("tokens: %s/%s (%d%%)  $%.2f ",
 			formatTokensShort(m.promptTokens), formatTokensShort(m.contextWindow), pct, cost)
+		rightVariants = append(rightVariants,
+			right,
+			fmt.Sprintf("%s/%s %d%% $%.2f ",
+				formatTokensShort(m.promptTokens), formatTokensShort(m.contextWindow), pct, cost),
+			fmt.Sprintf("%d%% ", pct),
+		)
 	} else if m.stats != nil {
 		newTokens := m.stats.inputTokens + m.stats.outputTokens
 		right = fmt.Sprintf("tokens: %s (%s cached)  $%.2f ",
 			formatTokens(newTokens), formatTokens(m.stats.cacheRead), m.stats.totalCost)
+		rightVariants = append(rightVariants,
+			right,
+			fmt.Sprintf("%s %s $%.2f ", formatTokens(newTokens), formatTokens(m.stats.cacheRead), m.stats.totalCost),
+			fmt.Sprintf("%s ", formatTokens(newTokens)),
+		)
 	}
-	title := left
-	if right != "" {
-		padding := m.width - len(left) - len(right)
-		if padding > 0 {
-			title += strings.Repeat(" ", padding) + right
-		}
-	}
+	// Degrade the right block rather than dropping it when the header is
+	// narrow: the token block used to vanish entirely the moment it did
+	// not fit, which read as "this session has no usage". headerStyle
+	// pads one column each side, so the content box is two narrower.
+	title := fitHeaderTitle(left, rightVariants, m.width-2)
 	hdrStyle := headerStyle
 	if headerColor != "" {
 		hdrStyle = hdrStyle.Background(lipgloss.Color(headerColor))
@@ -1563,6 +1946,79 @@ func (m chatModel) View() string {
 		Width(m.width).
 		Render(title)
 
+	return header
+}
+
+// renderedLines counts the terminal rows a rendered region occupies.
+func renderedLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
+// cursorOffset is the column and row of the textarea's content inside the
+// chat view, so the real terminal cursor can be placed on it.
+//
+// The region order mirrors View(). TestChatModel_CursorOffsetMatchesView
+// pins the two together, so a layout change that forgets this cannot
+// silently park the cursor on the wrong row.
+func (m chatModel) cursorOffset() (x, y int, ok bool) {
+	if m.hideInput || !m.textarea.Focused() {
+		return 0, 0, false
+	}
+	rows := renderedLines(m.headerView())
+	if n := m.renderInfoNotifications(); n != "" {
+		rows += renderedLines(n)
+	}
+	rows += renderedLines(m.viewport.View())
+	if menu, _ := m.renderCompletionMenu(); menu != "" {
+		rows += renderedLines(menu)
+	}
+	if m.routineStatusLine() != "" {
+		rows++
+	}
+	if s := m.renderToolActivity(); s != "" {
+		rows += renderedLines(s)
+	}
+	if s := m.renderPendingMessages(); s != "" {
+		rows += renderedLines(s)
+	}
+	if s := m.renderErrorNotifications(); s != "" {
+		rows += renderedLines(s)
+	}
+	if s := m.renderNavConfirm(); s != "" {
+		rows += renderedLines(s)
+	}
+	// The input box: the rounded border adds one row above the content and
+	// one column on the left; the style's horizontal padding adds the
+	// second column.
+	return 2, rows + 1, true
+}
+
+// Cursor reports where the terminal's real cursor belongs, or nil when the
+// input is hidden or unfocused.
+//
+// Using the real cursor — instead of the textarea's virtual one — is what
+// keeps a single, correctly placed cursor. With the virtual cursor the app
+// draws a block AND the terminal paints its own caret, which the user sees
+// as two blinking cursors side by side.
+func (m chatModel) Cursor() *tea.Cursor {
+	cur := m.textarea.Cursor()
+	if cur == nil {
+		return nil
+	}
+	ox, oy, ok := m.cursorOffset()
+	if !ok {
+		return nil
+	}
+	cur.Position.X += ox
+	cur.Position.Y += oy
+	return cur
+}
+
+func (m chatModel) View() string {
+	header := m.headerView()
 	borderStyle := inputBorderStyle
 	isRemoteExec := strings.HasPrefix(m.textarea.Value(), "!!")
 	isLocalExec := !isRemoteExec && strings.HasPrefix(m.textarea.Value(), "!")
@@ -1602,7 +2058,7 @@ func (m chatModel) View() string {
 		} else if m.hideInput {
 			help = helpStyle.Render(" /help: commands")
 		} else {
-			helpText := " enter: send | alt+enter: newline | /help: commands"
+			helpText := " enter: send | alt+enter: newline | esc: back | /help: commands"
 			if n := len(m.pendingMessages); n > 0 {
 				helpText += fmt.Sprintf(" | %d queued (up: edit last)", n)
 			}
@@ -1623,6 +2079,7 @@ func (m chatModel) View() string {
 	toolStrip := m.renderToolActivity()
 	pending := m.renderPendingMessages()
 	navConfirm := m.renderNavConfirm()
+	askPanel := m.renderAskPanel()
 
 	// The View is assembled top→bottom in this region order:
 	//   header
@@ -1657,6 +2114,9 @@ func (m chatModel) View() string {
 		if navConfirm != "" {
 			parts = append(parts, navConfirm)
 		}
+		if askPanel != "" {
+			parts = append(parts, askPanel)
+		}
 		parts = append(parts, help)
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
@@ -1687,6 +2147,9 @@ func (m chatModel) View() string {
 	}
 	if navConfirm != "" {
 		parts = append(parts, navConfirm)
+	}
+	if askPanel != "" {
+		parts = append(parts, askPanel)
 	}
 	parts = append(parts, input, help)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)

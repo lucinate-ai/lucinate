@@ -8,8 +8,11 @@
 // sessions, and memories, so this backend stays thin and lets the
 // gateway be the source of truth:
 //
-//   - Connection ↔ Hermes profile, 1:1. The profile is the agent.
-//     ListAgents returns one synthetic entry; CreateAgent is rejected.
+//   - Connection ↔ gateway. The gateway serves every profile on the
+//     machine (Hermes multiplexing), so a profile is selected per
+//     session rather than per connection: ListAgents reports the
+//     gateway's profiles and CreateSession sends the chosen one.
+//     CreateAgent stays rejected — profiles are configured server-side.
 //   - Sessions, history, usage, compaction, and abort are all real
 //     gateway RPCs (session.*, prompt.submit) — no client-side state
 //     files or history reconstruction.
@@ -25,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -43,13 +47,18 @@ import (
 // does not serve /api/ws.
 const DefaultBaseURL = "http://localhost:9119"
 
-// syntheticAgentID is the fixed agent identifier used because Hermes
-// connections expose a single agent (the connected profile).
+// syntheticAgentID is the fixed agent identifier used when the gateway does
+// not serve a profile roster (an older gateway, or one that answers -32601 to
+// profiles.list). The connection then behaves as the single launch profile.
 const syntheticAgentID = "hermes"
 
 // defaultConnectTimeout bounds the dial + gateway.ready handshake when
 // the caller didn't configure one.
 const defaultConnectTimeout = 10 * time.Second
+
+// defaultAskTimeout bounds how long an interactive ask waits for the user
+// before the backend denies it, so a turn can never hang unnoticed.
+const defaultAskTimeout = 10 * time.Minute
 
 // legacyEndpointHint is the migration error for connections still
 // pointing at the pre-WebSocket Hermes API server. There is no silent
@@ -69,6 +78,67 @@ type Options struct {
 	// used so the existing auth-modal plumbing carries over.
 	APIKey         string
 	ConnectTimeout time.Duration
+	// AskTimeout bounds how long an interactive ask (approval/clarify)
+	// waits for the user before it is denied. Zero means the default.
+	AskTimeout time.Duration
+}
+
+// clarifyQuestion is one entry of a server→client clarify request's
+// questions array.
+type clarifyQuestion struct {
+	QID         string   `json:"qid"`
+	Question    string   `json:"question"`
+	Choices     []string `json:"choices"`
+	MultiSelect bool     `json:"multi_select"`
+}
+
+// serverAskParams is the params object of an inbound approval or clarify
+// request. The gateway's live shape uses request_id (older casts used
+// prompt_id); both are accepted. Everything except the id is optional so
+// one missing key never fails the whole request.
+type serverAskParams struct {
+	SessionID   string            `json:"session_id"`
+	PromptID    string            `json:"prompt_id"`
+	RequestID   string            `json:"request_id"`
+	Command     string            `json:"command"`
+	Description string            `json:"description"`
+	Question    string            `json:"question"`
+	Choices     []string          `json:"choices"`
+	Cwd         string            `json:"cwd"`
+	Questions   []clarifyQuestion `json:"questions"`
+}
+
+// id returns the ask's stable payload id, falling back to the JSON-RPC
+// request id when the payload carries neither prompt_id nor request_id.
+func (p serverAskParams) id(rpcID json.RawMessage) string {
+	if p.PromptID != "" {
+		return p.PromptID
+	}
+	if p.RequestID != "" {
+		return p.RequestID
+	}
+	return "rpc-" + strings.Trim(string(rpcID), `"`)
+}
+
+// pendingAsk is one server→client ask the backend has forwarded to the
+// client and is waiting on. The answer is the JSON-RPC response for
+// rpcID. done is closed when it is answered or withdrawn, stopping the
+// timeout watcher.
+type pendingAsk struct {
+	// rpcID is the request id exactly as the gateway sent it (a JSON
+	// string "srq-…" on the live gateway), so the answer can echo it.
+	rpcID       json.RawMessage
+	method      string // "approval" | "clarify"
+	requestID   string
+	sessionID   string
+	command     string
+	description string
+	question    string
+	choices     []string
+	cwd         string
+	questions   []clarifyQuestion
+	timer       *time.Timer
+	done        chan struct{}
 }
 
 // session tracks the two id-spaces the gateway exposes: the short live
@@ -79,7 +149,8 @@ type Options struct {
 type session struct {
 	live      string
 	stored    string
-	preambled bool // skills catalogue already prepended on turn 1
+	profile   string // the Hermes profile this session runs as; "" for the launch profile
+	preambled bool   // skills catalogue already prepended on turn 1
 }
 
 // Backend implements backend.Backend over the tui_gateway protocol.
@@ -97,6 +168,10 @@ type Backend struct {
 	sessions map[string]*session // TUI-facing session key → session
 	active   string              // key of the most recently used session
 	closed   bool
+
+	askTimeout     time.Duration
+	pendingAsks    map[string]*pendingAsk // raw JSON-RPC request id → outstanding ask
+	serverRequests []string               // what client.capabilities reported the gateway will send us
 }
 
 // New constructs a Backend. BaseURL defaults to the local dashboard
@@ -111,12 +186,17 @@ func New(opts Options) (*Backend, error) {
 	if opts.ConnectTimeout <= 0 {
 		opts.ConnectTimeout = defaultConnectTimeout
 	}
+	if opts.AskTimeout <= 0 {
+		opts.AskTimeout = defaultAskTimeout
+	}
 	return &Backend{
-		opts:     opts,
-		events:   make(chan protocol.Event, 64),
-		tr:       newTranslator(),
-		token:    opts.APIKey,
-		sessions: make(map[string]*session),
+		opts:        opts,
+		events:      make(chan protocol.Event, 64),
+		tr:          newTranslator(),
+		token:       opts.APIKey,
+		sessions:    make(map[string]*session),
+		askTimeout:  opts.AskTimeout,
+		pendingAsks: make(map[string]*pendingAsk),
 	}, nil
 }
 
@@ -182,9 +262,11 @@ func (b *Backend) Connect(ctx context.Context) error {
 	b.mu.Unlock()
 	go b.pump(cli)
 
-	// Best-effort metadata: the connection is usable without either.
 	callCtx, cancel := context.WithTimeout(ctx, b.opts.ConnectTimeout)
 	defer cancel()
+	b.advertiseServerRequests(callCtx, cli)
+
+	// Best-effort metadata: the connection is usable without either.
 	var agents struct {
 		Processes []json.RawMessage `json:"processes"`
 	}
@@ -246,58 +328,316 @@ func (b *Backend) dial(ctx context.Context) (*rpc.Client, error) {
 	}
 }
 
-// pump translates server notifications into protocol events until the
-// client's notification channel closes. Interactive asks are declined
-// inline (the respond RPC runs async; the visible notice is injected
-// into the streaming text synchronously so ordering stays sane).
+// pump consumes both server notifications and server→client requests
+// until the client's connection closes. Notifications become protocol
+// events; approval/clarify requests become "ask" agent events the user
+// answers, and sudo/secret are fast-failed with -32601.
 func (b *Backend) pump(cli *rpc.Client) {
-	for n := range cli.Notifications() {
-		b.mu.Lock()
-		events, ask := b.tr.Translate(n)
-		if ask != nil {
-			events = append(events, b.tr.InjectSystemLine(ask.SessionID, declineNotice(ask)))
-		}
-		b.mu.Unlock()
-		for _, ev := range events {
-			b.emit(ev)
-		}
-		if ask != nil {
-			go b.declineAsk(cli, ask)
+	for {
+		select {
+		case req, ok := <-cli.Requests():
+			if !ok {
+				return
+			}
+			b.handleServerRequest(cli, req)
+		case n, ok := <-cli.Notifications():
+			if !ok {
+				return
+			}
+			b.handleNotification(n)
 		}
 	}
 }
 
-// declineNotice is the visible explanation for an auto-declined ask.
-func declineNotice(ask *Ask) string {
-	kind := strings.TrimSuffix(ask.Type, ".request")
-	return fmt.Sprintf("Hermes sent a %s request — auto-declined; interactive %s isn't supported on this connection yet. Configure the profile for autonomous approval.", kind, kind)
+// handleNotification translates one server push and drops any withdrawn
+// ask it reports.
+func (b *Backend) handleNotification(n rpc.Notification) {
+	b.mu.Lock()
+	events, cancel := b.tr.Translate(n)
+	if cancel != nil {
+		b.cancelAskLocked(cancel.RequestID)
+	}
+	b.mu.Unlock()
+	for _, ev := range events {
+		b.emit(ev)
+	}
 }
 
-// declineAsk answers a blocking server→client ask with a deny/cancel
-// so the turn can never hang the TUI silently. Phase 2 wires
-// approval.request into the TUI's exec-approval prompt instead.
-func (b *Backend) declineAsk(cli *rpc.Client, ask *Ask) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	params := map[string]any{"session_id": ask.SessionID, "request_id": ask.RequestID}
-	var method string
-	switch ask.Type {
-	case "approval.request":
-		method = "approval.respond"
-		params["choice"] = "deny"
-	case "clarify.request":
-		method = "clarify.respond"
-		params["answer"] = ""
-	case "sudo.request":
-		method = "sudo.respond"
-		params["password"] = ""
-	case "secret.request":
-		method = "secret.respond"
-		params["value"] = ""
+// handleServerRequest answers one server→client JSON-RPC request. The
+// gateway sends approval/clarify/sudo/secret here after the client
+// advertised server_requests; an unknown method (and the two input kinds
+// this client does not own) is answered -32601 so the gateway settles it
+// at once instead of waiting for a callback that will never come.
+func (b *Backend) handleServerRequest(cli *rpc.Client, req rpc.Request) {
+	switch req.Method {
+	case "approval":
+		b.startApproval(cli, req)
+	case "clarify":
+		b.startClarify(cli, req)
+	case "sudo", "secret":
+		if err := cli.RespondError(req.ID, -32601, "method not found: "+req.Method+" input is not supported by this client"); err != nil {
+			slog.Debug("respond -32601 failed", "method", req.Method, "err", err)
+		}
 	default:
+		if err := cli.RespondError(req.ID, -32601, "method not found: "+req.Method); err != nil {
+			slog.Debug("respond -32601 failed", "method", req.Method, "err", err)
+		}
+	}
+}
+
+// startApproval forwards one approval request to the client and arms its
+// timeout. The user's answer is the JSON-RPC response for req.ID.
+func (b *Backend) startApproval(cli *rpc.Client, req rpc.Request) {
+	var p serverAskParams
+	_ = json.Unmarshal(req.Params, &p)
+	pa := &pendingAsk{
+		rpcID:       req.ID,
+		method:      "approval",
+		requestID:   p.id(req.ID),
+		sessionID:   p.SessionID,
+		command:     p.Command,
+		description: p.Description,
+		question:    p.Question,
+		choices:     p.Choices,
+		cwd:         p.Cwd,
+		timer:       time.NewTimer(b.askTimeout),
+		done:        make(chan struct{}),
+	}
+	b.mu.Lock()
+	b.pendingAsks[string(req.ID)] = pa
+	b.mu.Unlock()
+	go b.watchAskTimeout(cli, pa)
+	b.emit(askAgentEvent(pa))
+}
+
+// startClarify forwards one clarify request. The gateway sends a
+// questions array; this client renders a single-question panel (the first
+// question) and answers the rest null.
+func (b *Backend) startClarify(cli *rpc.Client, req rpc.Request) {
+	var p serverAskParams
+	_ = json.Unmarshal(req.Params, &p)
+	questions := p.Questions
+	if len(questions) == 0 && p.Question != "" {
+		questions = []clarifyQuestion{{QID: "q0", Question: p.Question, Choices: p.Choices}}
+	}
+	pa := &pendingAsk{
+		rpcID:     req.ID,
+		method:    "clarify",
+		requestID: p.id(req.ID),
+		sessionID: p.SessionID,
+		questions: questions,
+		timer:     time.NewTimer(b.askTimeout),
+		done:      make(chan struct{}),
+	}
+	if len(questions) > 0 {
+		pa.question = questions[0].Question
+		pa.choices = questions[0].Choices
+	}
+	b.mu.Lock()
+	b.pendingAsks[string(req.ID)] = pa
+	b.mu.Unlock()
+	go b.watchAskTimeout(cli, pa)
+	b.emit(askAgentEvent(pa))
+}
+
+// askAgentEvent builds the "ask" agent event for one pending request. The
+// Data keys are the TUI's contract; empty optional fields are omitted.
+func askAgentEvent(pa *pendingAsk) protocol.Event {
+	data := map[string]any{
+		"sessionKey": pa.sessionID,
+		"requestId":  pa.requestID,
+		"rpcId":      pa.rpcID,
+		"kind":       pa.method,
+	}
+	if pa.command != "" {
+		data["command"] = pa.command
+	}
+	if pa.description != "" {
+		data["description"] = pa.description
+	}
+	if pa.cwd != "" {
+		data["cwd"] = pa.cwd
+	}
+	if pa.question != "" {
+		data["question"] = pa.question
+	}
+	if len(pa.choices) > 0 {
+		data["choices"] = pa.choices
+	}
+	if len(pa.questions) > 0 {
+		qs := make([]map[string]any, 0, len(pa.questions))
+		for _, q := range pa.questions {
+			qm := map[string]any{"qid": q.QID, "question": q.Question, "multiSelect": q.MultiSelect}
+			if len(q.Choices) > 0 {
+				qm["choices"] = q.Choices
+			}
+			qs = append(qs, qm)
+		}
+		data["questions"] = qs
+	}
+	return protocol.Event{
+		EventName: protocol.EventAgent,
+		Payload:   mustMarshal(protocol.AgentEvent{Stream: "ask", Data: data}),
+	}
+}
+
+// watchAskTimeout denies/cancels an ask nobody answered within askTimeout,
+// so a turn blocked on a question the user walked away from cannot hang.
+// An answered or withdrawn ask closes done and the watcher returns.
+func (b *Backend) watchAskTimeout(cli *rpc.Client, pa *pendingAsk) {
+	select {
+	case <-pa.timer.C:
+	case <-pa.done:
 		return
 	}
-	_ = cli.Call(ctx, method, params, nil)
+	b.mu.Lock()
+	key := string(pa.rpcID)
+	if b.pendingAsks[key] != pa {
+		b.mu.Unlock()
+		return
+	}
+	delete(b.pendingAsks, key)
+	notice := b.tr.InjectSystemLine(pa.sessionID, askTimeoutNotice(pa.method))
+	b.mu.Unlock()
+
+	b.emit(notice)
+	if err := b.respondServerAsk(cli, pa, "deny", ""); err != nil {
+		slog.Debug("ask timeout respond failed", "err", err, "request_id", pa.requestID)
+	}
+}
+
+// askTimeoutNotice is the transcript line for an ask that expired
+// unanswered.
+func askTimeoutNotice(method string) string {
+	return fmt.Sprintf("Hermes's %s request timed out — %sd.", method, map[string]string{
+		"approval": "denied",
+		"clarify":  "skipped",
+	}[method])
+}
+
+// takeAskLocked removes an ask from the pending set and reports it. It
+// matches on the JSON-RPC id first, then on the payload's request id (the
+// only key a request.cancel notification carries).
+func (b *Backend) takeAskLocked(rpcID, requestID string) *pendingAsk {
+	if rpcID != "" {
+		if pa, ok := b.pendingAsks[rpcID]; ok {
+			delete(b.pendingAsks, rpcID)
+			pa.timer.Stop()
+			close(pa.done)
+			return pa
+		}
+	}
+	if requestID != "" {
+		for id, pa := range b.pendingAsks {
+			if pa.requestID == requestID {
+				delete(b.pendingAsks, id)
+				pa.timer.Stop()
+				close(pa.done)
+				return pa
+			}
+		}
+	}
+	return nil
+}
+
+// cancelAskLocked drops every pending ask matching requestID. request.cancel
+// names only the payload id, so the panel's rpc id is not needed.
+func (b *Backend) cancelAskLocked(requestID string) {
+	for id, pa := range b.pendingAsks {
+		if pa.requestID != requestID {
+			continue
+		}
+		delete(b.pendingAsks, id)
+		pa.timer.Stop()
+		close(pa.done)
+	}
+}
+
+// RespondAsk answers a pending ask. An answer for an ask that is no longer
+// pending (expired, withdrawn, or answered twice) is logged and dropped
+// rather than sent again.
+func (b *Backend) RespondAsk(ctx context.Context, resp backend.AskResponse) error {
+	b.mu.Lock()
+	pa := b.takeAskLocked(resp.RPCID, resp.RequestID)
+	cli := b.cli
+	b.mu.Unlock()
+	if pa == nil {
+		slog.Debug("ask answer dropped: no pending ask", "request_id", resp.RequestID, "rpc_id", resp.RPCID)
+		return nil
+	}
+	if cli == nil {
+		return fmt.Errorf("hermes gateway not connected")
+	}
+	return b.respondServerAsk(cli, pa, resp.Choice, resp.Answer)
+}
+
+// respondServerAsk writes the JSON-RPC response for one pending ask.
+// Approval returns {"choice": …} with a choice that must be among the
+// offered ones (anything else becomes deny); clarify returns
+// {"answers": {qid: text|null}, "outcome": submitted|cancelled}.
+func (b *Backend) respondServerAsk(cli *rpc.Client, pa *pendingAsk, choice, answer string) error {
+	switch pa.method {
+	case "approval":
+		return cli.Respond(pa.rpcID, map[string]any{"choice": validatedChoice(choice, pa.choices)})
+	case "clarify":
+		answers := make(map[string]any, len(pa.questions))
+		outcome := "submitted"
+		if answer == "" {
+			outcome = "cancelled"
+		}
+		if len(pa.questions) == 0 {
+			answers["q0"] = nil
+			if answer != "" {
+				answers["q0"] = answer
+			}
+		}
+		for i, q := range pa.questions {
+			if i == 0 && answer != "" {
+				answers[q.QID] = answer
+			} else {
+				answers[q.QID] = nil
+			}
+		}
+		return cli.Respond(pa.rpcID, map[string]any{"answers": answers, "outcome": outcome})
+	default:
+		return fmt.Errorf("hermes: unknown ask method %q", pa.method)
+	}
+}
+
+// validatedChoice returns choice when the gateway offered it, otherwise
+// deny. The gateway forces a deny for an unknown choice anyway, so make the
+// contract explicit rather than sending a value it will discard.
+func validatedChoice(choice string, choices []string) string {
+	if len(choices) == 0 {
+		if choice == "" {
+			return "deny"
+		}
+		return choice
+	}
+	for _, c := range choices {
+		if strings.EqualFold(c, choice) {
+			return c
+		}
+	}
+	return "deny"
+}
+
+// advertiseServerRequests tells the gateway this client can answer
+// server→client requests. Without it the gateway withdraws every
+// approval/clarify immediately and the agent is told nobody could answer.
+// Called once per connection, right after the handshake.
+func (b *Backend) advertiseServerRequests(ctx context.Context, cli *rpc.Client) {
+	var res struct {
+		ServerRequests []string `json:"server_requests"`
+	}
+	if err := cli.Call(ctx, "client.capabilities", map[string]any{"server_requests": true}, &res); err != nil {
+		slog.Debug("client.capabilities failed", "err", err)
+		return
+	}
+	b.mu.Lock()
+	b.serverRequests = res.ServerRequests
+	b.mu.Unlock()
+	slog.Debug("hermes server_requests enabled", "methods", res.ServerRequests)
 }
 
 // emit forwards an event, dropping it if the buffer is full (matching
@@ -318,6 +658,11 @@ func (b *Backend) Close() error {
 	b.cli = nil
 	closed := b.closed
 	b.closed = true
+	for id, pa := range b.pendingAsks {
+		pa.timer.Stop()
+		close(pa.done)
+		delete(b.pendingAsks, id)
+	}
 	b.mu.Unlock()
 	if cli != nil {
 		_ = cli.Close()
@@ -371,6 +716,9 @@ func (b *Backend) Supervise(ctx context.Context, notify func(client.ConnState)) 
 				b.cli = next
 				b.mu.Unlock()
 				go b.pump(next)
+				capCtx, cancel := context.WithTimeout(ctx, b.opts.ConnectTimeout)
+				b.advertiseServerRequests(capCtx, next)
+				cancel()
 				b.resumeActive(ctx, next)
 				notify(client.ConnState{Status: client.StatusConnected})
 				break
@@ -422,10 +770,50 @@ func (b *Backend) client() (*rpc.Client, error) {
 	return b.cli, nil
 }
 
-// ListAgents returns a single synthetic entry — the connected Hermes
-// profile is the agent. agents.list reports gateway-managed processes
-// (usually none); the profile identity comes from session metadata.
+// ListAgents returns the gateway's profile roster. Hermes is multiplexed: one
+// gateway process serves every profile on the machine, and a session selects
+// one. When the gateway does not answer profiles.list (an older gateway, or a
+// failure), the single synthetic agent is reported — the connection then acts
+// as its launch profile, exactly as before multiplexing.
 func (b *Backend) ListAgents(ctx context.Context) (*protocol.AgentsListResult, error) {
+	if cli, err := b.client(); err == nil {
+		var res struct {
+			Profiles []profileListEntry `json:"profiles"`
+		}
+		if err := cli.Call(ctx, "profiles.list", map[string]any{"include_sessions": false}, &res); err == nil && len(res.Profiles) > 0 {
+			return agentsFromProfiles(res.Profiles), nil
+		}
+	}
+	return b.syntheticAgent(), nil
+}
+
+// agentsFromProfiles maps the gateway's roster onto the TUI's agent shape.
+// The profile name is the agent identifier because it is what session.create
+// and session.list expect on the wire.
+func agentsFromProfiles(profiles []profileListEntry) *protocol.AgentsListResult {
+	out := &protocol.AgentsListResult{Agents: make([]protocol.AgentSummary, 0, len(profiles))}
+	defaultID := ""
+	for _, p := range profiles {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			continue
+		}
+		summary := protocol.AgentSummary{ID: name, Name: name}
+		if p.Model != "" {
+			summary.Model = &protocol.AgentSummaryModel{Primary: p.Model}
+		}
+		out.Agents = append(out.Agents, summary)
+		if p.IsDefault || defaultID == "" {
+			defaultID = name
+		}
+	}
+	out.DefaultID = defaultID
+	out.MainKey = defaultID
+	return out
+}
+
+// syntheticAgent is the pre-multiplexing shape: one agent, the launch profile.
+func (b *Backend) syntheticAgent() *protocol.AgentsListResult {
 	b.mu.Lock()
 	model := b.model
 	profile := b.profile
@@ -444,7 +832,7 @@ func (b *Backend) ListAgents(ctx context.Context) (*protocol.AgentsListResult, e
 		Agents:    []protocol.AgentSummary{summary},
 		DefaultID: syntheticAgentID,
 		MainKey:   syntheticAgentID,
-	}, nil
+	}
 }
 
 // CreateAgent rejects: Hermes profiles are configured server-side and
@@ -479,22 +867,30 @@ type sessionListEntry struct {
 	Preview      string  `json:"preview"`
 	StartedAt    float64 `json:"started_at"`
 	MessageCount int     `json:"message_count"`
+	Source       string  `json:"source"`
 }
 
 // SessionsList maps session.list into the TUI's session-browser shape.
-// Entries are keyed by stored session id — the resume key.
+// Entries are keyed by profile-qualified stored session id — the resume key.
 func (b *Backend) SessionsList(ctx context.Context, agentID string) (json.RawMessage, error) {
-	if agentID != syntheticAgentID {
-		return json.RawMessage(`{"sessions":[]}`), nil
-	}
 	cli, err := b.client()
 	if err != nil {
 		return nil, err
 	}
+	profile := profileFor(agentID)
+	if profile == "" && strings.TrimSpace(agentID) == "" {
+		b.mu.Lock()
+		profile = b.profile
+		b.mu.Unlock()
+	}
+	params := map[string]any{}
+	if profile != "" {
+		params["profile"] = profile
+	}
 	var res struct {
 		Sessions []sessionListEntry `json:"sessions"`
 	}
-	if err := cli.Call(ctx, "session.list", nil, &res); err != nil {
+	if err := cli.Call(ctx, "session.list", params, &res); err != nil {
 		return nil, err
 	}
 	out := struct {
@@ -506,46 +902,58 @@ func (b *Backend) SessionsList(ctx context.Context, agentID string) (json.RawMes
 			title = s.ID
 		}
 		out.Sessions = append(out.Sessions, map[string]any{
-			"key":         s.ID,
-			"title":       title,
-			"lastMessage": s.Preview,
-			"updatedAt":   int64(s.StartedAt * 1000),
+			"key":                sessionKeyFor(profile, s.ID),
+			"derivedTitle":       title,
+			"lastMessagePreview": s.Preview,
+			"updatedAt":          int64(s.StartedAt * 1000),
+			"source":             s.Source,
 		})
 	}
 	return json.Marshal(out)
 }
 
-// CreateSession opens a fresh gateway session and returns its live
-// handle as the TUI session key. The stored id is tracked alongside so
-// the session survives a reconnect (and so /status can show it).
+// CreateSession opens a fresh gateway session for the selected profile and
+// returns its live handle as the TUI session key. The stored id is tracked
+// alongside so the session survives a reconnect (and so /status can show it).
 func (b *Backend) CreateSession(ctx context.Context, agentID, key string) (string, error) {
-	if agentID != syntheticAgentID {
-		return "", fmt.Errorf("agent not found: %s", agentID)
-	}
 	cli, err := b.client()
 	if err != nil {
 		return "", err
 	}
+	profile := profileFor(agentID)
+	params := map[string]any{}
+	if profile != "" {
+		params["profile"] = profile
+	}
 	var res sessionCreateResult
-	if err := cli.Call(ctx, "session.create", nil, &res); err != nil {
+	if err := cli.Call(ctx, "session.create", params, &res); err != nil {
 		return "", err
 	}
+	// The gateway reports the profile the session actually runs as, which is
+	// authoritative (a routed profile may be renamed upstream).
+	if res.Info.ProfileName != "" {
+		profile = res.Info.ProfileName
+	}
 	b.mu.Lock()
-	b.sessions[res.SessionID] = &session{live: res.SessionID, stored: res.StoredSessionID}
+	b.sessions[res.SessionID] = &session{
+		live:    res.SessionID,
+		stored:  res.StoredSessionID,
+		profile: profile,
+	}
 	b.active = res.SessionID
 	if res.Info.Model != "" {
 		b.model = res.Info.Model
 	}
-	if res.Info.ProfileName != "" {
-		b.profile = res.Info.ProfileName
+	if profile != "" {
+		b.profile = profile
 	}
 	b.mu.Unlock()
 	return res.SessionID, nil
 }
 
-// resolve maps a TUI session key to its live gateway handle, resuming
-// the session when the key is a stored id from the session browser
-// (or a live handle orphaned by a reconnect).
+// resolve maps a TUI session key to its live gateway handle, resuming the
+// session when the key is a profile-qualified stored id from the session
+// browser (or a live handle orphaned by a reconnect).
 func (b *Backend) resolve(ctx context.Context, key string) (*session, error) {
 	b.mu.Lock()
 	sess, ok := b.sessions[key]
@@ -560,17 +968,28 @@ func (b *Backend) resolve(ctx context.Context, key string) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
+	profile, stored := splitSessionKey(key)
+	params := map[string]any{"session_id": stored}
+	if profile != "" {
+		params["profile"] = profile
+	}
 	var res sessionCreateResult
-	if err := cli.Call(ctx, "session.resume", map[string]string{"session_id": key}, &res); err != nil {
+	if err := cli.Call(ctx, "session.resume", params, &res); err != nil {
 		return nil, fmt.Errorf("session not found: %s: %w", key, err)
 	}
+	if res.Info.ProfileName != "" {
+		profile = res.Info.ProfileName
+	}
 	b.mu.Lock()
-	sess = &session{live: res.SessionID, stored: res.StoredSessionID}
+	sess = &session{live: res.SessionID, stored: res.StoredSessionID, profile: profile}
 	if sess.stored == "" {
-		sess.stored = key
+		sess.stored = stored
 	}
 	b.sessions[key] = sess
 	b.active = key
+	if profile != "" {
+		b.profile = profile
+	}
 	b.mu.Unlock()
 	return sess, nil
 }
@@ -586,10 +1005,11 @@ func (b *Backend) SessionDelete(ctx context.Context, sessionKey string) error {
 		return err
 	}
 	id := sessionKey
-	var live string
+	var live, profile string
 	b.mu.Lock()
 	if sess, ok := b.sessions[sessionKey]; ok {
 		live = sess.live
+		profile = sess.profile
 		if sess.stored != "" {
 			id = sess.stored
 		}
@@ -599,12 +1019,19 @@ func (b *Backend) SessionDelete(ctx context.Context, sessionKey string) error {
 		b.active = ""
 	}
 	b.mu.Unlock()
+	if profile == "" {
+		profile, id = splitSessionKey(id)
+	}
 	if live != "" {
 		// Best-effort detach; a session opened by another client or
 		// already closed just falls through to the delete.
 		_ = cli.Call(ctx, "session.close", map[string]string{"session_id": live}, nil)
 	}
-	return cli.Call(ctx, "session.delete", map[string]string{"session_id": id}, nil)
+	params := map[string]any{"session_id": id}
+	if profile != "" {
+		params["profile"] = profile
+	}
+	return cli.Call(ctx, "session.delete", params, nil)
 }
 
 // ChatSend submits a turn via prompt.submit. The gateway answers
@@ -757,9 +1184,53 @@ func (b *Backend) ChatHistory(ctx context.Context, sessionKey string, limit int)
 	return json.Marshal(out)
 }
 
+// profileListEntry is one row of profiles.list. Only the fields this
+// backend needs are decoded; the gateway sends far more.
+type profileListEntry struct {
+	Name      string `json:"name"`
+	Model     string `json:"model"`
+	IsDefault bool   `json:"is_default"`
+}
+
+// profileFor maps an agent identifier onto the profile a session should run
+// as. The synthetic agent (and an empty identifier) means "whatever the
+// gateway's launch profile is", which is what older gateways serve.
+func profileFor(agentID string) string {
+	id := strings.TrimSpace(agentID)
+	if id == "" || id == syntheticAgentID {
+		return ""
+	}
+	return id
+}
+
+// sessionKeyFor qualifies a stored session id with its profile. A stored id is
+// only unique inside one profile's state.db, and resuming needs both halves;
+// the key is opaque to the TUI (it renders the title, not the key).
+func sessionKeyFor(profile, stored string) string {
+	if profile == "" {
+		return stored
+	}
+	return profile + "::" + stored
+}
+
+// splitSessionKey reverses sessionKeyFor. Keys that are not qualified — a live
+// handle, or a stored id from before this change — pass through unchanged.
+func splitSessionKey(key string) (profile, stored string) {
+	if i := strings.LastIndex(key, "::"); i > 0 && i+2 < len(key) {
+		candidate := key[:i]
+		if !strings.ContainsAny(candidate, `/\`) && !strings.Contains(candidate, "::") {
+			return candidate, key[i+2:]
+		}
+	}
+	return "", key
+}
+
 // ModelsList reports what the gateway exposes via model.options. The
-// payload is provider-centric; the reliably present datum is the
-// active model, so that is what the picker gets.
+// payload is provider-centric: a provider's models arrive either as plain
+// "provider/model" strings (the live Hermes gateway) or as {id,name}
+// objects (older gateways). Both shapes are accepted so the picker works
+// against either. The active model is also taken from the top-level
+// "model" field.
 func (b *Backend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, error) {
 	cli, err := b.client()
 	if err != nil {
@@ -768,10 +1239,7 @@ func (b *Backend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, e
 	var res struct {
 		Model     string `json:"model"`
 		Providers []struct {
-			Models []struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"models"`
+			Models []json.RawMessage `json:"models"`
 		} `json:"providers"`
 	}
 	if err := cli.Call(ctx, "model.options", nil, &res); err != nil {
@@ -784,25 +1252,88 @@ func (b *Backend) ModelsList(ctx context.Context) (*protocol.ModelsListResult, e
 		seen[res.Model] = true
 	}
 	for _, p := range res.Providers {
-		for _, m := range p.Models {
-			if m.ID == "" || seen[m.ID] {
+		for _, raw := range p.Models {
+			id, name := decodeModelOption(raw)
+			if id == "" || seen[id] {
 				continue
 			}
-			seen[m.ID] = true
-			name := m.Name
+			seen[id] = true
 			if name == "" {
-				name = m.ID
+				name = id
 			}
-			out.Models = append(out.Models, protocol.ModelChoice{ID: m.ID, Name: name})
+			out.Models = append(out.Models, protocol.ModelChoice{ID: id, Name: name})
 		}
 	}
 	return out, nil
 }
 
-// SessionPatchModel stays unsupported in this phase; Phase 2 routes it
-// via command.dispatch ("/model …").
+// decodeModelOption reads one provider model entry. The gateway sends a
+// bare string; older payloads send {"id","name"}. An unrecognised entry
+// yields empty strings and is skipped by the caller.
+func decodeModelOption(raw json.RawMessage) (id, name string) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, s
+	}
+	var obj struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return "", ""
+	}
+	return obj.ID, obj.Name
+}
+
+// SessionPatchModel switches the session model through the gateway's own
+// slash-command dispatcher: the tui_gateway has no model-patch RPC, and
+// `/model <ref>` is what the dashboard's chat uses. The reference is the bare
+// model id (`provider/model`) — model.options carries no per-model provider
+// for Hermes, so the TUI sends it unqualified. The switch is session-scoped
+// unless the command says otherwise, and the gateway's own answer decides
+// success: a refusal is returned as an error rather than reported as a switch
+// that never happened.
 func (b *Backend) SessionPatchModel(ctx context.Context, sessionKey, modelID string) error {
-	return fmt.Errorf("model switching is not supported on Hermes connections yet; configure the profile on the host")
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return fmt.Errorf("model reference is required")
+	}
+	sess, err := b.resolve(ctx, sessionKey)
+	if err != nil {
+		return err
+	}
+	cli, err := b.client()
+	if err != nil {
+		return err
+	}
+	var res struct {
+		Output string `json:"output"`
+	}
+	if err := cli.Call(ctx, "slash.exec", map[string]string{
+		"session_id": sess.live,
+		"command":    "/model " + modelID,
+	}, &res); err != nil {
+		return err
+	}
+	out := strings.TrimSpace(res.Output)
+	if out != "" && !strings.Contains(out, "Model switched") {
+		return fmt.Errorf("%s", firstLine(out))
+	}
+	b.mu.Lock()
+	b.model = modelID
+	b.mu.Unlock()
+	return nil
+}
+
+// firstLine returns the first non-empty line of a gateway answer, so a refusal
+// reads as a sentence instead of a wall of provider details.
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return s
 }
 
 // Capabilities reports the phase-1 Hermes surface: status, usage, and
@@ -814,6 +1345,7 @@ func (b *Backend) Capabilities() backend.Capabilities {
 		SessionCompact:  true,
 		AuthRecovery:    backend.AuthRecoveryAPIKey,
 		AgentManagement: false,
+		Rooms:           true,
 	}
 }
 

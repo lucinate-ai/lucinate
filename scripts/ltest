@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# ltest — run lucinate's tests on this Windows host.
+#
+#   ltest                every package (the whole suite is green here)
+#   ltest rooms|cli|tui|app|hermes|backend
+#                        shorthand for one package
+#   ltest -run TestHandleFor ./internal/rooms/
+#                        anything else is forwarded to `go test`
+#
+# Two host facts this wrapper handles, neither of which is a regression:
+#
+#  1. Go and its caches live on E: (C: runs at ~99% full), so the env is
+#     sourced from scripts/lucinate-go-env.sh.
+#  2. LUCINATE_DATA_DIR wins over HOME in config.DataDir(), so a value
+#     exported by the caller would redirect every test write and turn
+#     "file not created" into the failure mode.
+#
+# Tests that assert POSIX file modes skip themselves on Windows (see
+# requirePosixFileModes); `go test` reports those as skips, not failures.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lucinate-go-env.sh
+. "$HERE/lucinate-go-env.sh"
+cd "$HERE/.." || exit 1
+
+if ! command -v go >/dev/null 2>&1; then
+  echo "ltest: no 'go' on PATH — expected E:/tools/go/bin (see scripts/lucinate-go-env.sh)" >&2
+  exit 1
+fi
+
+# Tests must resolve their own temp data dir. LUCINATE_DATA_DIR wins over
+# HOME in config.DataDir(), so a value exported by the caller (a shell
+# pointed at a live store, a CI job) would redirect every write and turn
+# "file not created" into the failure mode.
+if [ -n "${LUCINATE_DATA_DIR:-}" ]; then
+  echo "ltest: ignoring LUCINATE_DATA_DIR=$LUCINATE_DATA_DIR so tests stay hermetic"
+  unset LUCINATE_DATA_DIR
+fi
+
+case "${1:-}" in
+  "")
+    exec go test ./...
+    ;;
+  rooms)   shift; exec go test ./internal/rooms/ "$@" ;;
+  cli)     shift; exec go test ./internal/cli/ "$@" ;;
+  tui)     shift; exec go test ./internal/tui/ "$@" ;;
+  app)     shift; exec go test ./app/ "$@" ;;
+  hermes)  shift; exec go test ./internal/backend/hermes/ "$@" ;;
+  backend) shift; exec go test ./internal/backend/... "$@" ;;
+  -*)
+    # Flags with no package list mean "the whole suite, with these flags":
+    # `ltest -count=1` must not fall through to `go test` with no packages,
+    # which silently runs only the cwd package.
+    exec go test ./... "$@"
+    ;;
+  *)
+    exec go test "$@"
+    ;;
+esac
