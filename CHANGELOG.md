@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - feat(rooms): `/restart [fresh|with-summary]` starts the current roster in a new room — same members, same per-member models, old room left untouched; with-summary posts a ≤30-line hand-over of the old room (its id, its directory and state, an extractive transcript digest) as the new room's first message
 ### Fixed
+- fix(tui): chat events that a newer OpenClaw gateway scopes as `agent:<id>:<session>` now match the session they belong to — deltas and finals settle the turn instead of leaving the spinner up and queued messages unsent
 - fix(openai): a `200` that is not an event stream (proxy interstitial, captive portal, a base URL pointing at a web page) fails with the content type and the first bytes instead of emitting an empty answer; a stream with no parseable frame fails with "no data frames", while a finish-only chunk remains a legitimate empty answer; `/compact` gets the same guard
 - fix(openai): a stream silent for 5 minutes is cancelled and reported instead of waiting forever, and the HTTP transport bounds the wait for response headers at 60 s, so an endpoint that accepts the connection and says nothing fails visibly
 - feat(cli): `send` and `ask` take `--timeout` (default 10m, `0` waits forever) and report "send: no reply within <duration>"; SIGINT/SIGTERM cancel the in-flight run instead of killing the process mid-write
