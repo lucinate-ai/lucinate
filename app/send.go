@@ -60,6 +60,12 @@ type SendOptions struct {
 	// final, error, or aborted chat event.
 	Detach bool
 
+	// Timeout bounds the wait for the reply when Detach is false. Zero
+	// (the default) waits as long as the backend takes. The CLI sets a
+	// default so a scripted send cannot hang on a silent endpoint; the
+	// streaming backends additionally fail a run that goes quiet.
+	Timeout time.Duration
+
 	// Out is where the assistant's final reply is written when Detach
 	// is false. Defaults to os.Stdout. Send writes the reply text once
 	// the run terminates and appends a single trailing newline if the
@@ -191,7 +197,11 @@ func Send(ctx context.Context, opts SendOptions) error {
 		waitStop  context.CancelFunc
 	)
 	if !opts.Detach {
-		waitCtx, waitStop = context.WithCancel(ctx)
+		if opts.Timeout > 0 {
+			waitCtx, waitStop = context.WithTimeout(ctx, opts.Timeout)
+		} else {
+			waitCtx, waitStop = context.WithCancel(ctx)
+		}
 		defer waitStop()
 		collector = newReplyCollector(sessionKey)
 		waitCh = make(chan error, 1)
@@ -226,8 +236,11 @@ func Send(ctx context.Context, opts SendOptions) error {
 			}
 		}
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-waitCtx.Done():
+		if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("send: no reply within %s", opts.Timeout)
+		}
+		return waitCtx.Err()
 	}
 }
 

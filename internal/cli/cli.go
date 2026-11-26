@@ -10,7 +10,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/lucinate-ai/lucinate/app"
 	"github.com/lucinate-ai/lucinate/internal/logging"
@@ -30,6 +33,12 @@ var errUsage = errors.New("usage")
 // version, error lines); the TUI itself talks directly to the
 // terminal regardless of these writers.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	// Ctrl+C / SIGTERM must cancel an in-flight one-shot call, not just
+	// kill the process mid-write: the streaming backends see the
+	// cancellation and stop their run, and app.Send returns a real error.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	if err := logging.Init(logging.Options{TUI: isTUIInvocation(args)}); err != nil {
 		fmt.Fprintf(stderr, "lucinate: %v\n", err)
 		return 1

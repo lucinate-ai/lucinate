@@ -613,3 +613,42 @@ func TestSend_ContextCancellationReturns(t *testing.T) {
 		t.Fatal("Send did not return after context cancellation")
 	}
 }
+
+// A backend that never answers must not hold a scripted send forever: the
+// caller-supplied Timeout bounds the wait and returns a real error.
+func TestSend_TimeoutReturnsErrorWithoutAReply(t *testing.T) {
+	setTestHome(t)
+
+	fb := newSendFakeBackend()
+	fb.listResult = &protocol.AgentsListResult{
+		DefaultID: "main",
+		MainKey:   "main",
+		Agents:    []protocol.AgentSummary{{ID: "main", Name: "Primary"}},
+	}
+	// No chatSendDispatch: the run is accepted and then stays silent.
+
+	store, _ := makeSendStore("openai-local")
+	var buf bytes.Buffer
+	start := time.Now()
+	err := Send(context.Background(), SendOptions{
+		Connection:       "openai-local",
+		Agent:            "main",
+		Message:          "hi",
+		Timeout:          100 * time.Millisecond,
+		Out:              &buf,
+		BackendFactory:   fixedFactory(fb),
+		ConnectionsStore: store,
+	})
+	if err == nil {
+		t.Fatal("Send returned nil, want a timeout error")
+	}
+	if !strings.Contains(err.Error(), "no reply within") {
+		t.Errorf("error = %q, want the no-reply-within message", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("Send took %s, want the 100ms bound honoured", elapsed)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("output = %q, want nothing written on timeout", buf.String())
+	}
+}

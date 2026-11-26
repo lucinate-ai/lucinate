@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/lucinate-ai/lucinate/app"
 	"github.com/lucinate-ai/lucinate/internal/config"
@@ -30,8 +31,9 @@ func runAsk(ctx context.Context, args []string, stdout io.Writer) error {
 	var (
 		connection, agent, session string
 		detach                     bool
+		timeout                    time.Duration
 	)
-	fs := newAskFlagSet(&connection, &agent, &session, &detach, defaults)
+	fs := newAskFlagSet(&connection, &agent, &session, &detach, &timeout, defaults)
 	fs.Usage = func() { printAskUsage(fs.Output()) }
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -61,6 +63,7 @@ func runAsk(ctx context.Context, args []string, stdout io.Writer) error {
 		Session:        session,
 		Message:        message,
 		Detach:         detach,
+		Timeout:        timeout,
 		Out:            out,
 		BackendFactory: app.DefaultBackendFactory,
 	})
@@ -69,7 +72,7 @@ func runAsk(ctx context.Context, args []string, stdout io.Writer) error {
 // newAskFlagSet mirrors newSendFlagSet but seeds each flag's default
 // value from the saved Ask defaults, so an omitted flag falls back to
 // the configured value instead of the empty string.
-func newAskFlagSet(connection, agent, session *string, detach *bool, d config.AskDefaults) *flag.FlagSet {
+func newAskFlagSet(connection, agent, session *string, detach *bool, timeout *time.Duration, d config.AskDefaults) *flag.FlagSet {
 	fs := flag.NewFlagSet("ask", flag.ContinueOnError)
 	fs.StringVar(connection, "connection", d.Connection, "saved connection name or ID (defaults to the configured Ask connection)")
 	fs.StringVar(connection, "c", d.Connection, "short for --connection")
@@ -79,14 +82,17 @@ func newAskFlagSet(connection, agent, session *string, detach *bool, d config.As
 	fs.StringVar(session, "s", d.Session, "short for --session")
 	fs.BoolVar(detach, "detach", d.Detach, "dispatch the message and exit without waiting for a reply")
 	fs.BoolVar(detach, "d", d.Detach, "short for --detach")
+	// The reply bound is deliberately not part of AskDefaults: it is a
+	// per-invocation safety net, not a preference worth persisting.
+	fs.DurationVar(timeout, "timeout", defaultSendTimeout, "give up waiting for a reply after this long (0 waits forever)")
 	return fs
 }
 
 // printAskUsage writes the `lucinate ask` usage block.
 func printAskUsage(out io.Writer) {
-	fs := newAskFlagSet(new(string), new(string), new(string), new(bool), config.AskDefaults{})
+	fs := newAskFlagSet(new(string), new(string), new(string), new(bool), new(time.Duration), config.AskDefaults{})
 	fs.SetOutput(out)
-	fmt.Fprintln(out, "Usage: lucinate ask [(--connection|-c) <name>] [(--agent|-a) <name>] [(--session|-s) <key>] [--detach|-d] <message...>")
+	fmt.Fprintln(out, "Usage: lucinate ask [(--connection|-c) <name>] [(--agent|-a) <name>] [(--session|-s) <key>] [--detach|-d] [--timeout <duration>] <message...>")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "Sends a single chat message, just like `lucinate send`, but pre-fills the")
 	fmt.Fprintln(out, "connection, agent, session, and detach options from the saved Ask defaults")
