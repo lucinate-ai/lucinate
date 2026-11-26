@@ -47,3 +47,15 @@ services:
     image: alpine/socat
     network_mode: "service:hermes"
     command: ["TCP-LISTEN:19119,fork,bind=0.0.0.0", "TCP:127.0.0.1:9119"]
+  # Echo model for the --echo leg. It runs on the compose network so the
+  # gateway reaches it by service name; a host-side stub on
+  # host.docker.internal is unreachable on hosts whose firewall blocks
+  # container->host traffic. Enabled by the "echo" profile only, so the
+  # Ollama leg does not require the binary.
+  echomodel:
+    profiles: ["echo"]
+    image: alpine:3.22
+    entrypoint: ["/echo"]
+    command: ["-addr", ":18080", "-model", "echo"]
+    volumes:
+      - ./echomodel.bin:/echo:ro

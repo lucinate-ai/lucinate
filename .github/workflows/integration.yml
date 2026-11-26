@@ -99,7 +99,7 @@ jobs:
 
       - name: Echo model logs (on failure)
         if: failure()
-        run: cat test/integration/hermes/echomodel.log || true
+        run: docker compose --profile echo -f test/integration/hermes/docker-compose.yml logs echomodel || true
 
       - name: Teardown
         if: always()

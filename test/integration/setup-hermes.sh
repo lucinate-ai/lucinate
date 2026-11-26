@@ -87,22 +87,19 @@ ok "All prerequisites found"
 
 if [ "$ECHO_LEG" -eq 1 ]; then
     MODEL="echo"
-    MODEL_BASE_URL="http://host.docker.internal:${ECHO_PORT}/v1"
+    # The stub runs as a compose sidecar (profile "echo"), so the gateway
+    # reaches it by service name. host.docker.internal is not reliable: a
+    # host firewall that drops container->host traffic turns every model
+    # call into a 100s API timeout.
+    MODEL_BASE_URL="http://echomodel:${ECHO_PORT}/v1"
 
-    info "Starting echomodel on :$ECHO_PORT"
+    info "Building echomodel sidecar binary"
     if [ -f "$ECHO_PID_FILE" ] && kill -0 "$(cat "$ECHO_PID_FILE")" 2>/dev/null; then
         kill "$(cat "$ECHO_PID_FILE")" 2>/dev/null || true
     fi
     ECHO_BIN="$HERMES_DIR/echomodel.bin"
-    go build -o "$ECHO_BIN" "$SCRIPT_DIR/echomodel/"
-    ECHO_ADDR=":$ECHO_PORT" nohup "$ECHO_BIN" >"$HERMES_DIR/echomodel.log" 2>&1 &
-    echo $! > "$ECHO_PID_FILE"
-    for i in $(seq 1 10); do
-        if curl -fsS "http://localhost:$ECHO_PORT/v1/models" &>/dev/null; then break; fi
-        [ "$i" -eq 10 ] && fail "echomodel did not become ready"
-        sleep 1
-    done
-    ok "echomodel ready (pid $(cat "$ECHO_PID_FILE"))"
+    CGO_ENABLED=0 go build -o "$ECHO_BIN" "$SCRIPT_DIR/echomodel/"
+    ok "echomodel sidecar binary ready ($ECHO_BIN)"
 else
     MODEL_BASE_URL="http://host.docker.internal:11434/v1"
 
@@ -152,8 +149,10 @@ ok "Wrote state/config.yaml (model=$MODEL, base_url=$MODEL_BASE_URL)"
 # --- Bring up the Hermes container ---------------------------------------
 
 info "Pulling and starting Hermes container (HERMES_TAG=$HERMES_TAG)"
+COMPOSE_PROFILE_ARG=""
+[ "$ECHO_LEG" -eq 1 ] && COMPOSE_PROFILE_ARG="--profile echo"
 HERMES_TAG="$HERMES_TAG" \
-    docker compose -f "$COMPOSE_FILE" up -d --pull missing
+    docker compose $COMPOSE_PROFILE_ARG -f "$COMPOSE_FILE" up -d --pull missing
 
 # The upstream Hermes image doesn't ship curl/wget, so we can't run an
 # in-container healthcheck. Poll the published dashboard port instead —
@@ -166,7 +165,7 @@ for i in $(seq 1 "$HERMES_BOOT_TIMEOUT"); do
     fi
     if [ "$i" -eq "$HERMES_BOOT_TIMEOUT" ]; then
         warn "Hermes did not respond on $BASE_URL in ${HERMES_BOOT_TIMEOUT}s — recent logs:"
-        docker compose -f "$COMPOSE_FILE" logs --tail=80 hermes >&2
+        docker compose $COMPOSE_PROFILE_ARG -f "$COMPOSE_FILE" logs --tail=80 hermes >&2
         fail "Hermes gateway is not responding"
     fi
     sleep 1
