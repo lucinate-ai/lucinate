@@ -2,12 +2,17 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/paginator"
 	tea "charm.land/bubbletea/v2"
 	"github.com/a3tai/openclaw-go/protocol"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/lucinate-ai/lucinate/internal/config"
 )
 
 // TestQualifiedModelRef covers the provider-prefix normalisation the
@@ -244,9 +249,31 @@ func pickerWithModels(t *testing.T, f *fakeBackend, models []protocol.ModelChoic
 	t.Helper()
 	p := newModelPickerModel(f, "sess-1", "", false, nil, false)
 	p.setSize(80, 24)
+	// No manual SetFilterText here: production must populate the visible
+	// set itself, otherwise /model opens to an empty body.
 	p, _ = p.Update(modelsLoadedMsg{models: models})
-	p.list.SetFilterText("")
 	return p
+}
+
+// Opening /model must show models immediately: bubbles builds the visible
+// set from the filter, and an empty filter that is never applied left the
+// body blank (only pagination dots) until the user typed a character.
+func TestModelPickerRendersRowsOnOpen(t *testing.T) {
+	models := make([]protocol.ModelChoice, 0, 40)
+	for i := 0; i < 40; i++ {
+		models = append(models, protocol.ModelChoice{
+			ID:   fmt.Sprintf("provider/model-%d", i),
+			Name: fmt.Sprintf("model-%d", i),
+		})
+	}
+	p := pickerWithModels(t, newFakeBackend(), models)
+	got := p.View()
+	if !strings.Contains(got, "model-0") || !strings.Contains(got, "provider/model-0") {
+		t.Fatalf("model picker opened without rows:\n%s", got)
+	}
+	if !strings.Contains(got, "model-1") {
+		t.Errorf("expected more than one row on open:\n%s", got)
+	}
 }
 
 // collect runs a command the way bubbletea would, flattening batches so a
@@ -512,5 +539,85 @@ func TestModelPickerViewStates(t *testing.T) {
 	ready := pickerWithModels(t, fake, []protocol.ModelChoice{{ID: "gpt-4o", Name: "GPT-4o"}})
 	if got := ready.View(); !strings.Contains(got, "GPT-4o") {
 		t.Errorf("expected the loaded model in the view, got:\n%s", got)
+	}
+}
+
+// TestModelPicker_QuitKeysUnboundAndArabicPaginator pins the two chrome
+// fixes: bubbles' `v` quit binding is gone, and pagination reads as
+// "3/40" so position survives NO_COLOR.
+func TestModelPicker_QuitKeysUnboundAndArabicPaginator(t *testing.T) {
+	m := newModelPickerModel(newFakeBackend(), "sess-1", "", false, nil, false)
+	if keys := m.list.KeyMap.Quit.Keys(); len(keys) != 0 {
+		t.Errorf("Quit still bound to %v", keys)
+	}
+	if keys := m.list.KeyMap.ForceQuit.Keys(); len(keys) != 0 {
+		t.Errorf("ForceQuit still bound to %v", keys)
+	}
+	if m.list.Paginator.Type != paginator.Arabic {
+		t.Errorf("paginator type = %v, want Arabic", m.list.Paginator.Type)
+	}
+	m, _ = m.Update(modelsLoadedMsg{models: []protocol.ModelChoice{{ID: "gpt-4o", Name: "GPT-4o"}}})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'v'})
+	if cmd != nil {
+		if _, quit := cmd().(tea.QuitMsg); quit {
+			t.Fatal("pressing v emitted tea.Quit from the model picker")
+		}
+	}
+}
+
+// TestModelPicker_DedupesByQualifiedRef keeps two aliases for the same
+// model from rendering as two identical switches.
+func TestModelPicker_DedupesByQualifiedRef(t *testing.T) {
+	m := pickerWithModels(t, newFakeBackend(), []protocol.ModelChoice{
+		{ID: "deepseek/deepseek-v4", Name: "DeepSeek V4", Provider: "openrouter"},
+		{ID: "deepseek/deepseek-v4", Name: "DeepSeek V4 (alias)", Provider: "openrouter"},
+		{ID: "gpt-4o", Name: "GPT-4o"},
+	})
+	if n := len(m.list.Items()); n != 2 {
+		t.Fatalf("items = %d, want 2 after dedupe by qualified ref", n)
+	}
+}
+
+// TestModelPicker_OneRowPerModelAndRightAlignedRef covers the density
+// fix: one terminal row per model, with the qualified ref dimmed on the
+// right when it differs from the display name.
+func TestModelPicker_OneRowPerModelAndRightAlignedRef(t *testing.T) {
+	if h, s := (modelDelegate{}).Height(), (modelDelegate{}).Spacing(); h != 1 || s != 0 {
+		t.Fatalf("delegate Height/Spacing = %d/%d, want 1/0", h, s)
+	}
+	m := pickerWithModels(t, newFakeBackend(), []protocol.ModelChoice{
+		{ID: "deepseek/deepseek-v4", Name: "DeepSeek V4", Provider: "openrouter"},
+	})
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "openrouter/deepseek/deepseek-v4") {
+		t.Errorf("expected the qualified ref column, got:\n%s", view)
+	}
+	// One row per model: the list body holds the single model on one line.
+	if strings.Count(view, "DeepSeek V4") != 1 {
+		t.Errorf("model rendered more than once:\n%s", view)
+	}
+}
+
+// TestModelPicker_HintVisibleAt80x24 covers the clipped hint row with a
+// connection banner present (the layout the old h-4 did not account for).
+func TestModelPicker_HintVisibleAt80x24(t *testing.T) {
+	conn := &config.Connection{ID: "c1", Name: "local", URL: "http://localhost:9119", Type: config.ConnTypeOpenClaw}
+	m := newModelPickerModel(newFakeBackend(), "sess-1", "", false, conn, false)
+	m.setSize(80, 24)
+	m, _ = m.Update(modelsLoadedMsg{models: []protocol.ModelChoice{{ID: "gpt-4o", Name: "GPT-4o"}}})
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "type to filter") {
+		t.Errorf("expected the app-owned filter hint, got:\n%s", view)
+	}
+	if lines := strings.Split(strings.TrimRight(ansi.Strip(view), "\n"), "\n"); len(lines) > 24 {
+		t.Errorf("view is %d rows at 80x24; hint row is clipped", len(lines))
+	}
+	m.list.SetFilterState(list.Unfiltered)
+	view = ansi.Strip(m.View())
+	if !strings.Contains(view, "esc: back") {
+		t.Errorf("expected the back action hint outside filter mode, got:\n%s", view)
+	}
+	if lines := strings.Split(strings.TrimRight(view, "\n"), "\n"); len(lines) > 24 {
+		t.Errorf("view is %d rows at 80x24 outside filter mode", len(lines))
 	}
 }

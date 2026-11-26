@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lucinate-ai/lucinate/internal/config"
 )
@@ -14,8 +15,9 @@ func TestNewAskFlagSet_AppliesDefaults(t *testing.T) {
 	var (
 		connection, agent, session string
 		detach                     bool
+		timeout                    time.Duration
 	)
-	fs := newAskFlagSet(&connection, &agent, &session, &detach, defaults)
+	fs := newAskFlagSet(&connection, &agent, &session, &detach, &timeout, defaults)
 	if err := fs.Parse(nil); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -29,8 +31,9 @@ func TestNewAskFlagSet_FlagsOverrideDefaults(t *testing.T) {
 	var (
 		connection, agent, session string
 		detach                     bool
+		timeout                    time.Duration
 	)
-	fs := newAskFlagSet(&connection, &agent, &session, &detach, defaults)
+	fs := newAskFlagSet(&connection, &agent, &session, &detach, &timeout, defaults)
 	if err := fs.Parse([]string{"-c", "work", "-a", "other"}); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -77,5 +80,29 @@ func TestRunHelpAsk(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("ask help missing %q\n--- output ---\n%s", want, out)
 		}
+	}
+}
+
+func TestNewAskFlagSet_TimeoutDefaultsAndOverrides(t *testing.T) {
+	var (
+		connection, agent, session string
+		detach                     bool
+		timeout                    time.Duration
+	)
+	fs := newAskFlagSet(&connection, &agent, &session, &detach, &timeout, config.AskDefaults{})
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if timeout != defaultSendTimeout {
+		t.Errorf("default timeout = %s, want %s", timeout, defaultSendTimeout)
+	}
+
+	timeout = 0
+	fs = newAskFlagSet(&connection, &agent, &session, &detach, &timeout, config.AskDefaults{})
+	if err := fs.Parse([]string{"--timeout", "30s"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if timeout != 30*time.Second {
+		t.Errorf("timeout = %s, want 30s", timeout)
 	}
 }

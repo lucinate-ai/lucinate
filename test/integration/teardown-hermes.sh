@@ -23,8 +23,8 @@ ECHO_PID_FILE="$HERMES_DIR/echomodel.pid"
 
 if [ -f "$ECHO_PID_FILE" ]; then
     kill "$(cat "$ECHO_PID_FILE")" 2>/dev/null || true
-    rm -f "$ECHO_PID_FILE" "$HERMES_DIR/echomodel.bin" "$HERMES_DIR/echomodel.log"
 fi
+rm -f "$ECHO_PID_FILE" "$HERMES_DIR/echomodel.bin" "$HERMES_DIR/echomodel.log"
 
 info() { printf "\033[1;34m==>\033[0m %s\n" "$*"; }
 ok()   { printf "\033[1;32m  ✓\033[0m %s\n" "$*"; }
@@ -34,7 +34,7 @@ if [ -f "$COMPOSE_FILE" ]; then
     HERMES_UID="$(id -u)" \
     HERMES_GID="$(id -g)" \
     HERMES_TAG="${HERMES_TAG:-v2026.4.23}" \
-        docker compose -f "$COMPOSE_FILE" down -v
+        docker compose --profile echo -f "$COMPOSE_FILE" down -v
     ok "Hermes container stopped"
 fi
 

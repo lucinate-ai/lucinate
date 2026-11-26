@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/a3tai/openclaw-go/protocol"
@@ -301,6 +302,11 @@ func (b *Backend) ChatSend(ctx context.Context, sessionKey string, params backen
 	return &protocol.ChatSendResult{RunID: runID}, nil
 }
 
+// streamIdleTimeout bounds how long a streaming run may stay silent before
+// it is cancelled. It is a var (not a const) so tests can shorten it without
+// waiting minutes; production always uses the default.
+var streamIdleTimeout = 5 * time.Minute
+
 // runStream performs the HTTP request, parses the SSE stream, and
 // emits chat-delta / chat-final events. Errors during the run are
 // surfaced as a state="error" event so the chat view's existing
@@ -311,6 +317,19 @@ func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string
 		delete(b.runs, runID)
 		b.mu.Unlock()
 	}()
+
+	// A stream that goes quiet mid-answer is as dead as one that never
+	// started. Cancel the run when nothing arrives for streamIdleTimeout so
+	// the caller gets an error instead of waiting forever; reset the timer on
+	// every frame below.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var idleFired atomic.Bool
+	idle := time.AfterFunc(streamIdleTimeout, func() {
+		idleFired.Store(true)
+		cancel()
+	})
+	defer idle.Stop()
 
 	// Build the message list: identity/soul system prompt, then a
 	// separate system message advertising any local skills, then
@@ -335,7 +354,7 @@ func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string
 		body.Messages = append(body.Messages, chatRequestMessage{Role: msg.Role, Content: msg.Content})
 	}
 
-	req, err := b.http.NewRequest(ctx, http.MethodPost, "/chat/completions", body)
+	req, err := b.http.NewRequest(runCtx, http.MethodPost, "/chat/completions", body)
 	if err != nil {
 		b.emitter.EmitChatError(runID, sessionKey, err.Error())
 		return
@@ -358,8 +377,22 @@ func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string
 		return
 	}
 
+	// A 200 is not an answer by itself: proxies, captive portals and a
+	// base URL that points at a web page all reply 200. Without this
+	// check the run would end on an empty final and the user would see
+	// a blank success with nothing in the transcript.
+	if ct := strings.TrimSpace(resp.Header.Get("Content-Type")); ct != "" && !strings.Contains(strings.ToLower(ct), "text/event-stream") {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		b.emitter.EmitChatError(runID, sessionKey, fmt.Sprintf(
+			"the endpoint answered with %q instead of an event stream (first bytes: %q); check the connection's base URL",
+			ct, strings.TrimSpace(string(raw))))
+		return
+	}
+
 	var assistant strings.Builder
+	frames := 0
 	scanErr := httpcommon.ScanSSE(resp.Body, func(payload string) bool {
+		idle.Reset(streamIdleTimeout)
 		if payload == "[DONE]" {
 			return true
 		}
@@ -367,6 +400,7 @@ func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			return false
 		}
+		frames++
 		if len(ev.Choices) == 0 {
 			return false
 		}
@@ -378,8 +412,19 @@ func (b *Backend) runStream(ctx context.Context, runID, sessionKey, model string
 		b.emitter.EmitChatDelta(runID, sessionKey, assistant.String())
 		return false
 	})
+	// Idle wins over the scan error: when the watchdog cancelled the read,
+	// the body reports either "context canceled" or a plain EOF depending on
+	// whether the server closed first, and both mean the same thing here.
+	if idleFired.Load() {
+		b.emitter.EmitChatError(runID, sessionKey, fmt.Sprintf("the endpoint sent nothing for %s", streamIdleTimeout))
+		return
+	}
 	if scanErr != nil {
 		b.emitter.EmitChatError(runID, sessionKey, scanErr.Error())
+		return
+	}
+	if frames == 0 {
+		b.emitter.EmitChatError(runID, sessionKey, "the endpoint returned an event stream with no data frames; check the connection's base URL")
 		return
 	}
 
@@ -700,7 +745,13 @@ func (b *Backend) summarise(ctx context.Context, model string, older []Message) 
 		return "", fmt.Errorf("compact: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 
+	if ct := strings.TrimSpace(resp.Header.Get("Content-Type")); ct != "" && !strings.Contains(strings.ToLower(ct), "text/event-stream") {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("compact: the endpoint answered with %q instead of an event stream (first bytes: %q)", ct, strings.TrimSpace(string(raw)))
+	}
+
 	var summary strings.Builder
+	frames := 0
 	scanErr := httpcommon.ScanSSE(resp.Body, func(payload string) bool {
 		if payload == "[DONE]" {
 			return true
@@ -709,6 +760,7 @@ func (b *Backend) summarise(ctx context.Context, model string, older []Message) 
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			return false
 		}
+		frames++
 		if len(ev.Choices) == 0 {
 			return false
 		}
@@ -717,6 +769,9 @@ func (b *Backend) summarise(ctx context.Context, model string, older []Message) 
 	})
 	if scanErr != nil {
 		return "", fmt.Errorf("compact: %w", scanErr)
+	}
+	if frames == 0 {
+		return "", fmt.Errorf("compact: the endpoint returned an event stream with no data frames")
 	}
 	return summary.String(), nil
 }

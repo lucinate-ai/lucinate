@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/a3tai/openclaw-go/protocol"
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
+	"github.com/a3tai/openclaw-go/protocol"
 	"github.com/joho/godotenv"
 
 	openclawBackend "github.com/lucinate-ai/lucinate/internal/backend/openclaw"
@@ -87,6 +87,7 @@ func newIntegrationChatModel(t *testing.T, c *client.Client) *chatModel {
 		viewport:   viewport.New(),
 		backend:    openclawBackend.New(c),
 		sessionKey: sessionKey,
+		agentID:    agents.Agents[0].ID,
 		agentName:  agentName,
 		renderer:   renderer,
 		width:      80,
@@ -249,4 +250,3 @@ func logTestEvent(t *testing.T, ev protocol.Event) {
 	}
 	t.Logf("  event: %s", name)
 }
-

@@ -18,6 +18,12 @@ import (
 	"time"
 )
 
+// ResponseHeaderTimeout bounds the wait for response headers. A server
+// that accepts the TCP connection and then says nothing would otherwise
+// hold the caller forever; 60s is long enough for a slow model to start
+// streaming, short enough that a misconfigured base URL fails visibly.
+const ResponseHeaderTimeout = 60 * time.Second
+
 // Client is a thin Bearer-token HTTP client scoped to a base URL. The
 // API key is mutable so auth-recovery flows (the TUI's API-key modal)
 // can swap it without rebuilding the surrounding backend.
@@ -118,9 +124,12 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 
 // NewDefaultTransport clones http.DefaultTransport and overlays
 // connect-time deadlines. Streaming reads remain unbounded — only
-// dial and TLS handshake are constrained, so a slow or unreachable
-// backend gives up at the user-configured bound but a long-running
-// chat completion is not cut short.
+// dial, TLS handshake, and (via ResponseHeaderTimeout) the wait for
+// response headers are constrained, so a slow or unreachable backend
+// gives up at the user-configured bound but a long-running chat
+// completion is not cut short. The header bound is what stops a server
+// that accepts the connection and then never answers from hanging the
+// caller forever.
 func NewDefaultTransport(connectTimeout time.Duration) http.RoundTripper {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
@@ -135,5 +144,6 @@ func NewDefaultTransport(connectTimeout time.Duration) http.RoundTripper {
 		t.DialContext = dialer.DialContext
 		t.TLSHandshakeTimeout = connectTimeout
 	}
+	t.ResponseHeaderTimeout = ResponseHeaderTimeout
 	return t
 }

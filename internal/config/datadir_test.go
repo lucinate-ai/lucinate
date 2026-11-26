@@ -11,7 +11,7 @@ func TestDataDir_HomeFallback(t *testing.T) {
 	t.Cleanup(func() { SetDataDir("") })
 
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	got, err := DataDir()
 	if err != nil {
@@ -26,7 +26,7 @@ func TestDataDir_EnvVarOverridesHome(t *testing.T) {
 	SetDataDir("")
 	t.Cleanup(func() { SetDataDir("") })
 
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	envDir := t.TempDir()
 	t.Setenv(DataDirEnvVar, envDir)
 

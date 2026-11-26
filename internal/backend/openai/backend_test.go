@@ -22,7 +22,7 @@ import (
 // server.
 func newBackend(t *testing.T, srv *httptest.Server) *Backend {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
+	setTestHome(t)
 	b, err := New(Options{
 		ConnectionID: "conn-test",
 		BaseURL:      srv.URL + "/v1",
@@ -1087,5 +1087,140 @@ func TestBackend_ChatHistory_RendersSummary(t *testing.T) {
 	}
 	if got.Messages[0].Role != "system" || got.Messages[0].Content[0].Text != "Summary of earlier conversation:\nfoo" {
 		t.Errorf("summary not rendered in history: %+v", got.Messages[0])
+	}
+}
+
+// A 200 is not an answer: a proxy, captive portal or a base URL pointing at
+// a web page replies 200 with HTML. Without the check the run ended on an
+// empty final, so the user saw a blank success and nothing was persisted.
+func TestBackend_ChatSendRejectsANonEventStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("<html><body>portal</body></html>"))
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"}); err != nil {
+		t.Fatalf("ChatSend: %v", err)
+	}
+
+	ev := parseChat(t, drainEvent(t, b.Events()))
+	if ev.State != "error" {
+		t.Fatalf("state = %q, want error", ev.State)
+	}
+	if !strings.Contains(ev.ErrorMessage, "instead of an event stream") {
+		t.Errorf("error = %q, want the wrong-content-type message", ev.ErrorMessage)
+	}
+	if !strings.Contains(ev.ErrorMessage, "text/html") {
+		t.Errorf("error = %q, want the offending content type named", ev.ErrorMessage)
+	}
+
+	// The orphaned user turn is all that may be persisted.
+	msgs, err := b.store.LoadHistory("a", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Role != "user" {
+		t.Errorf("history = %+v, want only the user message", msgs)
+	}
+}
+
+// A stream that carries no data frame at all (only comments, or nothing)
+// must be an error, not an empty successful reply.
+func TestBackend_ChatSendEmptyEventStreamIsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(": keep-alive\n\n"))
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"}); err != nil {
+		t.Fatalf("ChatSend: %v", err)
+	}
+
+	ev := parseChat(t, drainEvent(t, b.Events()))
+	if ev.State != "error" {
+		t.Fatalf("state = %q, want error", ev.State)
+	}
+	if !strings.Contains(ev.ErrorMessage, "no data frames") {
+		t.Errorf("error = %q, want the no-data-frames message", ev.ErrorMessage)
+	}
+}
+
+// An empty answer is still an answer: a finish-only chunk proves the
+// endpoint spoke the protocol, so no error is raised (this is the case the
+// frame counter must not confuse with a non-SSE response).
+func TestBackend_ChatSendFinishOnlyChunkIsASuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"}); err != nil {
+		t.Fatalf("ChatSend: %v", err)
+	}
+
+	ev := parseChat(t, drainEvent(t, b.Events()))
+	if ev.State != "final" {
+		t.Fatalf("state = %q (error = %q), want final", ev.State, ev.ErrorMessage)
+	}
+}
+
+// A stream that goes quiet mid-answer must surface an error instead of
+// hanging the run forever.
+func TestBackend_ChatSendIdleStreamEmitsError(t *testing.T) {
+	old := streamIdleTimeout
+	streamIdleTimeout = 150 * time.Millisecond
+	t.Cleanup(func() { streamIdleTimeout = old })
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"content":"Hel"}}]}`+"\n\n")
+		flusher.Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+
+	b := newBackend(t, srv)
+	if err := b.CreateAgent(context.Background(), backend.CreateAgentParams{Name: "a", Model: "m"}); err != nil {
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	if _, err := b.ChatSend(context.Background(), "a", backend.ChatSendParams{Message: "hi", IdempotencyKey: "idem"}); err != nil {
+		t.Fatalf("ChatSend: %v", err)
+	}
+
+	first := parseChat(t, drainEvent(t, b.Events()))
+	if first.State != "delta" {
+		t.Fatalf("first event state = %q, want delta", first.State)
+	}
+	ev := parseChat(t, drainEvent(t, b.Events()))
+	if ev.State != "error" {
+		t.Fatalf("second event state = %q, want error", ev.State)
+	}
+	if !strings.Contains(ev.ErrorMessage, "sent nothing for") {
+		t.Errorf("error = %q, want the idle message", ev.ErrorMessage)
 	}
 }

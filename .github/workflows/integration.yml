@@ -47,6 +47,12 @@ jobs:
       - name: Connection + chat smoke test
         run: make test-integration-openclaw-smoke
 
+      # The queue-ordering and disconnect tests catch regressions the smoke
+      # test cannot (gateway-scoped session keys, reconnect after a dropped
+      # socket). They need the same echo environment and take seconds.
+      - name: Full integration suite (queue, disconnect, smoke)
+        run: make test-integration-openclaw
+
       - name: Gateway logs (on failure)
         if: failure()
         run: docker compose -f test/integration/docker-compose.yml logs gateway || true
@@ -99,7 +105,7 @@ jobs:
 
       - name: Echo model logs (on failure)
         if: failure()
-        run: cat test/integration/hermes/echomodel.log || true
+        run: docker compose --profile echo -f test/integration/hermes/docker-compose.yml logs echomodel || true
 
       - name: Teardown
         if: always()

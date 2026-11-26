@@ -65,7 +65,7 @@ func TestUpdateCheckCmd_RunsWhenStale(t *testing.T) {
 
 func TestUpdateCheckDoneMsg_PersistsAndBadges(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	app := AppModel{prefs: config.DefaultPreferences()}
 	msg := updateCheckDoneMsg{
@@ -99,7 +99,7 @@ func TestUpdateCheckDoneMsg_PersistsAndBadges(t *testing.T) {
 
 func TestUpdateCheckDoneMsg_NewerFalseSuppressesBadge(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 
 	app := AppModel{prefs: config.DefaultPreferences()}
 	msg := updateCheckDoneMsg{At: 1700000000, LatestSeen: "v1.0.0", Newer: false}

@@ -18,17 +18,6 @@ type eventEnvelope struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
-// Ask is a blocking server → client request from the agent
-// (approval/clarify/sudo/secret). The translator surfaces it; the
-// backend answers via the paired <type>.respond RPC (auto-decline in
-// this phase) and renders a system message.
-type Ask struct {
-	Type      string // "approval.request", "clarify.request", …
-	SessionID string
-	RequestID string
-	Payload   json.RawMessage
-}
-
 // textPayload covers every event whose payload is just {text}:
 // message.delta, thinking.delta, reasoning.delta, reasoning.available.
 type textPayload struct {
@@ -65,11 +54,6 @@ type toolCompletePayload struct {
 	} `json:"result"`
 }
 
-// askPayload pulls the request id shared by the interactive asks.
-type askPayload struct {
-	RequestID string `json:"request_id"`
-}
-
 // Translator converts tui_gateway event notifications into the
 // protocol.Event frames the TUI already consumes. It is deliberately
 // I/O-free so the whole mapping is table-testable against the Phase 0
@@ -97,11 +81,11 @@ func (t *Translator) SetRun(sessionID, runID string) {
 }
 
 // InjectSystemLine splices a "System: …" notice into the session's
-// streaming text and returns the delta event carrying it. Used when
-// the backend auto-declines an interactive ask mid-turn: a chat error
-// event would finalise the run in the TUI while the server keeps
-// streaming, so the notice rides the existing assistant row instead
-// (and the history layer already strips System:-prefixed lines).
+// streaming text and returns the delta event carrying it. Used when an
+// ask times out mid-turn: a chat error event would finalise the run in
+// the TUI while the server keeps streaming, so the notice rides the
+// existing assistant row instead (and the history layer already strips
+// System:-prefixed lines).
 func (t *Translator) InjectSystemLine(sessionID, line string) protocol.Event {
 	b := t.acc[sessionID]
 	if b == nil {
@@ -117,9 +101,17 @@ func (t *Translator) InjectSystemLine(sessionID, line string) protocol.Event {
 	return chatDeltaEvent(t.runIDs[sessionID], sessionID, b.String())
 }
 
-// Translate maps one notification to zero or more protocol events,
-// plus the interactive ask when the frame is one (nil otherwise).
-func (t *Translator) Translate(n rpc.Notification) ([]protocol.Event, *Ask) {
+// AskCancel is a request.cancel notification: the gateway has withdrawn
+// the server→client ask identified by RequestID, so the client must drop
+// any panel showing it and not answer.
+type AskCancel struct {
+	SessionID string
+	RequestID string
+}
+
+// Translate maps one notification to zero or more protocol events, plus
+// the cancelled ask when the frame withdraws one (nil otherwise).
+func (t *Translator) Translate(n rpc.Notification) ([]protocol.Event, *AskCancel) {
 	if n.Method != "event" {
 		return nil, nil
 	}
@@ -217,10 +209,22 @@ func (t *Translator) Translate(n rpc.Notification) ([]protocol.Event, *Ask) {
 			}),
 		}}, nil
 
-	case "approval.request", "clarify.request", "sudo.request", "secret.request":
-		var p askPayload
+	case "request.cancel":
+		// The gateway withdrew an open ask: tell the client to close the
+		// panel for that id. The backend also drops its pending entry.
+		var p struct {
+			PromptID  string `json:"prompt_id"`
+			RequestID string `json:"request_id"`
+		}
 		_ = json.Unmarshal(env.Payload, &p)
-		return nil, &Ask{Type: env.Type, SessionID: sid, RequestID: p.RequestID, Payload: env.Payload}
+		id := p.PromptID
+		if id == "" {
+			id = p.RequestID
+		}
+		if id == "" {
+			return nil, nil
+		}
+		return []protocol.Event{askCancelEvent(runID, sid, id)}, &AskCancel{SessionID: sid, RequestID: id}
 
 	default:
 		// gateway.ready, session.info, status.update,
@@ -282,6 +286,22 @@ func chatAbortedEvent(runID, sid string) protocol.Event {
 			State:      "aborted",
 			RunID:      runID,
 			SessionKey: sid,
+		}),
+	}
+}
+
+// askCancelEvent tells the client to close the panel for a withdrawn ask.
+func askCancelEvent(runID, sid, requestID string) protocol.Event {
+	return protocol.Event{
+		EventName: protocol.EventAgent,
+		Payload: mustMarshal(protocol.AgentEvent{
+			RunID:  runID,
+			Stream: "ask",
+			Data: map[string]any{
+				"sessionKey": sid,
+				"requestId":  requestID,
+				"kind":       "cancel",
+			},
 		}),
 	}
 }

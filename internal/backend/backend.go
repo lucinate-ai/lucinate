@@ -225,6 +225,12 @@ type Capabilities struct {
 	// side scheduling print a clear "not available" message rather
 	// than crashing on a failed type assertion.
 	Cron bool
+
+	// Rooms indicates the backend's gateway hosts Hermes rooms (durable
+	// multi-profile group chats). Only the Hermes backend sets it; the
+	// TUI gates /rooms on it so other connections say why the view is
+	// unavailable instead of dialling an endpoint they do not serve.
+	Rooms bool
 }
 
 // AuthRecovery selects the auth-modal flow the connecting view runs
@@ -339,6 +345,26 @@ type ThreadStatus struct {
 type ExecBackend interface {
 	ExecRequest(ctx context.Context, command, sessionKey string) (*protocol.ExecApprovalRequestResult, error)
 	ExecResolve(ctx context.Context, id, decision string) (*protocol.ExecApprovalResolveResult, error)
+}
+
+// AskBackend exposes the gateway's questions to the client so the user can
+// answer them instead of the backend declining on their behalf.
+type AskBackend interface {
+	RespondAsk(ctx context.Context, resp AskResponse) error
+}
+
+// AskResponse is the user's answer to one gateway ask.
+type AskResponse struct {
+	SessionKey string
+	RequestID  string
+	// RPCID is the JSON-RPC id of the server→client request the ask came
+	// from, in its raw JSON form (the gateway uses strings like
+	// "srq-1a2b3c"; our own ids are numbers). The answer is written back
+	// with this id verbatim.
+	RPCID  string
+	Kind   string // "approval" | "clarify"
+	Choice string // approval: one of the payload's offered choices
+	Answer string // clarify: the user's answer ("" is a valid skip)
 }
 
 // CompactBackend exposes server-side context compaction behind

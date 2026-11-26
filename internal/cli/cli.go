@@ -1,6 +1,7 @@
 // Package cli implements the lucinate command-line entry point: argument
-// parsing, subcommand dispatch (`send`, `ask`, `chat`, `help`), and the
-// bare flag set (`--version`) that falls through to the interactive TUI.
+// parsing, subcommand dispatch (`send`, `ask`, `chat`, `rooms`, `help`),
+// and the bare flag set (`--version`) that falls through to the
+// interactive TUI.
 package cli
 
 import (
@@ -9,7 +10,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/lucinate-ai/lucinate/app"
 	"github.com/lucinate-ai/lucinate/internal/logging"
@@ -29,6 +33,12 @@ var errUsage = errors.New("usage")
 // version, error lines); the TUI itself talks directly to the
 // terminal regardless of these writers.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	// Ctrl+C / SIGTERM must cancel an in-flight one-shot call, not just
+	// kill the process mid-write: the streaming backends see the
+	// cancellation and stop their run, and app.Send returns a real error.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	if err := logging.Init(logging.Options{TUI: isTUIInvocation(args)}); err != nil {
 		fmt.Fprintf(stderr, "lucinate: %v\n", err)
 		return 1
@@ -59,6 +69,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return finish(runAsk(ctx, args[1:], stdout), stderr)
 		case "chat":
 			return finish(runChat(ctx, args[1:]), stderr)
+		case "rooms":
+			return finish(runRooms(ctx, args[1:], stdout), stderr)
 		}
 		// Unknown subcommand: fall through to flag parsing so a
 		// mistyped subcommand surfaces a clear flag-package error

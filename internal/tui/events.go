@@ -35,6 +35,24 @@ type toolEventData struct {
 	IsError    bool            `json:"isError,omitempty"`
 }
 
+// askEventData is the shape of the AgentEvent.Data map for stream=="ask"
+// events — the gateway's approval/clarify questions the user answers from
+// the panel above the composer.
+type askEventData struct {
+	SessionKey string `json:"sessionKey"`
+	RequestID  string `json:"requestId"`
+	// RPCID is the request id exactly as the gateway sent it — a JSON
+	// string "srq-…" on the live gateway, a number in older captures —
+	// so it can be echoed back unchanged.
+	RPCID       json.RawMessage `json:"rpcId"`
+	Kind        string          `json:"kind"` // "approval" | "clarify" | "cancel"
+	Question    string          `json:"question"`
+	Choices     []string        `json:"choices"`
+	Command     string          `json:"command"`
+	Description string          `json:"description"`
+	Cwd         string          `json:"cwd"`
+}
+
 // toolResultPayload mirrors the gateway's ToolResult shape just enough to
 // pull a one-line error message out of a failed tool result. Full output
 // rendering is intentionally deferred — see the "expand/collapse" follow-up
@@ -140,13 +158,26 @@ func extractEventSessionKey(payload []byte) string {
 	return probe.SessionKey
 }
 
+// eventBelongsToSession reports whether an event's session key addresses the
+// session this model is showing. Gateways scope some events as
+// "agent:<agent-id>:<session>" while agents.list reports the bare session key,
+// so the qualified form for our own agent has to be accepted too. An empty
+// event key is allowed through: older gateways and non-session-scoped events
+// (health, tick) do not carry one.
+func eventBelongsToSession(evKey, sessionKey, agentID string) bool {
+	if evKey == "" || evKey == sessionKey {
+		return true
+	}
+	return agentID != "" && evKey == "agent:"+agentID+":"+sessionKey
+}
+
 func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	slog.Debug("raw event", "name", ev.EventName, "payload_len", len(ev.Payload))
 
 	// Drop events scoped to a different session before any handler runs.
 	// Events without a sessionKey (or with an empty one) fall through.
-	if key := extractEventSessionKey(ev.Payload); key != "" && key != m.sessionKey {
-		slog.Debug("event ignored: session mismatch", "key", key, "ours", m.sessionKey)
+	if key := extractEventSessionKey(ev.Payload); !eventBelongsToSession(key, m.sessionKey, m.agentID) {
+		slog.Debug("event ignored: session mismatch", "key", key, "ours", m.sessionKey, "agent", m.agentID)
 		return nil
 	}
 
@@ -458,7 +489,11 @@ func (m *chatModel) handleAgentEvent(ev protocol.Event) tea.Cmd {
 		slog.Debug("agent event parse error", "err", err)
 		return nil
 	}
-	if agentEv.Stream != "tool" {
+	switch agentEv.Stream {
+	case "ask":
+		return m.handleAskEvent(agentEv)
+	case "tool":
+	default:
 		return nil
 	}
 
@@ -524,6 +559,50 @@ func (m *chatModel) handleAgentEvent(ev protocol.Event) tea.Cmd {
 		m.updateViewport()
 		return nil
 	}
+	return nil
+}
+
+// handleAskEvent stores a pending approval/clarify question on the model so
+// the panel above the composer can render it and the chat's key handler can
+// answer it. The draft is never touched.
+func (m *chatModel) handleAskEvent(agentEv protocol.AgentEvent) tea.Cmd {
+	rawData, err := json.Marshal(agentEv.Data)
+	if err != nil {
+		slog.Debug("ask event marshal error", "err", err)
+		return nil
+	}
+	var ad askEventData
+	if err := json.Unmarshal(rawData, &ad); err != nil {
+		slog.Debug("ask event parse error", "err", err)
+		return nil
+	}
+	if ad.Kind == "cancel" {
+		// The gateway withdrew the ask (request.cancel): close its panel.
+		if m.ask != nil && (ad.RequestID == "" || m.ask.requestID == ad.RequestID) {
+			m.ask = nil
+			m.applyLayout()
+			m.updateViewport()
+		}
+		return nil
+	}
+	rpcID := strings.TrimSpace(string(ad.RPCID))
+	if ad.RequestID == "" && rpcID == "" {
+		return nil
+	}
+	slog.Debug("ask event", "kind", ad.Kind, "request_id", ad.RequestID, "rpc_id", rpcID, "session", ad.SessionKey)
+	m.ask = &pendingAsk{
+		sessionKey:  ad.SessionKey,
+		requestID:   ad.RequestID,
+		rpcID:       rpcID,
+		kind:        ad.Kind,
+		question:    ad.Question,
+		choices:     ad.Choices,
+		command:     ad.Command,
+		description: ad.Description,
+		cwd:         ad.Cwd,
+	}
+	m.applyLayout()
+	m.updateViewport()
 	return nil
 }
 

@@ -264,8 +264,8 @@ type Program struct {
 type programMode int
 
 const (
-	modeLegacy programMode = iota // pre-connected Backend; lifecycle owned by caller
-	modeManaged                   // Store + factory; lifecycle owned by the program
+	modeLegacy  programMode = iota // pre-connected Backend; lifecycle owned by caller
+	modeManaged                    // Store + factory; lifecycle owned by the program
 )
 
 // resolveLegacyBackend reconciles the deprecated Client field with the

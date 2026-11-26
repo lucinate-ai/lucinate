@@ -158,13 +158,13 @@ func newRoutinesModel(hideHints bool, disableExitKeys bool) routinesModel {
 	l := list.New(nil, routineDelegate{}, 0, 0)
 	l.Title = "Routines"
 	l.SetShowStatusBar(false)
-	l.SetShowHelp(!hideHints)
+	// App-owned hint line (see viewList); the widget footer advertised
+	// bubbles' `v` Quit key as "select".
+	l.SetShowHelp(false)
 	l.Styles.Title = headerStyle
 	l.SetFilteringEnabled(false)
-	if disableExitKeys {
-		l.KeyMap.Quit.Unbind()
-		l.KeyMap.ForceQuit.Unbind()
-	}
+	l.KeyMap.Quit.Unbind()
+	l.KeyMap.ForceQuit.Unbind()
 	return routinesModel{
 		list:            l,
 		subset:          routinesSubList,
@@ -195,6 +195,11 @@ func (m *routinesModel) setSize(w, h int) {
 	}
 }
 
+// routineFormHint is the routine form's pinned key hint. It is longer
+// than an 80-column terminal, so the renderer wraps it and the form's
+// footer budget adds the wrapped line count.
+const routineFormHint = " ctrl+s: save · alt+↑/↓: insert step · alt+delete: remove step · tab: next field · esc: cancel"
+
 // sizeFormBody sizes every step textarea and the body viewport that
 // scrolls them. With the viewport in place we no longer try to make
 // every textarea visible at once (long forms would force them down to
@@ -206,7 +211,12 @@ func (m *routinesModel) setSize(w, h int) {
 func (m *routinesModel) sizeFormBody() {
 	const perStepHeight = 4
 	const titleLines = 2 // header line + trailing blank
-	const footerLines = 2 // help line + trailing margin (error squeezes in via shrink)
+	// The help line is longer than an 80-column terminal and wraps; its
+	// wrapped height joins the pinned footer budget.
+	footerLines := 2 // help line + trailing margin (error squeezes in via shrink)
+	if m.width > 0 {
+		footerLines += lipgloss.Height(wordWrap(routineFormHint, m.width)) - 1
+	}
 	const minBodyHeight = 5
 
 	width := m.width - 4
@@ -1023,7 +1033,7 @@ func (m routinesModel) viewForm() string {
 		prompt := fmt.Sprintf("Delete step %d? (y/n)", m.form.pendingDeleteIdx+1)
 		footer.WriteString(errorStyle.Render(prompt))
 	} else if !m.hideHints {
-		footer.WriteString(helpStyle.Render(" ctrl+s: save · alt+↑/↓: insert step · alt+delete: remove step · tab: next field · esc: cancel"))
+		footer.WriteString(helpStyle.Render(wordWrap(routineFormHint, m.width)))
 	}
 
 	parts := []string{titleLine, m.form.body.View()}

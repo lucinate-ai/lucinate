@@ -3,7 +3,9 @@
 ## Purpose
 
 `lucinate send` is a non-TUI entry point that dispatches a single chat turn through a stored connection / agent / session and (by default) prints the assistant's first complete reply to stdout. It is the scripting surface alongside the interactive TUI, and it deliberately reuses the TUI's connection store, backend factory, and event channel so retry / auth / capability behaviour stays consistent across both modes. This spec covers the `app.Send` lifecycle, the default-session rule, detach semantics, the `ask` alias, the embedder seam, reply-text extraction, and the deliberate non-goals. The user-facing CLI shape is documented in the README's one-shot-mode section.
+
 ## Requirements
+
 ### Requirement: Send lifecycle pipeline
 
 `app.Send` (`app/send.go`) SHALL run an eight-step pipeline:
@@ -230,3 +232,31 @@ If a backend ever changes the wire shape, both consumers update together — the
 - **WHEN** a `token-mismatch` or `401` auth error occurs during `Send`
 - **THEN** it bubbles up as a normal error rather than opening an auth-recovery modal
 
+### Requirement: The reply wait is bounded
+
+`send` and `ask` SHALL bound how long they wait for the assistant's reply, since
+a scripted caller cannot recover from a process that never returns. The bound
+SHALL be settable with `--timeout`, default to ten minutes, and treat `0` as
+"wait forever". Exceeding it SHALL fail with an error naming the bound, and SHALL
+NOT write a partial reply to the output stream.
+
+`SIGINT` and `SIGTERM` SHALL cancel the in-flight run through the backend's
+context rather than killing the process mid-write.
+
+#### Scenario: A silent backend under the default bound
+
+- **WHEN** the run is accepted and no reply event arrives within `--timeout`
+- **THEN** `Send` returns an error naming the timeout
+- **AND** nothing is written to the output stream
+
+#### Scenario: The user interrupts
+
+- **WHEN** the user sends `SIGINT` while `Send` waits for a reply
+- **THEN** the backend's run is cancelled
+- **AND** `Send` returns the cancellation error rather than the process dying
+  mid-write
+
+#### Scenario: Unbounded when asked
+
+- **WHEN** `--timeout 0` is supplied
+- **THEN** no deadline is applied to the reply wait

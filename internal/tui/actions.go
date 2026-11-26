@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"charm.land/lipgloss/v2"
 )
 
 // Action is a discoverable, view-level command exposed by the active
@@ -57,6 +59,50 @@ func renderActionHints(actions []Action) string {
 		return ""
 	}
 	return "  " + strings.Join(parts, " · ")
+}
+
+// renderHintLine renders the app-owned action hint as one dim block,
+// word-wrapped to the view width so every action stays readable on a
+// narrow terminal. Views render this instead of the bubbles list's own
+// footer: that footer advertised the widget's `v select` / `? more` keys,
+// which fire at best nothing here (Quit is unbound) and at worst a quit.
+func renderHintLine(actions []Action, width int) string {
+	hint := renderActionHints(actions)
+	if hint == "" {
+		return ""
+	}
+	if width > 0 {
+		hint = wordWrap(hint, width)
+	}
+	return helpStyle.Render(hint)
+}
+
+// renderFilterHint is the app-owned hint while a list's filter input owns
+// the keys. It says what esc really does there — clears the query — rather
+// than advertising the view's back action, which is what produced the
+// double "esc cancel" + "esc: back" on the model picker.
+func renderFilterHint(width int) string {
+	return helpStyle.Render(wordWrap("  type to filter · enter: pick · esc: clear filter", width))
+}
+
+// blockRows reports how many terminal rows a view block occupies when it
+// is stacked above another block. A trailing newline is the separator to
+// the next block, not a row of its own; the empty string is no block.
+func blockRows(block string) int {
+	block = strings.TrimSuffix(block, "\n")
+	if block == "" {
+		return 0
+	}
+	return lipgloss.Height(block)
+}
+
+// maxInt is the two-argument integer maximum, kept here so the layout
+// helpers in the pickers read plainly.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // actionsEqual reports whether two action lists are identical. AppModel

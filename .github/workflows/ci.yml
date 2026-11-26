@@ -22,6 +22,11 @@ jobs:
       - name: Test
         run: make test
 
+      # The suite must also hold under the race detector: a data race in a
+      # test makes its own evidence worthless and hides in `go test ./...`.
+      - name: Test (race)
+        run: go test -race -count=1 -timeout 15m ./...
+
       - name: Startup smoke
         run: make smoke
 

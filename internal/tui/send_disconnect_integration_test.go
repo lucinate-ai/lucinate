@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,23 @@ import (
 // integration gateway. The repro drops it mid-session to mimic the gateway
 // becoming unreachable under an established WebSocket.
 const dockerGatewayContainer = "integration-gateway-1"
+
+// waitForGatewayHealthy blocks until the restarted container reports healthy.
+// `docker start` returns before the gateway answers, and the next test in the
+// package used to connect during that window and see "connection reset by
+// peer" — a test-isolation failure, not a product one.
+func waitForGatewayHealthy(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := exec.Command("docker", "inspect", "-f", "{{.State.Health.Status}}", dockerGatewayContainer).Output()
+		if err == nil && strings.TrimSpace(string(out)) == "healthy" {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Errorf("gateway container %s did not become healthy within 90s", dockerGatewayContainer)
+}
 
 // dockerCmd runs a docker subcommand and fails the test on error.
 func dockerCmd(t *testing.T, args ...string) {
@@ -66,6 +84,7 @@ func TestSendWhileDisconnected_Integration(t *testing.T) {
 	t.Cleanup(func() {
 		_ = exec.Command("docker", "unpause", dockerGatewayContainer).Run()
 		_ = exec.Command("docker", "start", dockerGatewayContainer).Run()
+		waitForGatewayHealthy(t)
 	})
 
 	c := connectTestClient(t)

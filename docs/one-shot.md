@@ -94,3 +94,17 @@ regardless — the shared rule costs them nothing.
 - **Auth recovery modals.** The TUI routes `token-mismatch` / `401` into modal flows; `Send`
   lets them bubble. Scripts that need to bootstrap auth should run `lucinate` once interactively
   and let the TUI's auth flow seed the secrets store.
+
+## The reply wait is bounded
+
+A one-shot call is usually scripted, and a script cannot recover from a process
+that never returns. `--timeout` (default 10m, `0` waits forever) puts a deadline
+on the wait for the reply and surfaces `send: no reply within <duration>` instead
+of blocking. The streaming backends have their own inner guards (response-header
+timeout, idle-stream cancellation), so the CLI bound is the outer net rather than
+the only one.
+
+`SIGINT`/`SIGTERM` cancel the same context (`signal.NotifyContext` in `cli.Run`),
+so Ctrl+C stops the run through the backend instead of killing the process
+mid-write. The flag is deliberately not part of `AskDefaults`: a reply bound is a
+per-invocation safety net, not a preference worth persisting.

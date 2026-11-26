@@ -56,7 +56,7 @@ On Windows, in PowerShell:
 irm https://raw.githubusercontent.com/lucinate-ai/lucinate/main/install/lucinate.ps1 | iex
 ```
 
-Or, if you have Go 1.25+:
+Or, if you have Go 1.26+:
 
 ```sh
 go install github.com/lucinate-ai/lucinate@latest
@@ -80,9 +80,9 @@ Three connection types are supported:
 
 - **[OpenClaw](docs/backend_openclaw.md)** — connect to an OpenClaw gateway over WebSocket. Auth uses Ed25519 device pairing.
 - **[OpenAI-compatible](docs/backend_openai.md)** — Ollama, vLLM, LM Studio, llamafile, OpenAI - connect to any `/v1/chat/completions` endpoint.
-- **[Hermes (Nous Research)](docs/backend_hermes.md)** — connect to a Hermes Agent profile's `/v1/responses` API server. One Lucinate connection maps to one Hermes profile; chat state lives server-side.
+- **[Hermes (Nous Research)](docs/backend_hermes.md)** — connect to a Hermes Agent profile's `hermes dashboard` gateway over WebSocket (`/api/ws`, default `http://localhost:9119`). One Lucinate connection maps to one Hermes profile; chat state lives server-side.
 
-OpenClaw URLs can use `https`, `http`, `wss`, or `ws` — lucinate derives the WebSocket endpoint automatically. OpenAI-compatible and Hermes URLs are HTTP(S) base URLs ending in `/v1`.
+OpenClaw URLs can use `https`, `http`, `wss`, or `ws` — lucinate derives the WebSocket endpoint automatically. OpenAI-compatible URLs are HTTP(S) base URLs ending in `/v1`. Hermes URLs are the gateway's HTTP(S) base URL (no `/v1` path — the legacy `/v1/responses` API server is rejected); lucinate dials `/api/ws` and asks for the gateway token on connect.
 
 Switch between saved connections at any time with `/connections` from the chat view. Use `n` to add a new one, `e` to edit, `d` to delete (with confirmation).
 
@@ -112,6 +112,11 @@ Press Enter in the lucinate prompt to retry — the connection completes in plac
 
 Select an agent from the list to start chatting.
 
+On a Hermes connection the picker lists the gateway's **profiles** — one agent
+per profile the machine serves, each with its model. Selecting one runs every
+session you open under that profile; the profile's SOUL, skills, memory and
+model come with it.
+
 | Key | Action |
 |-----|--------|
 | `Enter` | Select agent |
@@ -137,8 +142,36 @@ The mouse works too: **wheel scrolls the history**, and **click-drag selects
 text** — it lands on your clipboard the moment you let go. Prefer your
 terminal's native selection? `/mouse off` hands the mouse back.
 
-### Settings
+### 5. Rooms (Hermes)
 
+On a Hermes connection `/rooms` opens the hosted group chats: a durable
+transcript on the gateway and a frozen roster of 2–6 profiles that answer your
+messages. Seating a room needs no gateway CLI — pick the profiles, name it, and
+type.
+
+```
+/rooms            # room list · n seat a new room · enter open · p save as preset
+@kowal status?    # address one member; @all (or no mention) addresses everyone
+/mode moderator   # or round-robin — /mode, /moderator
+```
+
+While a member answers, its row shows a spinner fed by the gateway's live
+`member_activity` (rooms do not stream partial text — the gateway keeps deltas
+out of the durable log). If a member blocks on an approval, the transcript says
+so: `/approve @kowal once|deny`, `/retry`, `/stop`. Each member runs the model
+its profile is configured with; `/model` reports that instead of offering a
+per-member seat the gateway cannot honour.
+
+The same surface is scriptable: `lucinate rooms list|create|send|log|state|
+approve|retry|rename|stop|disband`. See [docs/rooms.md](docs/rooms.md).
+
+A room is a bounded discussion: round 0 answers your mentions (no mention means
+everyone), later rounds exist only when a member cites a peer, and the room stops
+at 3 rounds or 10 member messages. `/rules` shows that constitution, the header
+shows `round 2/3 · 7/10 messages`, and `m` cycles the routing mode. The policy
+itself — quoted from the gateway — is in [docs/room-rules.md](docs/room-rules.md).
+
+### Settings
 Use `/settings` to open the settings view (also reachable as `/config`). Your settings are persisted to `~/.lucinate/config.json`.
 
 | Setting | Default | Description |
@@ -173,6 +206,7 @@ Type these in the chat input. As soon as you type `/`, a menu shows every matchi
 | `/models` | Alias for `/model` |
 | `/mouse on\|off` | Mouse capture (on by default: wheel scrolls, drag copies; off: your terminal's native selection) |
 | `/reset` | Delete session and start fresh (with confirmation) |
+| `/rooms` | Open rooms — Hermes hosted group chats with 2–6 Hermes profiles — Hermes only |
 | `/routine <name>` | Activate a stored multi-step routine in the current session |
 | `/routines` | List, view, edit, or delete routines |
 | `/sessions` | Browse and restore previous sessions |

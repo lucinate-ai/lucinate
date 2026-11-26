@@ -30,6 +30,19 @@ try {
     Write-Host "Downloading $Binary $Version for $Os/$Arch..."
     $ArchivePath = Join-Path $TmpDir $Asset
     Invoke-WebRequest -Uri $Url -OutFile $ArchivePath -Headers $Headers -UseBasicParsing
+
+    # Verify against the checksums.txt the same release publishes before
+    # anything is expanded or copied into the install directory.
+    $ChecksumsPath = Join-Path $TmpDir 'checksums.txt'
+    Invoke-WebRequest -Uri "https://github.com/$Repo/releases/download/$Tag/checksums.txt" -OutFile $ChecksumsPath -Headers $Headers -UseBasicParsing
+    $Entry = Select-String -Path $ChecksumsPath -Pattern "  $([regex]::Escape($Asset))$" | Select-Object -First 1
+    if (-not $Entry) { throw "checksums.txt has no entry for $Asset" }
+    $Expected = ($Entry.Line -split '\s+')[0]
+    $Actual = (Get-FileHash -Path $ArchivePath -Algorithm SHA256).Hash
+    if ($Actual -ne $Expected) {
+        throw "checksum mismatch for ${Asset}: expected $Expected, got $Actual"
+    }
+
     Expand-Archive -Path $ArchivePath -DestinationPath $TmpDir -Force
 
     if (-not (Test-Path $InstallDir)) {

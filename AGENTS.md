@@ -38,7 +38,7 @@ See [`openspec/specs/connections/spec.md`](openspec/specs/connections/spec.md) f
 
 ### Key dependency
 
-`github.com/a3tai/openclaw-go` is a **local replace** (`../openclaw-go`) — the OpenClaw Go SDK must be checked out as a sibling directory.
+`github.com/a3tai/openclaw-go` is consumed through a **module replace to the `outofcoffee` fork, pinned to a tag** (`go.mod`, `replace … => github.com/outofcoffee/openclaw-go v1.20260430.0-lucinate.2`) — no sibling checkout is needed. See [docs/openclaw-go-fork.md](docs/openclaw-go-fork.md) for the sync process and bump policy.
 
 ## Specs and developer docs
 

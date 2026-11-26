@@ -323,13 +323,13 @@ func newCronsModel(cron backend.CronBackend, filterAgentID, filterLabel string, 
 	l := list.New(nil, cronDelegate{}, 0, 0)
 	l.Title = "Cron"
 	l.SetShowStatusBar(false)
-	l.SetShowHelp(!hideHints)
+	// App-owned hint line (see viewList); the widget footer advertised
+	// bubbles' `v` Quit key as "select".
+	l.SetShowHelp(false)
 	l.Styles.Title = headerStyle
 	l.SetFilteringEnabled(false)
-	if disableExitKeys {
-		l.KeyMap.Quit.Unbind()
-		l.KeyMap.ForceQuit.Unbind()
-	}
+	l.KeyMap.Quit.Unbind()
+	l.KeyMap.ForceQuit.Unbind()
 
 	return cronsModel{
 		list:          l,
@@ -867,6 +867,11 @@ func (m cronsModel) actionDuplicate() (cronsModel, tea.Cmd) {
 	return m, m.form.name.Focus()
 }
 
+// cronFormHint is the cron form's pinned key hint. It is longer than an
+// 80-column terminal, so the renderer wraps it and the form's footer
+// budget adds the wrapped line count.
+const cronFormHint = "  Tab/Shift+Tab: navigate | Space: toggle | Enter: save (newline in payload) | Ctrl+S: save anywhere | Esc: cancel"
+
 // sizeFormBody applies the current view dimensions to the payload
 // textarea and the body viewport that wraps the form. Called whenever
 // the form is (re)constructed (because each new form has a fresh
@@ -877,8 +882,13 @@ func (m cronsModel) actionDuplicate() (cronsModel, tea.Cmd) {
 // floored at a small minimum so at least one field is visible even on
 // pathologically short terminals.
 func (m *cronsModel) sizeFormBody() {
-	const titleLines = 3  // leading blank + header line + trailing blank
-	const footerLines = 3 // blank + error/help line + trailing margin
+	const titleLines = 3 // blank + title bar + blank
+	// The help line is longer than an 80-column terminal and wraps; its
+	// wrapped height is part of the pinned footer, so the body shrinks.
+	footerLines := 3 // blank + error/help line + trailing margin
+	if m.width > 0 {
+		footerLines += lipgloss.Height(wordWrap(cronFormHint, m.width)) - 1
+	}
 	const minBodyHeight = 5
 
 	w := m.width - 6
@@ -1709,8 +1719,7 @@ func (m cronsModel) viewForm() string {
 	if m.form.saving {
 		footer.WriteString(statusStyle.Render("  Saving..."))
 	} else {
-		hint := "  Tab/Shift+Tab: navigate | Space: toggle | Enter: save (newline in payload) | Ctrl+S: save anywhere | Esc: cancel"
-		footer.WriteString(helpStyle.Render(hint))
+		footer.WriteString(helpStyle.Render(wordWrap(cronFormHint, m.width)))
 	}
 
 	// Fall back to inline rendering when the parent hasn't sized us

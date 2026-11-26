@@ -203,18 +203,16 @@ func newConnectionsModel(store *config.Connections, hideHints, disableExitKeys b
 	l := list.New(nil, connectionDelegate{}, 0, 0)
 	l.Title = "Connections"
 	l.SetShowStatusBar(false)
-	l.SetShowHelp(!hideHints)
+	// The widget footer advertised bubbles' Quit binding as "v select" and
+	// "? more"; the view renders its own hint line from Actions(), so the
+	// footer is always off and Quit is always unbound.
+	l.SetShowHelp(false)
 	l.Styles.Title = headerStyle
 	l.SetFilteringEnabled(false)
-	if disableExitKeys {
-		// The bubbles list's default Quit binding catches q / esc and
-		// emits tea.Quit; ForceQuit catches ctrl+c. Embedders whose
-		// host can't be dismissed by terminating the process get
-		// neither shortcut, and the rendered "q quit" footer hint
-		// disappears with the binding.
-		l.KeyMap.Quit.Unbind()
-		l.KeyMap.ForceQuit.Unbind()
-	}
+	// ctrl+c is handled at the AppModel level, so unbinding ForceQuit
+	// leaves no key stranded.
+	l.KeyMap.Quit.Unbind()
+	l.KeyMap.ForceQuit.Unbind()
 	return connectionsModel{
 		store:     store,
 		list:      l,
