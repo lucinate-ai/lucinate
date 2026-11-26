@@ -84,3 +84,41 @@ interactive command never blocks on a huge transcript.
 The agent ID is derived from the user-supplied name via `slugify` (lowercase, alphanumerics and
 hyphens only). The constraint isn't cosmetic: the ID is also the session key, so it has to
 round-trip through gateway-protocol fields without escaping.
+
+## A 200 is not a reply
+
+An OpenAI-compatible base URL can answer `200` and still say nothing: a proxy
+interstitial, a captive portal, or a URL that points at a web page all do. The
+stream parser only understands `data:` lines, so before the guard existed such a
+response produced zero deltas, a clean EOF, and an empty `final` event — a blank
+success with no assistant turn in `history.jsonl` and nothing in the log.
+
+Two checks now stand between `200` and `final`:
+
+- a non-empty `Content-Type` that is not `text/event-stream` fails the run with
+  the offending type and the first bytes of the body (enough to recognise an
+  HTML page), and
+- a stream that yields no parseable JSON frame at all fails with "no data
+  frames".
+
+The frame counter, not the final text, is the test: a finish-only chunk proves
+the endpoint spoke the protocol, so an empty answer stays a legitimate empty
+answer rather than an error. The same two checks guard `/compact`'s
+summarisation call, which streams through the same path.
+
+## Bounded waits
+
+Streaming cannot carry a whole-request deadline — a long answer is legitimately
+long — so the bounds are placed at the two points where silence is always a
+fault:
+
+- `httpcommon.ResponseHeaderTimeout` (60 s) bounds the wait for response
+  headers, so a server that accepts the TCP connection and never answers fails
+  visibly;
+- `streamIdleTimeout` (5 min, reset by every frame) cancels a run that goes
+  quiet and reports "the endpoint sent nothing for 5m0s". The bound is generous
+  on purpose: a local server loading a large model can be silent for minutes
+  before the first token, and that is a slow start, not a dead stream.
+
+The CLI adds an outer bound per invocation (`--timeout`, default 10m, `0` waits
+forever) because a script cannot recover from a process that never returns.
