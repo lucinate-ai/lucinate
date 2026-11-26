@@ -9,7 +9,22 @@ permissions:
   contents: write
 
 jobs:
+  # A tag must not publish an unbuilt/unverified binary: the release job
+  # waits for the same suite CI runs on main.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: make test
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

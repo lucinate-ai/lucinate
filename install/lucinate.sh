@@ -29,6 +29,26 @@ trap 'rm -rf "$TMPDIR_PATH"' EXIT
 
 echo "Downloading ${BINARY} ${VERSION} for ${OS}/${ARCH}..."
 curl -fsSL -o "${TMPDIR_PATH}/${ASSET}" "$URL"
+
+# Verify the archive against the checksums.txt the same release publishes;
+# an installer that skips this trusts whatever the network handed it.
+CHECKSUMS="${TMPDIR_PATH}/checksums.txt"
+curl -fsSL -o "${CHECKSUMS}" "https://github.com/${REPO}/releases/download/${TAG}/checksums.txt"
+if command -v sha256sum >/dev/null 2>&1; then
+  ( cd "${TMPDIR_PATH}" && grep "  ${ASSET}\$" "${CHECKSUMS}" | sha256sum -c - ) >/dev/null || {
+    echo "checksum verification failed for ${ASSET}" >&2
+    exit 1
+  }
+elif command -v shasum >/dev/null 2>&1; then
+  ( cd "${TMPDIR_PATH}" && grep "  ${ASSET}\$" "${CHECKSUMS}" | shasum -a 256 -c - ) >/dev/null || {
+    echo "checksum verification failed for ${ASSET}" >&2
+    exit 1
+  }
+else
+  echo "no sha256 tool found (need sha256sum or shasum)" >&2
+  exit 1
+fi
+
 tar -xzf "${TMPDIR_PATH}/${ASSET}" -C "$TMPDIR_PATH"
 
 if [ -w "${INSTALL_DIR}" ]; then
