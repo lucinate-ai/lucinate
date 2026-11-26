@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/a3tai/openclaw-go/protocol"
 )
@@ -167,4 +168,20 @@ func TestEventEmitter_CloseAndSendIsSafe(t *testing.T) {
 	e.Close()
 	// must not panic
 	e.EmitChatDelta("r", "s", "ignored")
+}
+
+// The transport must bound the wait for response headers: a server that
+// accepts the TCP connection and then says nothing otherwise holds the
+// caller forever (audit AUD-004).
+func TestNewDefaultTransport_BoundsResponseHeaders(t *testing.T) {
+	tr, ok := NewDefaultTransport(3 * time.Second).(*http.Transport)
+	if !ok {
+		t.Fatalf("NewDefaultTransport returned %T, want *http.Transport", NewDefaultTransport(0))
+	}
+	if tr.ResponseHeaderTimeout != ResponseHeaderTimeout {
+		t.Errorf("ResponseHeaderTimeout = %s, want %s", tr.ResponseHeaderTimeout, ResponseHeaderTimeout)
+	}
+	if tr.TLSHandshakeTimeout != 3*time.Second {
+		t.Errorf("TLSHandshakeTimeout = %s, want the connect bound (3s)", tr.TLSHandshakeTimeout)
+	}
 }
