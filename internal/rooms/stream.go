@@ -107,7 +107,7 @@ func StreamsFor(events []Event) []Stream {
 			s.Settled = true
 			s.Empty = strings.TrimSpace(s.Text) == ""
 		case ev.Kind == "turn.settled", ev.Kind == "turn.failed", ev.Kind == "turn.deferred",
-			ev.Kind == "member.unavailable":
+			ev.Kind == "turn.cancelled", ev.Kind == "member.unavailable":
 			s := get(ev)
 			s.Settled = true
 			if strings.TrimSpace(s.Text) == "" {

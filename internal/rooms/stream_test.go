@@ -190,3 +190,38 @@ func TestStreamsFor_IgnoresUserTurnsWhenTrackingReplies(t *testing.T) {
 		t.Fatalf("streams = %+v, want only the member turn", got)
 	}
 }
+
+// /stop cancels a turn without a later settle: the row must stop animating,
+// otherwise the transcript claims a member is still answering forever.
+func TestStreamsFor_CancelledTurnSettlesTheStream(t *testing.T) {
+	events := []Event{
+		stEvent(1, "turn.started", "matt", nil),
+		stEvent(2, "message.member.delta", "matt", map[string]any{"text": "half an ans"}),
+		stEvent(3, "turn.cancelled", "matt", nil),
+	}
+	got := StreamsFor(events)
+	if len(got) != 1 || !got[0].Settled {
+		t.Fatalf("streams = %+v, want one settled stream after turn.cancelled", got)
+	}
+	if got[0].Text != "half an ans" {
+		t.Errorf("text = %q, want the partial text kept", got[0].Text)
+	}
+	if n := len(ActiveStreams(events)); n != 0 {
+		t.Errorf("ActiveStreams = %d, want 0 after turn.cancelled", n)
+	}
+}
+
+// A cancelled turn before any text is an empty reply, not a spinner.
+func TestStreamsFor_CancelledBeforeTextIsEmptyAndNotActive(t *testing.T) {
+	events := []Event{
+		stEvent(1, "turn.started", "matt", nil),
+		stEvent(2, "turn.cancelled", "matt", nil),
+	}
+	got := StreamsFor(events)
+	if len(got) != 1 || !got[0].Settled || !got[0].Empty {
+		t.Fatalf("streams = %+v, want one settled+empty stream", got)
+	}
+	if n := len(ActiveStreams(events)); n != 0 {
+		t.Errorf("ActiveStreams = %d, want 0", n)
+	}
+}

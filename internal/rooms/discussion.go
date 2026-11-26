@@ -143,7 +143,7 @@ func DiscussionBudgetFor(events []Event) DiscussionBudget {
 					speechInRound[idx] = true
 				}
 			}
-		case "turn.failed", "turn.deferred":
+		case "turn.failed", "turn.deferred", "turn.cancelled":
 			if openTurns > 0 {
 				openTurns--
 			}
