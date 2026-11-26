@@ -158,13 +158,26 @@ func extractEventSessionKey(payload []byte) string {
 	return probe.SessionKey
 }
 
+// eventBelongsToSession reports whether an event's session key addresses the
+// session this model is showing. Gateways scope some events as
+// "agent:<agent-id>:<session>" while agents.list reports the bare session key,
+// so the qualified form for our own agent has to be accepted too. An empty
+// event key is allowed through: older gateways and non-session-scoped events
+// (health, tick) do not carry one.
+func eventBelongsToSession(evKey, sessionKey, agentID string) bool {
+	if evKey == "" || evKey == sessionKey {
+		return true
+	}
+	return agentID != "" && evKey == "agent:"+agentID+":"+sessionKey
+}
+
 func (m *chatModel) handleEvent(ev protocol.Event) tea.Cmd {
 	slog.Debug("raw event", "name", ev.EventName, "payload_len", len(ev.Payload))
 
 	// Drop events scoped to a different session before any handler runs.
 	// Events without a sessionKey (or with an empty one) fall through.
-	if key := extractEventSessionKey(ev.Payload); key != "" && key != m.sessionKey {
-		slog.Debug("event ignored: session mismatch", "key", key, "ours", m.sessionKey)
+	if key := extractEventSessionKey(ev.Payload); !eventBelongsToSession(key, m.sessionKey, m.agentID) {
+		slog.Debug("event ignored: session mismatch", "key", key, "ours", m.sessionKey, "agent", m.agentID)
 		return nil
 	}
 

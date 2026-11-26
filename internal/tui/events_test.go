@@ -1619,6 +1619,59 @@ func TestHandleEvent_ChatFinal_DifferentSession_DoesNotDrainQueue(t *testing.T) 
 	}
 }
 
+// TestHandleEvent_ChatFinal_AgentQualifiedSessionKey_Accepted is the
+// regression test for gateways that scope chat events as
+// "agent:<id>:<session>" while agents.list reports the bare session key.
+// The final must settle the turn instead of leaving the spinner up forever.
+func TestHandleEvent_ChatFinal_AgentQualifiedSessionKey_Accepted(t *testing.T) {
+	m := newTestChatModel()
+	m.agentID = "scout"
+	m.sessionKey = "sess-A"
+	m.sending = true
+	m.runID = "run-A"
+	m.messages = []chatMessage{
+		{role: "user", content: "hello"},
+		{role: "assistant", content: "partial", streaming: true},
+	}
+
+	finalMsg := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"done"}],"timestamp":123}`)
+	m.handleEvent(makeChatEventForSession("final", "run-A", "agent:scout:sess-A", 1, finalMsg))
+
+	if m.sending {
+		t.Error("sending should be false after the agent-qualified final")
+	}
+	if m.messages[1].streaming {
+		t.Error("streaming message should be settled")
+	}
+	if !m.finalisedRuns.contains("run-A") {
+		t.Error("run-A should be marked finalised")
+	}
+}
+
+// TestHandleEvent_ChatFinal_AgentQualifiedKeyForOtherAgent_Ignored keeps the
+// relaxation narrow: a qualified key for a different agent must still be
+// dropped.
+func TestHandleEvent_ChatFinal_AgentQualifiedKeyForOtherAgent_Ignored(t *testing.T) {
+	m := newTestChatModel()
+	m.agentID = "scout"
+	m.sessionKey = "sess-A"
+	m.sending = true
+	m.messages = []chatMessage{
+		{role: "user", content: "hello"},
+		{role: "assistant", content: "streaming…", streaming: true},
+	}
+
+	finalMsg := json.RawMessage(`{"role":"assistant","content":[{"type":"text","text":"other"}],"timestamp":123}`)
+	cmd := m.handleEvent(makeChatEventForSession("final", "run-B", "agent:other:sess-A", 1, finalMsg))
+
+	if cmd != nil {
+		t.Error("expected nil cmd — another agent's final must be ignored")
+	}
+	if !m.sending || !m.messages[1].streaming {
+		t.Error("another agent's final must not settle our turn")
+	}
+}
+
 // TestHandleEvent_ChatError_DifferentSession_Ignored verifies that an error
 // event from another session does not affect the current model state.
 func TestHandleEvent_ChatError_DifferentSession_Ignored(t *testing.T) {

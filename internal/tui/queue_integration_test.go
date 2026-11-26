@@ -87,6 +87,7 @@ func newIntegrationChatModel(t *testing.T, c *client.Client) *chatModel {
 		viewport:   viewport.New(),
 		backend:    openclawBackend.New(c),
 		sessionKey: sessionKey,
+		agentID:    agents.Agents[0].ID,
 		agentName:  agentName,
 		renderer:   renderer,
 		width:      80,
