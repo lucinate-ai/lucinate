@@ -6,9 +6,9 @@ context: |
   written in Go and built on bubbletea (charmbracelet).
 
   Tech stack:
-    - Go (module `lucinate`; single binary, version stamped from git tags)
+    - Go (module `github.com/lucinate-ai/lucinate`; single binary, version stamped from git tags)
     - bubbletea / bubbles / lipgloss for the TUI
-    - `github.com/a3tai/openclaw-go` gateway SDK, consumed as a local `replace` (`../openclaw-go`)
+    - `github.com/a3tai/openclaw-go` gateway SDK, consumed through a module `replace` to the `outofcoffee` fork pinned to a tag (`go.mod`; no sibling checkout)
     - Build/test via Makefile (`make build`, `make test`, `make coverage`, `make fmt`)
 
   Architecture:
@@ -18,7 +18,8 @@ context: |
       `UsageBackend`, `DeviceTokenAuth`, `APIKeyAuth`) that a backend may or may not implement.
     - Three backends ship: OpenClaw (gateway over WebSocket), OpenAI-compatible
       (`/v1/chat/completions` for Ollama, vLLM, LM Studio, OpenAI proper), and Hermes
-      (`/v1/responses` chaining, server-side state).
+      (`hermes dashboard` gateway over WebSocket at `/api/ws`; server-side state). Hermes
+      rejects legacy `/v1` HTTP endpoints by design.
     - Persisted state lives under `~/.lucinate/` (connections, secrets, identity, agents, config).
     - Key packages: `internal/config`, `internal/backend` (+ `openclaw`, `openai` adapters),
       `internal/client` (gateway SDK wrapper, WebSocket supervisor), `internal/tui` (views).

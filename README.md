@@ -56,7 +56,7 @@ On Windows, in PowerShell:
 irm https://raw.githubusercontent.com/lucinate-ai/lucinate/main/install/lucinate.ps1 | iex
 ```
 
-Or, if you have Go 1.25+:
+Or, if you have Go 1.26+:
 
 ```sh
 go install github.com/lucinate-ai/lucinate@latest
@@ -80,9 +80,9 @@ Three connection types are supported:
 
 - **[OpenClaw](docs/backend_openclaw.md)** — connect to an OpenClaw gateway over WebSocket. Auth uses Ed25519 device pairing.
 - **[OpenAI-compatible](docs/backend_openai.md)** — Ollama, vLLM, LM Studio, llamafile, OpenAI - connect to any `/v1/chat/completions` endpoint.
-- **[Hermes (Nous Research)](docs/backend_hermes.md)** — connect to a Hermes Agent profile's `/v1/responses` API server. One Lucinate connection maps to one Hermes profile; chat state lives server-side.
+- **[Hermes (Nous Research)](docs/backend_hermes.md)** — connect to a Hermes Agent profile's `hermes dashboard` gateway over WebSocket (`/api/ws`, default `http://localhost:9119`). One Lucinate connection maps to one Hermes profile; chat state lives server-side.
 
-OpenClaw URLs can use `https`, `http`, `wss`, or `ws` — lucinate derives the WebSocket endpoint automatically. OpenAI-compatible and Hermes URLs are HTTP(S) base URLs ending in `/v1`.
+OpenClaw URLs can use `https`, `http`, `wss`, or `ws` — lucinate derives the WebSocket endpoint automatically. OpenAI-compatible URLs are HTTP(S) base URLs ending in `/v1`. Hermes URLs are the gateway's HTTP(S) base URL (no `/v1` path — the legacy `/v1/responses` API server is rejected); lucinate dials `/api/ws` and asks for the gateway token on connect.
 
 Switch between saved connections at any time with `/connections` from the chat view. Use `n` to add a new one, `e` to edit, `d` to delete (with confirmation).
 
