@@ -825,3 +825,122 @@ func TestAppModel_FilterResetsWhenReenteringAgentList(t *testing.T) {
 		})
 	}
 }
+
+// TestAppModel_ReloadsAgentsWhenReenteringPicker checks that returning to
+// the agent picker re-fetches the agent list from the backend rather than
+// redisplaying whatever selectModel last cached. selectModel outlives the
+// picker view (it's only reconstructed on connect), so without this an
+// agent created in an earlier visit to the picker — or added by any other
+// means — wouldn't show up until the app was restarted.
+func TestAppModel_ReloadsAgentsWhenReenteringPicker(t *testing.T) {
+	cases := []struct {
+		name string
+		from viewState
+		msg  tea.Msg
+		prep func(AppModel) AppModel
+	}{
+		{"from config", viewConfig, goBackFromConfigMsg{}, func(m AppModel) AppModel { m.configReturn = viewSelect; return m }},
+		{"from chat via goBackMsg", viewChat, goBackMsg{}, func(m AppModel) AppModel { return m }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fb := newFakeBackend()
+			calls := 0
+			// The real backend only ever reports the up-to-date list
+			// (alpha + the newly created beta); the stale single-agent
+			// list below is seeded directly into selectModel to stand
+			// in for whatever it last cached from an earlier visit.
+			fb.agentsListHook = func(ctx context.Context) (*protocol.AgentsListResult, error) {
+				calls++
+				return &protocol.AgentsListResult{Agents: []protocol.AgentSummary{
+					{ID: "alpha", Name: "Alpha"},
+					{ID: "beta", Name: "Beta"},
+				}}, nil
+			}
+
+			sm := newSelectModel(fb, false, false, nil, false, "")
+			sm = loadAgents(sm, protocol.AgentSummary{ID: "alpha", Name: "Alpha"})
+
+			m := AppModel{state: tc.from, backend: fb}
+			m.selectModel = sm
+			m = tc.prep(m)
+
+			back, cmd := m.Update(tc.msg)
+			app := back.(AppModel)
+			if app.state != viewSelect {
+				t.Fatalf("expected viewSelect after re-entry, got %v", app.state)
+			}
+			if !app.selectModel.loading {
+				t.Error("expected selectModel.loading to be set while the reload is in flight")
+			}
+
+			msg := findAgentsLoadedMsg(t, cmd)
+			if msg == nil {
+				t.Fatal("expected re-entering the picker to dispatch a loadAgents cmd")
+			}
+
+			back, _ = app.Update(*msg)
+			app = back.(AppModel)
+			if got := len(app.selectModel.list.Items()); got != 2 {
+				t.Errorf("expected the reload to pick up the newly added agent (2 agents), got %d", got)
+			}
+			if calls != 1 {
+				t.Errorf("expected ListAgents to be called exactly once on re-entry, got %d calls", calls)
+			}
+		})
+	}
+}
+
+// TestAppModel_ConnectDoesNotDoubleLoadAgents checks that landing on the
+// picker straight from a successful connect (viewConnecting -> viewSelect)
+// only fetches the agent list once. handleConnectResult already builds a
+// fresh selectModel and kicks off its own loadAgents via Init(); the
+// re-entry reload added to the viewSelect transition hook must not fire a
+// second, redundant ListAgents call on top of that.
+func TestAppModel_ConnectDoesNotDoubleLoadAgents(t *testing.T) {
+	fb := newFakeBackend()
+	calls := 0
+	fb.agentsListHook = func(ctx context.Context) (*protocol.AgentsListResult, error) {
+		calls++
+		return &protocol.AgentsListResult{Agents: []protocol.AgentSummary{
+			{ID: "alpha", Name: "Alpha"},
+		}}, nil
+	}
+
+	m := AppModel{state: viewConnecting}
+	m.connectingModel = newConnectingModel(nil, false)
+
+	back, cmd := m.Update(connectResultMsg{backend: fb})
+	app := back.(AppModel)
+	if app.state != viewSelect {
+		t.Fatalf("expected viewSelect after a successful connect, got %v", app.state)
+	}
+
+	runCmd(t, cmd)
+	if calls != 1 {
+		t.Errorf("expected exactly one ListAgents call on connect, got %d", calls)
+	}
+}
+
+// findAgentsLoadedMsg drains cmd (recursing into any BatchMsg) looking for
+// an agentsLoadedMsg, so tests can assert on the reload triggered by
+// re-entering the agent picker without caring where in the batch it lands.
+func findAgentsLoadedMsg(t *testing.T, cmd tea.Cmd) *agentsLoadedMsg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if found := findAgentsLoadedMsg(t, c); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	if loaded, ok := msg.(agentsLoadedMsg); ok {
+		return &loaded
+	}
+	return nil
+}
