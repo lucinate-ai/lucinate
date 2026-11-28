@@ -68,6 +68,12 @@ type fakeBackend struct {
 	lastCronRunForce  bool
 	cronRemoved       []string
 
+	// agentsListHook, when non-nil, replaces the default empty
+	// AgentsListResult response so tests can stage a changing agent
+	// list across successive ListAgents calls (e.g. to assert the
+	// picker re-fetches on re-entry rather than reusing a cached list).
+	agentsListHook func(ctx context.Context) (*protocol.AgentsListResult, error)
+
 	// statusHook overrides the default /status payload so tests can
 	// inject backend-specific shapes (gateway block, history, thread).
 	statusHook func(ctx context.Context, agentID, sessionKey string) (*backend.BackendStatus, error)
@@ -116,6 +122,9 @@ func (f *fakeBackend) Supervise(ctx context.Context, notify func(client.ConnStat
 }
 
 func (f *fakeBackend) ListAgents(ctx context.Context) (*protocol.AgentsListResult, error) {
+	if f.agentsListHook != nil {
+		return f.agentsListHook(ctx)
+	}
 	return &protocol.AgentsListResult{}, nil
 }
 func (f *fakeBackend) CreateAgent(ctx context.Context, params backend.CreateAgentParams) error {

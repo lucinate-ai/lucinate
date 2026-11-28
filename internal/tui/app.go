@@ -278,9 +278,20 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Re-entering the agent picker from another screen (config,
 		// connections, chat) reuses the existing selectModel, so clear
 		// any active fuzzy filter — the list should reopen showing every
-		// agent, not a stale narrowed view from before we left.
+		// agent, not a stale narrowed view from before we left. It also
+		// reloads the agent list from the backend: selectModel outlives
+		// the picker view and is otherwise only refreshed by the
+		// create/delete success handlers, so an agent created in one
+		// visit wouldn't show up on a later one without this. Skip the
+		// reload when we just connected (prevState == viewConnecting) —
+		// handleConnectResult already built a fresh selectModel and
+		// kicked off its own load.
 		if next.state == viewSelect {
 			next.selectModel.resetFilter()
+			if prevState != viewConnecting {
+				next.selectModel.loading = true
+				cmd = tea.Batch(cmd, next.selectModel.loadAgents())
+			}
 		}
 		// View transitions in an embedded terminal can leave stale cells
 		// from the previous view when an on-screen keyboard
